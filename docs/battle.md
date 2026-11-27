@@ -43,7 +43,10 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Terrain height scale and tiles | Stand-in | height = byte × block-0 height / 255 over the used cells; one tile texture (`mapNN_a00.gim`); vertex shading from the map's light direction instead of GE lighting |
 | Battle camera | Stand-in | a chase camera behind your OKE (`CBattleSceneCamera` isn't read) |
 | What the robot does with a chip order (`CBattleOke`) | Stand-in | a 2D simulation with guessed units: an 800×800 field mapped onto the terrain, 50 units/s walking, 180°/s turning, shots at 320 units/s that take 4% each, melee 10% within 36 units, a 120 s limit. Heights don't affect it |
-| HUD | Stand-in | name and HP boxes and a square radar, drawn by hand. The game's `parts/bs/` art and `CBattleDisplayMngr` / `CBattleRadarMngr` / `CBattleOkeGunSightCon` layout aren't ported. The "BATTLE START" and WINNER / LOSER / DRAW banners are the game's |
+| HUD windows and gauges | **Real** (partly) | the `CIndicatorBase` window table at `0x003ed78c` (`FUN_089011d8` / `FUN_0890126c`), each window cut from the `bs_wind0` atlas; the status window's HP, heat and energy gauges as `FUN_089104fc` / `FUN_089106ac` / `FUN_08910860` draw them (130 px per 1000, positions at `0x003f0514`, heights at `0x003f0508`). Only windows 2 (status) and 3 (radar) are drawn. Heat and energy aren't simulated: heat shows empty, energy full |
+| Radar contents | Stand-in | `bs_radm2` dots placed by hand inside window 3, centred on your OKE; `CBattleRadarMngr` isn't read |
+| Lock-on | Stand-in | the game's `gunsite` / `gundot` marks drawn on the opponent while the simulation says you're locked on; `CBattleOkeGunSightCon` isn't read |
+| Names, timer | Stand-in | plain text where the game has its top windows |
 | Selection screens | Stand-in | for the game's flow (below), drawn with the title's art |
 
 The tables come from your EBOOT at run time (`--elf`), so nothing is copied into the
@@ -140,8 +143,10 @@ height map dumped from a running game or emulator.
   skinning.
 - **Effects**: shots are dots. There are no explosions, muzzle flashes or damage
   smoke, although the effect models are in "battlescene".
-- **HUD**: the radar, gauges, CPU window and lock-on marks exist in `parts/bs/`, but
-  the game's layout code (`CBattleDisplayMngr`, `CBattleRadarMngr`) isn't read yet.
+- **HUD**: the other indicator windows (CPU / chip window, weapon gauge `bs_wepguage`,
+  `bs_tnum0` timer digits, alerts), the radar's own layout and the gun sight's
+  movement. The parts table is at `0x00476398` (64 names, `CBsPicture`,
+  `FUN_08895e2c` / `FUN_08895f64`).
 - **Sound**: none. No CSound, and no `battle_se` set.
 - **Behaviour**: `CBattleOke` (hardware stats: legs, weapons, armour, engine, heat,
   ammunition; flying types; collision) isn't ported, so who wins says little about the
