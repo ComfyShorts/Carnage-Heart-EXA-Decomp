@@ -254,7 +254,7 @@ static int t_attack(PgChipTarget *t, int kind)
     start_action(o, ACT_ATTACK, 0.5f);
     if (hypotf(e->x - o->x, e->y - o->y) <= MELEE_RANGE && fabsf(bearing(o, e->x, e->y)) < 60.0f &&
         e->defend_left <= 0.0f) {
-        e->hp -= MELEE_DAMAGE;
+        e->hp -= e->hp_max * MELEE_DAMAGE / 100;
         o->hits++;
     }
     return 0;
@@ -291,7 +291,70 @@ static float weapon_speed(int id)
     return v > 1.0f && v < 10000.0f ? v : 100.0f;
 }
 
-static void fire_at(Oke *o, float tx, float ty, float speed)
+static int word_at(uint32_t splat, int fallback)
+{
+    return (int)gamedata_word(splat, (uint32_t)fallback);
+}
+
+static float float_at(uint32_t splat, float fallback)
+{
+    uint32_t bits;
+    memcpy(&bits, &fallback, sizeof bits);
+    bits = gamedata_word(splat, bits);
+    float v;
+    memcpy(&v, &bits, sizeof v);
+    return v;
+}
+
+/* The bullet and dispenser tables, as CBattleOkeEquipment reads them:
+ *   bullets     0x08bcb1a4, 0x14 each: attack, hit heat, flags, ?, kind
+ *   sub-bullets 0x08c69410, 0x1c each: child bullet, child count (a cluster
+ *               reports its child's numbers: FUN_08810584 / FUN_08810500)
+ *   dispensers  0x08bcb8dc, 0x34 each: +0x0c child bullet, +0x10/+0x14 counts
+ *               (both non-zero: the child's numbers), +0x24 attack, +0x28 heat
+ *               (FUN_08815f90 / FUN_08815f30) */
+#define NO_BULLET 77
+#define NO_DISPENSER 10
+
+static int bullet_stat(int bullet, int field)
+{
+    if (word_at(0x00465414u + (uint32_t)bullet * 0x1c, 0) != 0)
+        bullet = word_at(0x00465410u + (uint32_t)bullet * 0x1c, bullet);
+    if (bullet < 0 || bullet >= NO_BULLET)
+        return 0;
+    return word_at(0x003C71A4u + (uint32_t)bullet * 0x14 + (uint32_t)field * 4, field ? 0 : 50);
+}
+
+static int dispenser_stat(int disp, int field)
+{
+    uint32_t e = 0x003C78DCu + (uint32_t)disp * 0x34;
+    if (word_at(e + 0x10, 0) * word_at(e + 0x14, 0) != 0)
+        return bullet_stat(word_at(e + 0x0c, NO_BULLET), field);
+    return field < 2 ? word_at(e + 0x24 + (uint32_t)field * 4, field ? 0 : 100) : 0x20;
+}
+
+/* GetWeaponAttack (FUN_08856480) and friends: field 0 attack, 1 hit heat, 2 flags. */
+static int weapon_stat(int id, int field)
+{
+    int bullet = word_at(0x003D157Cu + (uint32_t)id * 20, NO_BULLET);
+    int disp = word_at(0x003D1580u + (uint32_t)id * 20, NO_DISPENSER);
+    int v = field == 0 ? 7 : 0;
+    if (bullet != NO_BULLET && bullet >= 0 && bullet < NO_BULLET)
+        v = bullet_stat(bullet, field);
+    if (disp != NO_DISPENSER && disp >= 0 && disp < 32)
+        v = dispenser_stat(disp, field);
+    return v;
+}
+
+/* FUN_0883d960: heat rises, up to 120% of the limit. */
+static void add_heat(Oke *o, int amount)
+{
+    o->heat += amount;
+    if (o->heat > o->heat_max * 120 / 100)
+        o->heat = o->heat_max * 120 / 100;
+}
+
+static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float spread_max)
 {
     Battle *b = o->battle;
     for (int i = 0; i < MAX_SHOTS; i++)
@@ -299,11 +362,22 @@ static void fire_at(Oke *o, float tx, float ty, float speed)
             float d = hypotf(tx - o->x, ty - o->y);
             if (d < 1.0f)
                 d = 1.0f;
-            float spread = ((float)(rnd(b) % 100) - 50.0f) / 50.0f * 0.06f;
+            float spread = ((float)(rnd(b) % 100) - 50.0f) / 50.0f * spread_max;
             float ux = (tx - o->x) / d, uy = (ty - o->y) / d;
             float c = cosf(spread), s = sinf(spread);
+            int bullet = word_at(0x003D157Cu + (uint32_t)weapon * 20, NO_BULLET);
+            float falloff = bullet >= 0 && bullet < NO_BULLET
+                                ? float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f) /* +0x2c */
+                                : 3.4e38f;
+            /* +0x28: lifetime in seconds, where the bullet has one. */
+            float life = bullet >= 0 && bullet < NO_BULLET
+                             ? float_at(0x00465C9Cu + (uint32_t)bullet * 0x34, 3.4e38f)
+                             : 3.4e38f;
+            if (!(life > 0.0f && life < 1e30f))
+                life = SHOT_REACH / speed;
             b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * speed,
-                                 (ux * s + uy * c) * speed, SHOT_REACH / speed, 0};
+                                 (ux * s + uy * c) * speed, life, 0.0f, falloff,
+                                 weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2)};
             o->shots_fired++;
             return;
         }
@@ -384,13 +458,25 @@ static void fire_step(Oke *o, float dt)
     o->burst_timer -= dt;
     while (o->burst_timer <= 0.0f && o->burst_left > 0 && o->ammo[w] > 0) {
         Oke *e = ENEMY(o);
-        float speed = weapon_speed(o->weapon[w]);
+        int id = o->weapon[w];
+        float speed = weapon_speed(id);
+        /* GetWeaponNum (0x08bd5a24): pellets per round, e.g. 8-12 for shotguns. */
+        int pellets = word_at(0x003D1A24u + (uint32_t)id * 20, 1);
+        if (pellets < 1 || pellets > 16)
+            pellets = 1;
+        float tx, ty;
         if (o->aim_at_enemy) {
-            fire_at(o, e->x, e->y, speed);
+            tx = e->x;
+            ty = e->y;
         } else {
             float h = (o->heading + o->aim_angle) * DEG;
-            fire_at(o, o->x + sinf(h) * 100.0f, o->y - cosf(h) * 100.0f, speed);
+            tx = o->x + sinf(h) * 100.0f;
+            ty = o->y - cosf(h) * 100.0f;
         }
+        for (int p = 0; p < pellets; p++)
+            fire_at(o, tx, ty, speed, id, pellets > 1 ? 0.15f : 0.06f);
+        /* GetWeaponShotCalorie (0x08bd5a30) heats the shooter (FUN_0883d960). */
+        add_heat(o, word_at(0x003D1A30u + (uint32_t)id * 20, 0));
         o->ammo[w]--;
         o->burst_left--;
         o->burst_timer += BURST_GAP;
@@ -426,11 +512,13 @@ static int t_scan_projectiles(PgChipTarget *t, PgChipRange r, int a, int b, int 
 }
 
 /* Guess: b2 0 = remaining armour, b3 a percentage, b4 0 "at or below" / 1 "above". */
+/* FUN_088462a4: HP (0), fuel (1) or heat (2) as a percentage, then FUN_08a184f0. */
 static int t_judge_status(PgChipTarget *t, int b2, int b3, int b4)
 {
-    (void)b2;
-    int hp = O(t)->hp;
-    return b4 ? hp > b3 : hp <= b3;
+    int v = b2 == 0 ? oke_hp_percent(O(t)) : b2 == 2 ? oke_heat_percent(O(t)) : 100;
+    if (b4 == 2)
+        return v == b3;
+    return b4 == 0 ? v >= b3 : v <= b3;
 }
 
 /* Action Assessment, b2 in the order of the action names: 0 still, 1-4 forward /
@@ -585,9 +673,22 @@ static void oke_init(Oke *o, Battle *b, int side, float x, float y, float headin
     o->x = x;
     o->y = y;
     o->heading = heading;
-    o->hp = 100;
-    int32_t body;
+    int32_t body, hw_heat, armour_part;
     memcpy(&body, o->rec.hardware + 0x240, sizeof body); /* FUN_089ed210 */
+    memcpy(&hw_heat, o->rec.hardware + 0x29c, sizeof hw_heat);
+    memcpy(&armour_part, o->rec.hardware + 0x280, sizeof armour_part);
+    memcpy(&o->armour_type, o->rec.hardware + 0x284, sizeof o->armour_type);
+    /* The body table at 0x08c14d84 (0x68 per type): +0 max HP, +0x10 heat limit. */
+    uint32_t bt = 0x00410D84u + (uint32_t)(body >= 0 && body < 64 ? body : 0) * 0x68;
+    o->hp_max = word_at(bt, 800);
+    if (o->hp_max <= 0)
+        o->hp_max = 800;
+    o->hp = o->hp_max;
+    o->heat = 0;
+    o->heat_max = word_at(bt + 0x10, 1000) * (200 - hw_heat) / 100; /* FUN_089ed718 */
+    if (o->heat_max <= 0)
+        o->heat_max = 1000;
+    o->armour = armour_part >= 0 && armour_part < 12 ? word_at(0x003D1EDCu + (uint32_t)armour_part * 12, 0) : 0;
     oke_motion_reset(&o->motion, oke_scripts_get(body));
     o->scripted = false;
     for (int i = 0; i < 5; i++) {
@@ -640,6 +741,51 @@ static void oke_step(Oke *o, float dt)
     if (o->y > FIELD - OKE_RADIUS) o->y = FIELD - OKE_RADIUS;
 }
 
+static int percent(int v, int max) /* FUN_0883fc04 */
+{
+    float p = max > 0 ? (float)v / (float)max * 100.0f : 100.0f;
+    if (p <= 0.01f)
+        return 0;
+    if (p >= 99.99f)
+        return 100;
+    int i = (int)(p + 0.5f);
+    return i < 1 ? 1 : i > 99 ? 99 : i;
+}
+
+int oke_hp_percent(const Oke *o) { return percent(o->hp, o->hp_max); }
+int oke_heat_percent(const Oke *o) { return percent(o->heat, o->heat_max); }
+
+/* CBattleOke's hit receiver (FUN_0884d284), for a hit on an armoured part of
+ * class 0 (factor 1.0 in the table at 0x08bd1814): the collision parts aren't
+ * modelled, so every hit lands on the body. */
+static void receive_hit(Oke *e, const Shot *s)
+{
+    int attack = s->attack, heat = s->heat;
+    /* CBattleBulletManager::ResolveCollisionRecords: old shots weaken. */
+    if (s->age > s->falloff_after) {
+        float over = s->age - s->falloff_after;
+        int a = attack - (int)(over * 60.0f), h = heat - (int)(over * 120.0f);
+        attack = a < (int)(attack * 0.2f) ? (int)(attack * 0.2f) : a;
+        heat = h < (int)(heat * 0.2f) ? (int)(heat * 0.2f) : h;
+    }
+    float hf = (float)heat;
+    if (e->armour_type == 4)
+        hf *= 0.7f;
+    add_heat(e, hf > 0.0f ? (int)hf : 0);
+    float d = (float)attack;
+    if (((s->flags & 1) && e->armour_type == 1) || ((s->flags & 2) && e->armour_type == 3) ||
+        ((s->flags & 0x10) && e->armour_type == 2))
+        d *= 0.7f;
+    if (e->defend_left > 0.0f) /* defending (script 0x25) */
+        d *= 0.7f;
+    d = d - d * (e->armour / 100.0f) - e->armour * 0.5f;
+    if (d <= 1.0f)
+        d = 1.0f;
+    e->hp -= (int)d; /* FUN_0883d7f4 */
+    if (e->hp < 0)
+        e->hp = 0;
+}
+
 void battle_sim_step(Battle *b, float dt)
 {
     b->tick++;
@@ -664,10 +810,10 @@ void battle_sim_step(Battle *b, float dt)
         s->x += s->vx * dt;
         s->y += s->vy * dt;
         s->life -= dt;
+        s->age += dt;
         Oke *e = &b->oke[s->owner ^ 1];
-        if (hypotf(s->x - e->x, s->y - e->y) < OKE_RADIUS) {
-            if (e->defend_left <= 0.0f)
-                e->hp -= SHOT_DAMAGE;
+        if (e->hp > 0 && hypotf(s->x - e->x, s->y - e->y) < OKE_RADIUS) {
+            receive_hit(e, s);
             b->oke[s->owner].hits++;
             s->live = false;
         } else if (s->life <= 0.0f || outside_field(s->x, s->y)) {
@@ -677,8 +823,15 @@ void battle_sim_step(Battle *b, float dt)
     for (int i = 0; i < 2; i++)
         if (b->oke[i].hp < 0)
             b->oke[i].hp = 0;
+    for (int i = 0; i < 2; i++) { /* stand-in cooling */
+        Oke *o = &b->oke[i];
+        o->heat -= (int)ceilf(o->heat_max * COOLING * dt);
+        if (o->heat < 0)
+            o->heat = 0;
+    }
+    int pa = oke_hp_percent(a), pc = oke_hp_percent(c);
     if (a->hp <= 0 || c->hp <= 0 || b->time >= TIME_LIMIT)
-        b->result = a->hp > c->hp ? 0 : a->hp < c->hp ? 1 : 2;
+        b->result = pa > pc ? 0 : pa < pc ? 1 : 2;
 }
 
 void battle_sim_start(Battle *b, uint32_t seed)

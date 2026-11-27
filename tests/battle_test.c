@@ -69,7 +69,7 @@ static int fight(const char *mine, const char *theirs, int verbose, int *decided
         (*decided)++;
     if (verbose)
         printf("%-34s vs %-28s %5.1f s  %-4s  HP %3d/%3d  shots %3d/%3d  hits %3d/%3d\n", mine, theirs, b.time,
-               k_res[b.result], b.oke[0].hp, b.oke[1].hp, b.oke[0].shots_fired, b.oke[1].shots_fired,
+               k_res[b.result], oke_hp_percent(&b.oke[0]), oke_hp_percent(&b.oke[1]), b.oke[0].shots_fired, b.oke[1].shots_fired,
                b.oke[0].hits, b.oke[1].hits);
     return 1;
 }

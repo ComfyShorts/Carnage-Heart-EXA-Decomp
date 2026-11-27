@@ -457,11 +457,10 @@ static bool project(const float p[3], float *sx, float *sy)
 static void draw_hud(void)
 {
     const Oke *me = &g_b.oke[0], *foe = &g_b.oke[1];
-    /* Status window with HP; heat and energy aren't simulated, so heat is empty and
-     * energy full. */
+    /* Status window with HP and heat; energy isn't simulated, so it shows full. */
     draw_hud_window(2);
-    draw_gauge("parts/bs/bs_hpguage.gim", 0, me->hp * 10, true);
-    draw_gauge("parts/bs/bs_htguage.gim", 1, 0, false);
+    draw_gauge("parts/bs/bs_hpguage.gim", 0, me->hp_max ? me->hp * 1000 / me->hp_max : 0, true);
+    draw_gauge("parts/bs/bs_htguage.gim", 1, me->heat_max ? me->heat * 1000 / me->heat_max : 0, false);
     draw_gauge("parts/bs/bs_enguage.gim", 2, 1000, false);
     /* Radar window (3) with the game's radar frame and markers. Their placement and
      * scale inside it are stand-ins: CBattleRadarMngr isn't read yet. */
@@ -496,7 +495,7 @@ static void draw_hud(void)
     text(g_mine[g.pick[0]].label, 6, 6, 0xFFFFC080);
     text_right(g_theirs[g.pick[1]].label, 474, 6, 0xFF8080FF);
     char line[24];
-    snprintf(line, sizeof line, "%d%%", foe->hp);
+    snprintf(line, sizeof line, "%d%%", oke_hp_percent(foe));
     text_right(line, 474, 22, 0xFFFFFFFF);
 }
 
@@ -596,7 +595,7 @@ int battle_mode_update(float dt)
             if (g_b.result >= 0) {
                 static const char *k_res[3] = {"you win", "you lose", "draw"};
                 SDL_Log("[battle] over after %.1f s: %s (HP %d vs %d, hits %d vs %d)", g_b.time,
-                        k_res[g_b.result], g_b.oke[0].hp, g_b.oke[1].hp, g_b.oke[0].hits, g_b.oke[1].hits);
+                        k_res[g_b.result], oke_hp_percent(&g_b.oke[0]), oke_hp_percent(&g_b.oke[1]), g_b.oke[0].hits, g_b.oke[1].hits);
                 enter(SCR_RESULT);
             }
         }

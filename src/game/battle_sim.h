@@ -22,11 +22,11 @@
 #define TURN_SPEED 180.0f   /* degrees per second */
 #define SHOT_REACH 700.0f   /* stand-in: shots fly this far */
 #define BURST_GAP 0.1f      /* stand-in: seconds between the shots of a burst */
-#define SHOT_DAMAGE 4
 #define MELEE_RANGE 36.0f
-#define MELEE_DAMAGE 10
+#define MELEE_DAMAGE 10     /* stand-in: % of max HP */
+#define COOLING 0.08f       /* stand-in: share of max heat shed per second */
 #define TIME_LIMIT 120.0f   /* seconds */
-#define MAX_SHOTS 64
+#define MAX_SHOTS 160
 
 typedef enum { ACT_NONE, ACT_MOVE, ACT_TURN, ACT_ATTACK, ACT_DEFEND, ACT_JUMP } ActKind;
 
@@ -37,7 +37,10 @@ typedef struct Oke {
     OkeDataBase rec;
     PgChipVm vm;
     float x, y, heading; /* heading in degrees, 0 = up the screen, clockwise */
-    int hp;            /* 0-100 */
+    int hp, hp_max;    /* CBattleOke +0; max from the body table (FUN_089ed5d4) */
+    int heat, heat_max;/* +4; max FUN_089ed718 */
+    int armour_type;   /* hardware +0x284 (FUN_089ed424) */
+    int armour;        /* armour value of the part at hardware +0x280 (FUN_088568c4) */
     ActKind act;
     float act_left;    /* seconds */
     float vx, vy, turn_rate;
@@ -66,7 +69,8 @@ typedef struct Shot {
     bool live;
     int owner;
     float x, y, vx, vy, life;
-    int weapon;
+    float age, falloff_after; /* attack fades after this many seconds */
+    int attack, heat, flags;  /* the hit record CBattleBulletManager passes on */
 } Shot;
 
 typedef struct Battle {
@@ -82,6 +86,10 @@ typedef struct Battle {
 
 /* Places the two designs facing each other and sets up their interpreters. The
  * records must already be in b->oke[0].rec and b->oke[1].rec. */
+/* HP as the chips and the HUD see it: 0-100 (FUN_0883d774 + FUN_0883fc04). */
+int oke_hp_percent(const Oke *o);
+int oke_heat_percent(const Oke *o);
+
 void battle_sim_start(Battle *b, uint32_t seed);
 
 /* One step of dt seconds. Sets b->result once the battle is over. */
