@@ -75,6 +75,7 @@ void psp_platform_present(void)
 
 void psp_platform_shutdown(void)
 {
+    psp_audio_shutdown();
     if (g_screen)
         SDL_DestroyTexture(g_screen);
     g_screen = NULL;
