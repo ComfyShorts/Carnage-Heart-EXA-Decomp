@@ -61,6 +61,18 @@ bool savedata_card_used(int card);
 const OkeDataBase *savedata_card(int card);
 /* The card's name (COkeDataBase + 4), "" when it has none. */
 void savedata_card_name(int card, char *out, size_t n);
+/* The card's first word (FUN_089eea18): 0 blank, 1 the player's, 2 / 3 installed
+ * from others (FUN_089eea58: those can't be edited). */
+int savedata_card_status(int card);
+/* The card to change in place (OKE Configuration), NULL out of range. */
+OkeDataBase *savedata_card_edit(int card);
+/* CGameCommonDataBase::SetCurrentOkeIndex / its getter (FUN_0889cd3c / FUN_0889cdd0):
+ * the card OKE Configuration works on, kept in the shared block at +0x40C00. */
+int savedata_current_card(void);
+void savedata_set_current_card(int card);
+/* FUN_089eea80 (a blank card) and a whole-card copy, as Select OKE Card does. */
+void savedata_card_clear(int card);
+void savedata_card_copy(int from, int to);
 /* System data +0x74 (FUN_0889c400): Story Mode was completed. */
 bool savedata_story_completed(void);
 

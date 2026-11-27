@@ -60,6 +60,10 @@ add_executable(chexa-savedata-test tests/savedata_test.c)
 chexa_target_setup(chexa-savedata-test)
 target_link_libraries(chexa-savedata-test PRIVATE chexa_core)
 
+add_executable(chexa-oke-parts-test tests/oke_parts_test.c)
+chexa_target_setup(chexa-oke-parts-test)
+target_link_libraries(chexa-oke-parts-test PRIVATE chexa_core)
+
 add_executable(chexa-gu-test tests/gu_test.c)
 chexa_target_setup(chexa-gu-test)
 target_link_libraries(chexa-gu-test PRIVATE chexa_core)
@@ -76,6 +80,8 @@ add_test(NAME battle_presets COMMAND chexa-battle-test --all
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME battle_teams COMMAND chexa-battle-test --teams
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_test(NAME oke_parts COMMAND chexa-oke-parts-test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 # The game's start-up path into the main loop: 30 frames drawn, then the HOME-menu exit.
 set(CHEXA_TEST_DISC "$ENV{CHEXA_DISC}")
 if(NOT CHEXA_TEST_DISC)
@@ -85,7 +91,7 @@ add_test(NAME startup_path COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup 
          --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/startup)
 set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                      PASS_REGULAR_EXPRESSION "the game called sceKernelExitGame")
-set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams startup_path PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts startup_path PROPERTIES SKIP_RETURN_CODE 77)
 
 # SDL loads libX11 and friends at runtime with dlopen. With the user-local sysroot those
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not
