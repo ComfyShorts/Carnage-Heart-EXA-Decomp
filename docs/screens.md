@@ -356,7 +356,14 @@ numbers; "PPTN" tones of 0x60 bytes (+0x00 sample, +0x20 volume with 0x1000 full
 - `src/platform/audio.c`: `sceAudio*` on SDL3: each channel is an SDL audio stream on
   one 44100 Hz 16-bit stereo device; the blocking calls wait while the channel holds
   more than two buffers. With `--mute`, or with no device, the calls keep the timing
-  only.
+  only. The device opens at start-up and the log names the SDL driver, the drivers
+  built in and the device (`--audio-driver NAME` chooses the driver, `--tone` plays a
+  test tone). Under WSL2 the driver is `pulseaudio` on WSLg's "RDP Sink". The 32-bit
+  SDL3 from `tools/setup_pc_deps.sh` used to be built without any audio driver but
+  `disk` and `dummy`, so nothing was heard; it now has PulseAudio, loaded at run time
+  from the i386 `libpulse0` in `.deps`. That library finds its private
+  `libpulsecommon-17.0.so` only along its own RUNPATH, a system path, so `audio.c`
+  loads that one from the sysroot first (`PCPORT_I386_LIBDIR`).
 - `src/game/sound.c`: the SE table, the banks, the voices and the sound thread, set up
   at step 15 of `CApplication::Init`. The pitch is the sample's rate against
   44100 Hz; the category volumes and the system data's volume settings aren't applied.

@@ -115,7 +115,7 @@ if(NOT CHEXA_TEST_DISC)
 endif()
 add_test(NAME startup_path COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup --frames 30
          --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/startup)
-set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;SDL_AUDIO_DRIVER=dummy"
                      PASS_REGULAR_EXPRESSION "the game called sceKernelExitGame")
 set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts sound_effects music_decode startup_path PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -123,6 +123,9 @@ set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not
 # RUNPATH) also covers their own dependencies, such as libxcb.
 if(PCPORT_I386_LIBDIR)
+  # libpulse.so.0 finds its private libpulsecommon through its own RUNPATH, a system
+  # path; audio.c loads it from here first (see psp_audio_preload_pulse).
+  target_compile_definitions(chexa_core PRIVATE PCPORT_I386_LIBDIR="${PCPORT_I386_LIBDIR}")
   foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test chexa-battle-test chexa-savedata-test chexa-sound-test)
     set_target_properties(${exe} PROPERTIES BUILD_RPATH "${PCPORT_I386_LIBDIR}")
     target_link_options(${exe} PRIVATE "-Wl,--disable-new-dtags")

@@ -85,11 +85,18 @@ Needs `cmake`, `ninja-build` and `build-essential`. `setup_pc_deps.sh` fetches U
 multilib and 32-bit X11 packages with `apt-get download` and unpacks them into `.deps/`, so
 `gcc-multilib` isn't required. Installing these system-wide works too:
 `gcc-multilib libx11-6:i386 libxext6:i386 libxrandr2:i386 libxcursor1:i386 libxi6:i386`
-(after `dpkg --add-architecture i386`). For OpenGL rendering and sound, add
-`libgl1:i386 libpulse0:i386` and rebuild SDL3 with PulseAudio enabled. Without them SDL
-uses its software renderer and dummy audio.
+(after `dpkg --add-architecture i386`). For OpenGL rendering, add `libgl1:i386`;
+without it SDL uses its software renderer.
 
-Sound plays through SDL3 audio: the menus' cursor, decide, cancel, OK and error sounds,
+Sound goes through PulseAudio, which WSLg provides (`/mnt/wslg/PulseServer`). The setup
+script builds SDL3 with its PulseAudio driver and fetches the 32-bit `libpulse0`, its
+libraries and `pkgconf` into `.deps`, without root; on an existing `.deps`, run
+`tools/setup_pc_deps.sh --pulseaudio-only` and rebuild. At start-up the port logs the
+SDL audio driver and device it opened (`[audio] driver "pulseaudio"`, `playback on "RDP
+Sink"`). `--audio-driver NAME` picks one (`pulseaudio`, `dummy`...), and `--tone` plays
+a one-second 440 Hz tone and exits, as a check.
+
+Sound plays through SDL3 audio (see above): the menus' cursor, decide, cancel, OK and error sounds,
 the battle's gun reports, launches and hits, and the music (the title's, Battle Mode's
 menu and battle play lists from the save); `--mute` turns the output off. The music is
 ATRAC3plus, decoded by the system libavcodec (FFmpeg, LGPL-2.1-or-later), linked

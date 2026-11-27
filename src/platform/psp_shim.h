@@ -53,6 +53,11 @@ const char *psp_savedata_root(void);
 void psp_audio_set_mute(bool mute);
 bool psp_audio_muted(void);
 void psp_audio_shutdown(void); /* psp_platform_shutdown: before SDL goes */
+/* --audio-driver: SDL's driver to use ("pulseaudio", "pipewire", "alsa", "dummy"...),
+ * set before the device opens; NULL or "" lets SDL choose. */
+void psp_audio_set_driver(const char *name);
+const char *psp_audio_driver(void); /* the driver in use, NULL before the device opens */
+void psp_audio_open(void);          /* open (and log) the device now rather than on first use */
 
 /* Kernel (kernel.c). */
 int psp_kernel_threads_alive(void);  /* PSP threads currently running */

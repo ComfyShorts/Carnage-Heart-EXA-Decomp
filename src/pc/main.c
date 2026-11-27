@@ -13,6 +13,9 @@
  *   --make-test-save [NAME]  write a Battle Data save NAME.CHE (default TESTDATA) holding
  *                     a few of the shipped preset OKEs, then go on (needs --disc)
  *   --mute            no sound output (the sound code still runs, timed by the clock)
+ *   --tone            play a 1 s 440 Hz tone through sceAudio and exit (an audio check)
+ *   --audio-driver NAME  SDL's audio driver (pulseaudio, pipewire, alsa, dummy...;
+ *                     default: SDL's choice, or $SDL_AUDIO_DRIVER)
  *   --frames N        quit after N frames (for scripted runs). With --startup, N frames
  *                     shown by the game: then the HOME menu's exit is requested
  *   --gu-trace N      log the game's sceGu calls during its first N frames
@@ -106,12 +109,44 @@ static uint32_t button_by_name(const char *n)
     return 0;
 }
 
+/* --tone: one second of a 440 Hz sine at half volume through a reserved sceAudio
+ * channel, the way the game's sound thread writes, then a wait for it to drain. */
+static int play_tone(void)
+{
+    enum { N = 512 };
+    static int16_t buf[2 * N];
+    int ch = sceAudioChReserve(-1, N, 0);
+    if (ch < 0) {
+        SDL_Log("[pc] --tone: no audio channel (0x%08X)", (unsigned)ch);
+        return 1;
+    }
+    const char *drv = psp_audio_driver();
+    SDL_Log("[pc] --tone: 1 s of 440 Hz on channel %d, driver %s%s", ch, drv ? drv : "none",
+            psp_audio_muted() ? " (no device: silent)" : "");
+    long t = 0;
+    for (int k = 0; k < 44100 / N + 1; k++) {
+        for (int i = 0; i < N; i++, t++) {
+            float env = t < 441 ? t / 441.0f : t > 44100 - 441 ? SDL_max(0.0f, (44100 - t) / 441.0f) : 1.0f;
+            int16_t v = (int16_t)(SDL_sinf(2.0f * SDL_PI_F * 440.0f * (float)t / 44100.0f) * 16000.0f * env);
+            buf[2 * i] = buf[2 * i + 1] = v;
+        }
+        sceAudioOutputBlocking(ch, 0x8000, buf);
+    }
+    while (sceAudioGetChannelRestLength(ch) > 0)
+        SDL_Delay(5);
+    SDL_Delay(100);
+    sceAudioChRelease(ch);
+    psp_platform_shutdown();
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     long frames = -1;
     int scale = 2;
     int call_all = 0;
     int startup = 0;
+    int tone = 0;
     const char *disc = getenv("CHEXA_DISC");
     const char *ms = NULL;
     const char *test_save = NULL;
@@ -126,6 +161,10 @@ int main(int argc, char **argv)
             test_save = i + 1 < argc && strncmp(argv[i + 1], "--", 2) ? argv[++i] : "TESTDATA";
         else if (!strcmp(argv[i], "--mute"))
             psp_audio_set_mute(true);
+        else if (!strcmp(argv[i], "--tone"))
+            tone = 1;
+        else if (!strcmp(argv[i], "--audio-driver") && i + 1 < argc)
+            psp_audio_set_driver(argv[++i]);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             frames = strtol(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--shot") && i + 2 < argc) {
@@ -171,7 +210,7 @@ int main(int argc, char **argv)
                                                                                        : "orig/first_frame.png");
         else {
             fprintf(stderr,
-                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--startup] [--trace] [--frames N] [--scale N] "
+                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
                     "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
                     argv[0]);
@@ -215,6 +254,9 @@ int main(int argc, char **argv)
 
     if (!psp_platform_init("Carnage Heart EXA (PC port)", scale))
         return 1;
+    psp_audio_open(); /* logs the audio driver and device */
+    if (tone)
+        return play_tone();
 
     if (call_all)
         for (int i = 0; i < psp_import_count; i++)

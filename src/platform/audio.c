@@ -64,23 +64,86 @@ void psp_audio_shutdown(void)
     g_audio.dev = 0;
 }
 
+static char g_driver[32];
+
+void psp_audio_set_driver(const char *name)
+{
+    SDL_strlcpy(g_driver, name ? name : "", sizeof g_driver);
+}
+
+const char *psp_audio_driver(void)
+{
+    return SDL_WasInit(SDL_INIT_AUDIO) ? SDL_GetCurrentAudioDriver() : NULL;
+}
+
+/* The 32-bit build with the user-local sysroot (tools/setup_pc_deps.sh): SDL finds
+ * libpulse.so.0 there through the binary's RPATH, but libpulse looks for its private
+ * libpulsecommon-*.so only along its own RUNPATH, the system's
+ * /usr/lib/i386-linux-gnu/pulseaudio, which a 64-bit system doesn't have. Loading it
+ * from the sysroot first lets that lookup find it already loaded. */
+static void preload_pulse(void)
+{
+#ifdef PCPORT_I386_LIBDIR
+    static bool done;
+    if (done)
+        return;
+    done = true;
+    const char *dir = PCPORT_I386_LIBDIR "/pulseaudio";
+    int n = 0;
+    char **found = SDL_GlobDirectory(dir, "libpulsecommon-*.so", 0, &n);
+    if (found && n > 0) {
+        char path[512];
+        SDL_snprintf(path, sizeof path, "%s/%s", dir, found[0]);
+        if (!SDL_LoadObject(path))
+            SDL_Log("[audio] %s: %s", path, SDL_GetError());
+    }
+    SDL_free(found);
+#endif
+}
+
+/* Opens the playback device on first use and logs what SDL picked: the drivers built
+ * in, the one in use (SDL tries them in order and falls back to "dummy", which plays
+ * nothing, when none works), the device and its format. */
 static void audio_open_device(void)
 {
     if (g_audio.tried)
         return;
     g_audio.tried = true;
-    if (g_audio.mute)
-        return;
-    if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-        SDL_Log("[audio] no audio: %s", SDL_GetError());
+    if (g_audio.mute) {
+        SDL_Log("[audio] muted (--mute): no device opened");
         return;
     }
+    char drivers[256] = "";
+    for (int i = 0; i < SDL_GetNumAudioDrivers(); i++)
+        SDL_snprintf(drivers + SDL_strlen(drivers), sizeof drivers - SDL_strlen(drivers), "%s%s",
+                     i ? ", " : "", SDL_GetAudioDriver(i));
+    if (g_driver[0])
+        SDL_SetHint(SDL_HINT_AUDIO_DRIVER, g_driver);
+    preload_pulse();
+    if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+        SDL_Log("[audio] no audio (drivers built in: %s%s%s): %s", drivers,
+                g_driver[0] ? "; asked for " : "", g_driver, SDL_GetError());
+        return;
+    }
+    const char *drv = SDL_GetCurrentAudioDriver();
+    SDL_Log("[audio] driver \"%s\" (built in: %s)%s", drv ? drv : "?", drivers,
+            drv && !SDL_strcmp(drv, "dummy") ? ": nothing will be heard" : "");
     SDL_AudioSpec spec = {SDL_AUDIO_S16LE, 2, 44100};
     g_audio.dev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
-    if (!g_audio.dev)
+    if (!g_audio.dev) {
         SDL_Log("[audio] no playback device: %s", SDL_GetError());
-    else
-        SDL_Log("[audio] playback on \"%s\"", SDL_GetAudioDeviceName(g_audio.dev));
+        return;
+    }
+    SDL_AudioSpec got;
+    int frames = 0;
+    SDL_GetAudioDeviceFormat(g_audio.dev, &got, &frames);
+    SDL_Log("[audio] playback on \"%s\": %d Hz, %d channels, format 0x%X, %d-frame buffer",
+            SDL_GetAudioDeviceName(g_audio.dev), got.freq, got.channels, (unsigned)got.format, frames);
+}
+
+void psp_audio_open(void)
+{
+    audio_open_device();
 }
 
 static int channel_open(int ch, int samples, int format)
