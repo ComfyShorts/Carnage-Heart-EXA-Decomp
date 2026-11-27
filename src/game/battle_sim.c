@@ -131,8 +131,12 @@ static void start_action(Oke *o, ActKind k, float seconds)
 static int t_timestamp(PgChipTarget *t) { return O(t)->battle->tick; }
 static int t_halt_start(PgChipTarget *t, int frames) { O(t)->halt_left = frames / 30.0f; return 0; }
 static int t_halt_finished(PgChipTarget *t) { return O(t)->halt_left <= 0.0f; }
-static int t_action_finished(PgChipTarget *t, int category) { (void)category; return O(t)->act == ACT_NONE; }
-static int t_fire_finished(PgChipTarget *t) { return O(t)->fire_left <= 0.0f; }
+static int t_action_finished(PgChipTarget *t, int category)
+{
+    (void)category;
+    return O(t)->act == ACT_NONE && O(t)->firing < 0;
+}
+static int t_fire_finished(PgChipTarget *t) { return O(t)->firing < 0 && O(t)->fire_left <= 0.0f; }
 static int t_halt_action(PgChipTarget *t, int category)
 {
     (void)category;
@@ -161,6 +165,8 @@ static const int k_move_script[8] = {4, 3, 1, 2, 8, 7, 10, 9}; /* 0x08bd2414 */
 
 static void observe(Oke *o, ActKind k, int amount, float fallback)
 {
+    if (o->firing >= 0 && !o->armed)
+        o->firing = -1; /* SetScript replaced the weapon script before it fired */
     o->scripted = true;
     o->act = k;
     o->act_left = 1e9f;
@@ -265,7 +271,27 @@ static int t_defense(PgChipTarget *t, int kind, int b3)
 
 static int t_special_move(PgChipTarget *t, int kind) { return t_quick_move(t, kind ? 2 : 6); }
 
-static void fire_at(Oke *o, float tx, float ty)
+/* CBattleOkeEquipment::GetBulletSpeed (FUN_08856528): the weapon table at
+ * 0x08bd5574 ({type, ability, bullet, dispenser, category}, 20 bytes per weapon)
+ * names a bullet (speed at +0x0c of the 0x34-byte entries at 0x08c69c74; 77 = none)
+ * and a dispenser (missile launchers, speed at +0x0c of 0x08bcb8fc; 10 = none). */
+static float weapon_speed(int id)
+{
+    if (id <= 0 || id >= 60)
+        return 100.0f;
+    uint32_t bullet = gamedata_word(0x003D157Cu + (uint32_t)id * 20, 77);
+    uint32_t disp = gamedata_word(0x003D1580u + (uint32_t)id * 20, 10);
+    uint32_t bits = 0x42c80000u; /* 100.0 */
+    if (bullet != 77 && bullet < 78)
+        bits = gamedata_word(0x00465C80u + bullet * 0x34, bits);
+    if (disp != 10 && disp < 32)
+        bits = gamedata_word(0x003C7908u + disp * 0x34, bits);
+    float v;
+    memcpy(&v, &bits, sizeof v);
+    return v > 1.0f && v < 10000.0f ? v : 100.0f;
+}
+
+static void fire_at(Oke *o, float tx, float ty, float speed)
 {
     Battle *b = o->battle;
     for (int i = 0; i < MAX_SHOTS; i++)
@@ -276,32 +302,101 @@ static void fire_at(Oke *o, float tx, float ty)
             float spread = ((float)(rnd(b) % 100) - 50.0f) / 50.0f * 0.06f;
             float ux = (tx - o->x) / d, uy = (ty - o->y) / d;
             float c = cosf(spread), s = sinf(spread);
-            b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * SHOT_SPEED,
-                                 (ux * s + uy * c) * SHOT_SPEED, 2.5f};
+            b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * speed,
+                                 (ux * s + uy * c) * speed, SHOT_REACH / speed, 0};
             o->shots_fired++;
             return;
         }
 }
 
+/* Select and Fire / Firing Direction (FUN_08845038 / FUN_088452c8): slot 0 means
+ * the current weapon, 1-5 that slot. The weapon's script (0x2a + slot,
+ * SCRIPT_ID_WEAPON_1..5) aims, and its 0x20b command pulls the trigger
+ * (FUN_08848a68); `count` shots go out (+0xa308, FUN_0884299c). */
+static int pick_weapon(const Oke *o, int slot)
+{
+    if (slot > 0)
+        return slot <= 5 ? slot - 1 : -1;
+    for (int i = 0; i < 5; i++) /* stand-in for the selected weapon (FUN_0883fbb0) */
+        if (o->weapon[i] > 0 && o->ammo[i] > 0)
+            return i;
+    return -1;
+}
+
+static int start_fire(Oke *o, int slot, int count)
+{
+    int w = pick_weapon(o, slot);
+    if (w < 0)
+        return 0x11; /* no weapon */
+    if (o->weapon[w] <= 0 || o->ammo[w] <= 0)
+        return 0x12; /* empty */
+    if (o->scripted) {
+        o->scripted = false;
+        o->act = ACT_NONE;
+    }
+    o->firing = w;
+    o->burst_left = count > 0 ? count : 1;
+    o->burst_timer = 0.0f;
+    o->armed = true;
+    if (o->motion.s && o->motion.s->count[0x2a + w] > 0) {
+        oke_motion_start(&o->motion, 0x2a + w);
+        o->armed = false;
+    }
+    return 0;
+}
+
 static int t_select_fire(PgChipTarget *t, PgChipRange r, int a, int b, int c, int one)
 {
-    (void)a; (void)b; (void)c; (void)one;
+    (void)c; (void)one;
     Oke *o = O(t), *e = ENEMY(o);
     if (!in_range(o, r, e->x, e->y))
-        return 2; /* nothing to shoot at */
-    fire_at(o, e->x, e->y);
-    o->fire_left = 0.4f;
-    return 0;
+        return 0xd; /* no target (FUN_08841bd8 == -1) */
+    int res = start_fire(o, a, b);
+    o->aim_at_enemy = true;
+    return res;
 }
 
 static int t_firing_direction(PgChipTarget *t, int b2, int b3, int b4, int b5, int one)
 {
-    (void)b2; (void)b4; (void)b5; (void)one;
+    (void)b2; (void)one;
     Oke *o = O(t);
-    float h = (o->heading + (float)b3 * 2.0f) * DEG;
-    fire_at(o, o->x + sinf(h) * 100.0f, o->y - cosf(h) * 100.0f);
-    o->fire_left = 0.4f;
-    return 0;
+    int res = start_fire(o, b4, b5);
+    o->aim_at_enemy = false;
+    o->aim_angle = (float)b3 * 2.0f; /* stand-in for FUN_089fc4d4 */
+    return res;
+}
+
+static void fire_step(Oke *o, float dt)
+{
+    if (o->firing < 0)
+        return;
+    int w = o->firing;
+    if (!o->armed) {
+        if (o->motion.trigger[w] > 0) {
+            o->motion.trigger[w]--;
+            o->armed = true;
+        } else if (!oke_motion_busy(&o->motion)) {
+            o->armed = true; /* the script ended without a trigger command */
+        } else {
+            return;
+        }
+    }
+    o->burst_timer -= dt;
+    while (o->burst_timer <= 0.0f && o->burst_left > 0 && o->ammo[w] > 0) {
+        Oke *e = ENEMY(o);
+        float speed = weapon_speed(o->weapon[w]);
+        if (o->aim_at_enemy) {
+            fire_at(o, e->x, e->y, speed);
+        } else {
+            float h = (o->heading + o->aim_angle) * DEG;
+            fire_at(o, o->x + sinf(h) * 100.0f, o->y - cosf(h) * 100.0f, speed);
+        }
+        o->ammo[w]--;
+        o->burst_left--;
+        o->burst_timer += BURST_GAP;
+    }
+    if (o->burst_left <= 0 || o->ammo[w] <= 0)
+        o->firing = -1;
 }
 
 static int t_scan_oke(PgChipTarget *t, PgChipRange r, int a, int b, int c, int d)
@@ -495,6 +590,13 @@ static void oke_init(Oke *o, Battle *b, int side, float x, float y, float headin
     memcpy(&body, o->rec.hardware + 0x240, sizeof body); /* FUN_089ed210 */
     oke_motion_reset(&o->motion, oke_scripts_get(body));
     o->scripted = false;
+    for (int i = 0; i < 5; i++) {
+        memcpy(&o->weapon[i], o->rec.hardware + 0x258 + 4 * i, sizeof(int32_t));
+        memcpy(&o->ammo[i], o->rec.hardware + 0x26c + 4 * i, sizeof(int32_t));
+        if (o->weapon[i] < 0 || o->weapon[i] >= 60)
+            o->weapon[i] = 0;
+    }
+    o->firing = -1;
     int cpu = oke_cpu_part(&o->rec);
     pgchip_setup(&o->vm, &o->rec, battle_chip_speed(cpu));
     SDL_Log("[battle] side %d: CPU part %d, %d chips/s, main program %dx%d", side, cpu, o->vm.speed,
@@ -509,6 +611,7 @@ static void oke_step(Oke *o, float dt)
         o->fire_left -= dt;
     if (o->defend_left > 0.0f)
         o->defend_left -= dt;
+    fire_step(o, dt);
     if (o->motion.s && (o->act == ACT_NONE || o->scripted)) {
         oke_motion_step(&o->motion, dt, &o->x, &o->y, &o->heading);
         if (o->scripted) {

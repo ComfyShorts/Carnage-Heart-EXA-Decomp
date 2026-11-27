@@ -20,7 +20,8 @@
 #define MOVE_SPEED 50.0f    /* units per second */
 #define QUICK_SPEED 160.0f
 #define TURN_SPEED 180.0f   /* degrees per second */
-#define SHOT_SPEED 320.0f
+#define SHOT_REACH 700.0f   /* stand-in: shots fly this far */
+#define BURST_GAP 0.1f      /* stand-in: seconds between the shots of a burst */
 #define SHOT_DAMAGE 4
 #define MELEE_RANGE 36.0f
 #define MELEE_DAMAGE 10
@@ -49,12 +50,23 @@ typedef struct Oke {
     bool scripted;     /* the current ACT_MOVE / ACT_TURN runs a motion script */
     float obs_amount;  /* CBattleOkeObserver: distance or angle to cover */
     float obs_x, obs_y, obs_turned, obs_last_heading;
+    /* Weapons: the hardware block's five slots (+0x258 ids, +0x26c ammo,
+     * CHardwareDataBase FUN_089ed2dc / FUN_089ed3a8), as CBattleOke copies them into
+     * its weapon slots at +0xa2c0 (0x80 bytes each). */
+    int weapon[5], ammo[5];
+    int firing;        /* weapon slot being fired, -1 none */
+    bool armed;        /* the weapon script pulled the trigger */
+    int burst_left;
+    float burst_timer;
+    bool aim_at_enemy;
+    float aim_angle;   /* Firing Direction: degrees from the heading */
 } Oke;
 
 typedef struct Shot {
     bool live;
     int owner;
     float x, y, vx, vy, life;
+    int weapon;
 } Shot;
 
 typedef struct Battle {

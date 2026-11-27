@@ -120,6 +120,7 @@ void oke_motion_start(OkeMotion *m, int script)
     m->pc = 0;
     m->wait = 0.0f;
     m->loop_count = -1; /* *(oke + 0x20) = -1 in the chip handlers */
+    memset(m->trigger, 0, sizeof m->trigger);
     m->loop_key = 0;
 }
 
@@ -196,6 +197,11 @@ static void run_script(OkeMotion *m, float dt, float heading)
                     break;
                 }
             }
+            m->pc++;
+            break;
+        case 0x20b:
+            if (c->value >= 1 && c->value <= 5)
+                m->trigger[c->value - 1]++;
             m->pc++;
             break;
         case 0x211: /* holds */

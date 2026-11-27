@@ -12,6 +12,7 @@
  *                (0x08cce2d0, set by a static initializer) (FUN_088484f8 ...)
  *   0x209        loop back `value` commands while the action's counter allows
  *                (FUN_08858fd8; the chips set the counter to -1: repeat until stopped)
+ *   0x20b        pull weapon `value`'s trigger (FUN_0885910c -> FUN_08848a68)
  *   < 0x200      blend to that pose and wait
  *
  * CBattleOke's physics step (FUN_0884df08) sums the active pushes into an
@@ -49,6 +50,7 @@ typedef struct OkeMotion {
     int script, pc;      /* -1: none */
     float wait;          /* seconds left on a pose command */
     int pose;            /* the last pose command (POSE index in TYPE.txt) */
+    int trigger[5];      /* 0x20b "fire weapon n" commands not yet taken */
     int loop_count, loop_key;
     float push[6][2];    /* acceleration per channel, world plane */
     float push_t[6];
