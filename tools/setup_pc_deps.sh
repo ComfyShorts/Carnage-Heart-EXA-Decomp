@@ -5,13 +5,37 @@
 #     headers, fetched with `apt-get download` and unpacked into .deps/sysroot.
 #  2. 32-bit X11 runtime libraries from Ubuntu's i386 archive. apt uses a private
 #     package list under .deps/apt-i386, so i386 doesn't need to be enabled system-wide.
-#  3. SDL3 built from source as a static 32-bit library into .deps/sdl3-m32, with X11
-#     (loaded at runtime), dummy audio and no Wayland/PulseAudio.
+#  3. PulseAudio for SDL's audio (WSLg serves sound over PulseAudio): pkgconf for the
+#     host, unpacked into .deps/tools (SDL finds PulseAudio only through pkg-config),
+#     the i386 libpulse-dev (headers, libpulse.pc) and libpulse0 with the libraries it
+#     loads, unpacked into the sysroot. --no-pulseaudio leaves it out (no sound then);
+#     --pulseaudio-only runs just this step and step 4 on an existing .deps.
+#  4. SDL3 built from source as a static 32-bit library into .deps/sdl3-m32, with X11
+#     and PulseAudio (both loaded at runtime), no Wayland/PipeWire/ALSA.
+#  5. With --libavcodec: Ubuntu's i386 libavcodec (FFmpeg, LGPL-2.1-or-later) for the
+#     music's ATRAC3plus, linked dynamically. apt works out every library it needs
+#     against an empty package list; they're unpacked into the sysroot, all but libc,
+#     which stays the system's. --libavcodec-only runs just this step.
 #
 # Needs: apt-get, dpkg-deb, curl, cmake, ninja, gcc (all present on stock Ubuntu with
 # build-essential, cmake and ninja-build). Tested on Ubuntu 26.04 under WSL2.
 # With gcc-multilib and the i386 X11 packages installed system-wide, step 1-2 aren't needed.
+# None of it needs root; with root, `apt install pkgconf` would replace .deps/tools.
 set -euo pipefail
+
+WITH_AVCODEC=0
+ONLY_AVCODEC=0
+WITH_PULSE=1
+ONLY_PULSE=0
+for arg in "$@"; do
+  case $arg in
+    --libavcodec) WITH_AVCODEC=1 ;;
+    --libavcodec-only) WITH_AVCODEC=1; ONLY_AVCODEC=1 ;;
+    --no-pulseaudio) WITH_PULSE=0 ;;
+    --pulseaudio-only) ONLY_PULSE=1 ;;
+    *) echo "usage: $0 [--libavcodec | --libavcodec-only] [--no-pulseaudio | --pulseaudio-only]" >&2; exit 2 ;;
+  esac
+done
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEPS=$ROOT/.deps
@@ -26,16 +50,108 @@ I386_PKGS=(libx11-6 libxcb1 libxau6 libxdmcp6 libbsd0 libmd0 libxext6 libxrandr2
            libxrender1 libxi6 libxfixes3 libxcursor1)
 
 mkdir -p "$DEPS/debs/amd64" "$DEPS/debs/i386" "$SYSROOT" "$DEPS/src" "$DEPS/build"
+APT_D=$DEPS/apt-i386
+APT_OPTS=(-o "Dir::State::Lists=$APT_D/lists" -o "Dir::Cache=$APT_D/cache"
+          -o APT::Architecture=i386 -o APT::Architectures::=i386
+          -o Debug::NoLocking=1 -o "APT::Sandbox::User=$(id -un)")
+
+# Downloads i386 packages and every library they need into .deps/debs/<dir> and unpacks
+# them into the sysroot. apt resolves against an empty package status, so the list is
+# complete; libc and its dev packages are left out (the system's 32-bit libc stays).
+fetch_i386_closure() {
+  local dir=$1; shift
+  mkdir -p "$APT_D/lists/partial" "$APT_D/cache/archives/partial" "$APT_D/state" "$DEPS/debs/$dir"
+  : > "$APT_D/state/status"
+  local opts=("${APT_OPTS[@]}" -o "Dir::State=$APT_D/state" -o "Dir::State::status=$APT_D/state/status"
+              -o "Dir::State::Lists=$APT_D/lists" -o APT::Install-Recommends=false)
+  apt-get "${opts[@]}" update >/dev/null
+  local pkgs
+  pkgs=$(apt-get "${opts[@]}" install -s -y "$@" 2>/dev/null |
+         awk '/^Inst /{print $2}' | grep -vxE 'libc6|libc6-dev|libc-dev-bin|libc-gconv-modules-extra|linux-libc-dev|libcrypt-dev|rpcsvc-proto|libtirpc-dev')
+  (cd "$DEPS/debs/$dir" && apt-get "${opts[@]}" download $pkgs)
+  for deb in "$DEPS/debs/$dir"/*.deb; do dpkg-deb -x "$deb" "$SYSROOT"; done
+}
+
+# Step 5: libavcodec and everything it loads, for the i386 build.
+setup_libavcodec() {
+  echo "== i386 libavcodec (private apt index, empty package status)"
+  fetch_i386_closure avcodec libavcodec-dev libavutil-dev
+  echo "== libavcodec: $(ls "$SYSROOT"/usr/lib/i386-linux-gnu/libavcodec.so.* | head -1)"
+}
+
+# Step 3: PulseAudio. libpulse-dev on its own (its other dependencies are glib's dev
+# packages, which SDL doesn't need), libpulse0 with everything it loads.
+setup_pulseaudio() {
+  echo "== pkgconf for the host (into .deps/tools)"
+  mkdir -p "$DEPS/debs/tools" "$DEPS/tools"
+  (cd "$DEPS/debs/tools" && apt-get download pkgconf-bin libpkgconf7)
+  for deb in "$DEPS"/debs/tools/*.deb; do dpkg-deb -x "$deb" "$DEPS/tools"; done
+  # A pkg-config that answers for the i386 sysroot.
+  cat > "$DEPS/tools/pkg-config" <<EOF
+#!/bin/sh
+export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
+export PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib/i386-linux-gnu/pkgconfig:$SYSROOT/usr/share/pkgconfig"
+if [ -x "$DEPS/tools/usr/bin/pkgconf" ]; then
+  LD_LIBRARY_PATH="$DEPS/tools/usr/lib/x86_64-linux-gnu\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" exec "$DEPS/tools/usr/bin/pkgconf" "\$@"
+fi
+exec pkgconf "\$@"
+EOF
+  chmod +x "$DEPS/tools/pkg-config"
+  echo "== i386 libpulse (private apt index, empty package status)"
+  fetch_i386_closure pulse libpulse0
+  (cd "$DEPS/debs/pulse" && apt-get "${APT_OPTS[@]}" -o "Dir::State=$APT_D/state" \
+     -o "Dir::State::status=$APT_D/state/status" download libpulse-dev)
+  dpkg-deb -x "$DEPS"/debs/pulse/libpulse-dev_*.deb "$SYSROOT"
+  echo "== libpulse: $("$DEPS/tools/pkg-config" --modversion libpulse) ($(ls "$SYSROOT"/usr/lib/i386-linux-gnu/libpulse.so.0))"
+}
+
+SDL_AUDIO_OPTS=(-DSDL_PULSEAUDIO=OFF)
+if [ "$WITH_PULSE" = 1 ]; then
+  SDL_AUDIO_OPTS=(-DSDL_PULSEAUDIO=ON -DSDL_PULSEAUDIO_SHARED=ON -DPKG_CONFIG_EXECUTABLE="$DEPS/tools/pkg-config")
+fi
+
+# Step 4: SDL3, static, 32-bit.
+build_sdl() {
+  echo "== SDL3 $SDL_VER"
+  local tarball=$DEPS/src/SDL3-$SDL_VER.tar.gz
+  if [ ! -f "$tarball" ]; then
+    curl -fsSL -o "$tarball" "https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-$SDL_VER.tar.gz"
+  fi
+  echo "$SDL_SHA256  $tarball" | sha256sum -c -
+  rm -rf "$DEPS/src/SDL3-$SDL_VER" "$DEPS/build/sdl3-m32"
+  tar -xzf "$tarball" -C "$DEPS/src"
+  cmake -S "$DEPS/src/SDL3-$SDL_VER" -B "$DEPS/build/sdl3-m32" -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-m32.cmake" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS/sdl3-m32" \
+    -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+    -DSDL_X11=ON -DSDL_X11_SHARED=ON -DX11_INCLUDEDIR="$SYSROOT/usr/include" \
+    -DSDL_X11_XSCRNSAVER=OFF -DSDL_X11_XTEST=OFF -DSDL_X11_XSHAPE=OFF -DSDL_X11_XSYNC=OFF -DSDL_X11_XDBE=OFF \
+    -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_VULKAN=OFF -DSDL_RENDER_VULKAN=OFF \
+    "${SDL_AUDIO_OPTS[@]}" -DSDL_PIPEWIRE=OFF -DSDL_ALSA=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF \
+    -DSDL_LIBURING=OFF -DSDL_DBUS=OFF -DSDL_IBUS=OFF -DSDL_HIDAPI_LIBUSB=OFF >/dev/null
+  ninja -C "$DEPS/build/sdl3-m32" install >/dev/null
+  echo "== SDL3 audio drivers: $(grep -oE '^#define SDL_AUDIO_DRIVER_[A-Z]+ ' \
+    "$DEPS"/build/sdl3-m32/include-config-*/build_config/SDL_build_config.h | sed 's/#define SDL_AUDIO_DRIVER_//' | tr -d ' ' | tr '\n' ' ')"
+}
+
+if [ "$ONLY_PULSE" = 1 ]; then
+  setup_pulseaudio
+  build_sdl
+  echo "== done. Rebuild the port (cmake --build --preset m32)"
+  exit 0
+fi
+
+if [ "$ONLY_AVCODEC" = 1 ]; then
+  setup_libavcodec
+  echo "== done. Reconfigure the port (cmake --preset m32) to pick it up"
+  exit 0
+fi
 
 echo "== multilib dev packages"
 (cd "$DEPS/debs/amd64" && apt-get download "${DEV_PKGS[@]}")
 
 echo "== i386 runtime libraries (private apt index)"
-APT_D=$DEPS/apt-i386
 mkdir -p "$APT_D/lists/partial" "$APT_D/cache/archives/partial"
-APT_OPTS=(-o "Dir::State::Lists=$APT_D/lists" -o "Dir::Cache=$APT_D/cache"
-          -o APT::Architecture=i386 -o APT::Architectures::=i386
-          -o Debug::NoLocking=1 -o "APT::Sandbox::User=$(id -un)")
 apt-get "${APT_OPTS[@]}" update >/dev/null
 (cd "$DEPS/debs/i386" && apt-get "${APT_OPTS[@]}" download "${I386_PKGS[@]}")
 
@@ -55,23 +171,13 @@ for so in "$SYSROOT"/usr/lib32/lib*.so; do
   fi
 done
 
-echo "== SDL3 $SDL_VER"
-TARBALL=$DEPS/src/SDL3-$SDL_VER.tar.gz
-if [ ! -f "$TARBALL" ]; then
-  curl -fsSL -o "$TARBALL" "https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-$SDL_VER.tar.gz"
+if [ "$WITH_PULSE" = 1 ]; then
+  setup_pulseaudio
 fi
-echo "$SDL_SHA256  $TARBALL" | sha256sum -c -
-rm -rf "$DEPS/src/SDL3-$SDL_VER" "$DEPS/build/sdl3-m32"
-tar -xzf "$TARBALL" -C "$DEPS/src"
-cmake -S "$DEPS/src/SDL3-$SDL_VER" -B "$DEPS/build/sdl3-m32" -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-m32.cmake" \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS/sdl3-m32" \
-  -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
-  -DSDL_X11=ON -DSDL_X11_SHARED=ON -DX11_INCLUDEDIR="$SYSROOT/usr/include" \
-  -DSDL_X11_XSCRNSAVER=OFF -DSDL_X11_XTEST=OFF -DSDL_X11_XSHAPE=OFF -DSDL_X11_XSYNC=OFF -DSDL_X11_XDBE=OFF \
-  -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_VULKAN=OFF -DSDL_RENDER_VULKAN=OFF \
-  -DSDL_PULSEAUDIO=OFF -DSDL_PIPEWIRE=OFF -DSDL_ALSA=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF \
-  -DSDL_LIBURING=OFF -DSDL_DBUS=OFF -DSDL_IBUS=OFF -DSDL_HIDAPI_LIBUSB=OFF >/dev/null
-ninja -C "$DEPS/build/sdl3-m32" install >/dev/null
+build_sdl
+
+if [ "$WITH_AVCODEC" = 1 ]; then
+  setup_libavcodec
+fi
 
 echo "== done. Build the port with: cmake --preset m32 && cmake --build --preset m32"

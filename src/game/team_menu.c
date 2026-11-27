@@ -23,6 +23,7 @@
 #include "gamedata.h"
 #include "gu.h"
 #include "pad.h"
+#include "sound.h"
 #include "psp_shim.h"
 #include "savedata.h"
 #include "ui.h"
@@ -157,6 +158,7 @@ static int free_spot(int team, int except)
 static void update_top(void)
 {
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         switch (ui_menu_id(&g.top)) {
         case 0: /* -> mode 4 */
             g.mode = MODE_TEAMS;
@@ -179,6 +181,7 @@ static void update_top(void)
             break;
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.closing = true; /* mode 1: the exit window, then CTeamFormationFlow ends */
     }
 }
@@ -187,6 +190,7 @@ static void update_top(void)
 
 static void update_teams(void)
 {
+    int old_cursor = g.team_cursor;
     if (pad_repeat(PSP_CTRL_UP)) {
         g.team_cursor = g.team_cursor > 0 ? g.team_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? SAVE_TEAMS - 1 : 0;
         g.message = NULL;
@@ -194,12 +198,15 @@ static void update_teams(void)
         g.team_cursor = g.team_cursor < SAVE_TEAMS - 1 ? g.team_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.team_cursor;
         g.message = NULL;
     }
+    if (g.team_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.team_cursor < g.team_scroll)
         g.team_scroll = g.team_cursor;
     if (g.team_cursor >= g.team_scroll + TEAM_ROWS)
         g.team_scroll = g.team_cursor - TEAM_ROWS + 1;
     int t = g.team_cursor, status = savedata_team_status(t);
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         if (status != 0 && status != 1) { /* FUN_08ac468c: installed teams can't be set up */
             g.message = team_string(status == 2 || status == 3 ? 0x1E : 0x1F);
             return;
@@ -215,6 +222,7 @@ static void update_teams(void)
         ui_ask_open(&g.ask, team_string(0x1A), yes_no(0x1F), yes_no(0x20), 1);
         g.mode = MODE_DELETE;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;
         g.message = NULL;
     }
@@ -227,6 +235,7 @@ static void update_members(void)
         g.mode = MODE_TOP;
         return;
     }
+    int old_cursor = g.slot;
     if (pad_repeat(PSP_CTRL_UP)) {
         g.slot = (g.slot + TEAM_MEMBERS - 1) % TEAM_MEMBERS;
         g.message = NULL;
@@ -234,8 +243,11 @@ static void update_members(void)
         g.slot = (g.slot + 1) % TEAM_MEMBERS;
         g.message = NULL;
     }
+    if (g.slot != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     int card = savedata_team_member(team, g.slot);
     if (pad_pressed(PSP_CTRL_CIRCLE)) { /* -> mode 6 */
+        sound_se(SE_DECIDE, 1.0f);
         g.card_cursor = card >= 0 ? card : 0;
         if (card < 0)
             for (int i = 0; i < SAVE_CARDS; i++)
@@ -255,6 +267,7 @@ static void update_members(void)
         g.mode = MODE_FORMATION;
         g.message = NULL;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;
         g.message = NULL;
     }
@@ -264,6 +277,7 @@ static void update_members(void)
 
 static void update_cards(void)
 {
+    int old_cursor = g.card_cursor;
     if (pad_repeat(PSP_CTRL_UP)) {
         g.card_cursor = g.card_cursor > 0 ? g.card_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? SAVE_CARDS - 1 : 0;
         g.message = NULL;
@@ -271,12 +285,15 @@ static void update_cards(void)
         g.card_cursor = g.card_cursor < SAVE_CARDS - 1 ? g.card_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.card_cursor;
         g.message = NULL;
     }
+    if (g.card_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.card_cursor < g.card_scroll)
         g.card_scroll = g.card_cursor;
     if (g.card_cursor >= g.card_scroll + CARD_ROWS)
         g.card_scroll = g.card_cursor - CARD_ROWS + 1;
     int team = team_menu_selected();
     if (pad_pressed(PSP_CTRL_CIRCLE) && team >= 0) {
+        sound_se(SE_DECIDE, 1.0f);
         /* FUN_08ac8144: a blank card returns 9, string 0x24. The weight, manual-OKE
          * and team-count rules it also checks (FUN_08891fc8) aren't ported. */
         if (!savedata_card_used(g.card_cursor)) {
@@ -293,6 +310,7 @@ static void update_cards(void)
         g.mode = MODE_MEMBERS;
         g.message = NULL;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_MEMBERS;
         g.message = NULL;
     }
@@ -314,8 +332,11 @@ static void update_formation(void)
         col--;
     else if (pad_repeat(PSP_CTRL_RIGHT) && col < 2)
         col++;
+    if (row * 3 + col != g.spot)
+        sound_se(SE_CURSOR, 1.0f);
     g.spot = row * 3 + col;
     if (pad_pressed(PSP_CTRL_CIRCLE) && team >= 0) {
+        sound_se(SE_DECIDE, 1.0f);
         int old = savedata_team_spot(team, g.slot);
         for (int m = 0; m < TEAM_MEMBERS; m++)
             if (m != g.slot && savedata_team_member(team, m) >= 0 && savedata_team_spot(team, m) == g.spot)
@@ -323,6 +344,7 @@ static void update_formation(void)
         savedata_team_set_member(team, g.slot, savedata_team_member(team, g.slot), g.spot);
         g.mode = MODE_MEMBERS;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_MEMBERS;
     }
 }

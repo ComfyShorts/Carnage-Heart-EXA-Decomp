@@ -61,7 +61,8 @@ class Pack:
         archive, off, size, stored = self.files[path]
         with open(self.dir / archive, "rb") as f:
             f.seek(off)
-            data = arz_decode(f.read(stored))
+            # stored 0: kept as is (the sound files), else ARZ-packed
+            data = f.read(size) if stored == 0 else arz_decode(f.read(stored))
         if len(data) != size:
             raise ValueError(f"{path}: unpacked {len(data)} bytes, index says {size}")
         return data

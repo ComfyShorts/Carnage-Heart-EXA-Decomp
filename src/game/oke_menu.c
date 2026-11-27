@@ -27,6 +27,7 @@
 #include "gu.h"
 #include "oke_parts.h"
 #include "pad.h"
+#include "sound.h"
 #include "psp_shim.h"
 #include "savedata.h"
 #include "ui.h"
@@ -276,12 +277,14 @@ static void update_top(void)
     if (ui_menu_input(&g.top))
         g.message = NULL;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         UiMenuItem *it = &g.top.item[g.top.cursor];
         if (it->disabled)
             g.message = dstr(0x6F);
         else
             enter_item(it->id);
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.closing = true;
     }
 }
@@ -301,6 +304,7 @@ static void card_line(int card, char *out, size_t n)
 
 static void move_card_cursor(void)
 {
+    int old_cursor = g.card_cursor;
     if (pad_repeat(PSP_CTRL_UP)) {
         g.card_cursor = g.card_cursor > 0 ? g.card_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? SAVE_CARDS - 1 : 0;
         g.message = NULL;
@@ -308,6 +312,8 @@ static void move_card_cursor(void)
         g.card_cursor = g.card_cursor < SAVE_CARDS - 1 ? g.card_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.card_cursor;
         g.message = NULL;
     }
+    if (g.card_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.card_cursor < g.card_scroll)
         g.card_scroll = g.card_cursor;
     if (g.card_cursor >= g.card_scroll + CARD_ROWS)
@@ -321,6 +327,7 @@ static void update_cards(void)
     move_card_cursor();
     int c = g.card_cursor;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         if (installed(c)) {
             g.message = dstr(0x6F);
             return;
@@ -339,6 +346,7 @@ static void update_cards(void)
         g.mode = MODE_COPY;
         g.message = dstr(0x65);
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;
         g.message = NULL;
     }
@@ -350,6 +358,7 @@ static void update_copy(void)
     if (g.message == NULL)
         g.message = dstr(0x65);
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         if (g.card_cursor == g.copy_from || installed(g.card_cursor)) {
             g.message = dstr(0x6F);
             return;
@@ -358,6 +367,7 @@ static void update_copy(void)
         ui_ask_open(&g.ask, dstr(savedata_card_used(g.card_cursor) ? 0x68 : 0x67), yes_no(0x1F), yes_no(0x20), 1);
         g.mode = MODE_ASK;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_CARDS;
         g.message = NULL;
     }
@@ -387,6 +397,7 @@ static void update_ask(float dt)
 
 static void update_hardware(void)
 {
+    int old_cursor = g.hw_cursor;
     if (pad_repeat(PSP_CTRL_UP)) {
         g.hw_cursor = (g.hw_cursor + g.hw_count - 1) % g.hw_count;
         g.message = NULL;
@@ -394,8 +405,11 @@ static void update_hardware(void)
         g.hw_cursor = (g.hw_cursor + 1) % g.hw_count;
         g.message = NULL;
     }
+    if (g.hw_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     int item = g.hw_items[g.hw_cursor];
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         if (!hw_item_enabled(item)) {
             if (item == HWI_ENERGY || item == HWI_OUTPUT) {
                 SDL_Log("[oke] \"%s\" (CHardDesignMngr mode 0x%X, the tuning slider) isn't ported",
@@ -409,6 +423,7 @@ static void update_hardware(void)
         open_parts(item);
         g.message = NULL;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;
         g.message = NULL;
     }
@@ -422,16 +437,20 @@ static void update_parts(void)
         g.mode = MODE_HARDWARE;
         return;
     }
+    int old_cursor = g.part_cursor;
     if (pad_repeat(PSP_CTRL_UP))
         g.part_cursor = g.part_cursor > 0 ? g.part_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? g.part_count - 1 : 0;
     else if (pad_repeat(PSP_CTRL_DOWN))
         g.part_cursor = g.part_cursor < g.part_count - 1 ? g.part_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.part_cursor;
+    if (g.part_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.part_cursor < g.part_scroll)
         g.part_scroll = g.part_cursor;
     if (g.part_cursor >= g.part_scroll + PART_ROWS)
         g.part_scroll = g.part_cursor - PART_ROWS + 1;
     int item = g.hw_items[g.hw_cursor], id = g.parts[g.part_cursor];
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         int c = current();
         OkeDataBase *card = savedata_card_edit(c);
         if (!savedata_card_used(c)) { /* a new design: the card becomes the player's */
@@ -447,6 +466,7 @@ static void update_parts(void)
         build_top_menu();
         g.mode = MODE_HARDWARE;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_HARDWARE;
     }
 }
@@ -470,6 +490,7 @@ static void update_software(void)
     int w = card->software.width[g.program];
     if (w <= 0)
         w = 1;
+    int old_cursor = g.chip_y * 64 + g.chip_x;
     if (pad_repeat(PSP_CTRL_UP) && g.chip_y > 0)
         g.chip_y--;
     else if (pad_repeat(PSP_CTRL_DOWN) && g.chip_y < w - 1)
@@ -478,10 +499,14 @@ static void update_software(void)
         g.chip_x--;
     else if (pad_repeat(PSP_CTRL_RIGHT) && g.chip_x < w - 1)
         g.chip_x++;
+    if (g.chip_y * 64 + g.chip_x != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         SDL_Log("[oke] chip editing (CSoftDesignMngr's Edit Chips) isn't ported");
         g.message = dstr(0x25);
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;
         g.message = NULL;
     }

@@ -18,6 +18,7 @@
  * but the clear is drawn. */
 #include "startup.h"
 #include "savedata.h"
+#include "sound.h"
 #include "gamedata.h"
 #include "battle.h"
 #include "entrance.h"
@@ -336,13 +337,16 @@ static int application_init(void)
     psp_gu_set_trace(g_startup_gu_trace_frames > 0);
     render_gu_init(gfx);
 
-    /* 15-21, not ported yet: CSound (0x121A0 bytes) and its start-up; the timers,
+    /* 15. CSound: the sound library, its thread, the SE table and the system bank
+     * (sound.c). Music and voices aren't ported. */
+    sound_init();
+
+    /* 16-21, not ported yet: the timers,
      * utility, pad and file managers (FUN_08b1f904 .. FUN_089f2ecc); the save-data
      * manager; the "gamecommon" file set into the default heap; the sound bank; and
      * AssignSpecialBufferToUtilitySave, which hands the step-7 buffer to the save
      * dialogs. */
-    SDL_Log("[startup] CApplication::Init: skipping CSound, the managers and the \"gamecommon\" file set "
-            "(not ported)");
+    SDL_Log("[startup] CApplication::Init: skipping the managers and the \"gamecommon\" file set (not ported)");
     SDL_Log("[startup] state: default heap %u KiB used of %u, fast heap %u KiB, boot set slot %d, "
             "SJIS tables %s, first random number 0x%08X",
             (unsigned)(g_default_heap.used / 1024), (unsigned)(g_default_heap.size / 1024),
@@ -379,6 +383,7 @@ static void main_loop(void)
          * ported. */
         int step = render_interval(gfx);
         pad_update(step);
+        sound_update();
         float dt = (float)step * (1.0f / 60.0f);
         if (entrance_running == 3)
             modelview_update(dt);

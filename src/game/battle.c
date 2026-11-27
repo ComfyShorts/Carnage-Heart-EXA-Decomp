@@ -21,6 +21,8 @@
 #include "okemodel.h"
 #include "packfile.h"
 #include "pad.h"
+#include "music.h"
+#include "sound.h"
 #include "pgchip.h"
 #include "picture.h"
 #include "psp_imports.h"
@@ -132,6 +134,8 @@ static int battle_team_count(int side)
 }
 
 /* From the choices made on the Battle Mode screens (battle_menu.c). */
+static void battle_sound(void *user, int se, float x, float y);
+
 static bool start_battle(void)
 {
     const BattleSetup *set = battle_menu_setup();
@@ -158,7 +162,13 @@ static bool start_battle(void)
     uint32_t seed = 0x12345678u;
     for (const char *c = lead->path[0] ? lead->path : lead->label; *c; c++)
         seed = seed * 31u + (uint8_t)*c;
+    g_b.sound = battle_sound;
     battle_sim_start(&g_b, seed ^ (uint32_t)set->map);
+    /* the battle bank (FUN_08b26998(.., 1, "sound/se/seset_01bat.phd", ".pbd")) */
+    sound_bank_open(SE_BANK_BATTLE);
+    /* FUN_088754d8: a battle that names its own track plays it (FUN_08b34e88);
+     * Battle Mode's don't, so the battle list (FUN_0888dfb0) */
+    music_battle();
     g.watch = 0; /* your leader */
     scene_load();
     SDL_Log("[battle] %s (%d) vs %s (%d) on map %02d, %.0f s", set->team_label[0], set->count[0],
@@ -280,6 +290,16 @@ static void update_camera(float dt)
         g_scene.cam_at[i] += (at[i] - g_scene.cam_at[i]) * k;
     }
     g_scene.cam_valid = true;
+    sound_set_listener(g_scene.cam_eye, g_scene.cam_at);
+}
+
+/* The sim's sound events, placed at the field point (FUN_08b36cac). */
+static void battle_sound(void *user, int se, float x, float y)
+{
+    (void)user;
+    float p[3];
+    world_pos(x, y, p);
+    sound_se_3d(se, 1.0f, p);
 }
 
 typedef struct ShotVertex {
@@ -585,6 +605,7 @@ void battle_mode_start(void)
     g_scene.map = -1;
     if (!font_init())
         SDL_Log("[battle] fonts unavailable");
+    music_lists_build(); /* FUN_088d3d80: the BGM Player's lists for this mode */
     g.fileset = fileset_open("battlescene", &g_default_heap, 0, 0);
     if (g.fileset < 0)
         SDL_Log("[battle] OpenFileSet(\"battlescene\") failed: no HUD art");
@@ -634,6 +655,8 @@ int battle_mode_update(float dt)
         break;
     case SCR_RESULT:
         if (g.t > 1.0f && pad_pressed(PSP_CTRL_CIRCLE)) {
+            sound_se(SE_DECIDE, 1.0f);
+            sound_bank_close(SE_BANK_BATTLE);
             battle_menu_resume();
             enter(SCR_MENU);
         }

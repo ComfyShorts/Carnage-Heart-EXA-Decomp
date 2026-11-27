@@ -4,311 +4,312 @@
 #include "psp_imports.h"
 #include "psp_shim.h"
 
-/* ---- sceAudio (12 imports) ---- */
+/* ---- sceAudio ----
+ * Hand-written on SDL3 audio. Each PSP channel is an SDL audio stream bound to one
+ * playback device (44100 Hz, 16-bit stereo, as the PSP mixes). The blocking outputs
+ * wait while the channel already holds more than a couple of buffers, which paces the
+ * game's sound thread like the hardware does. With --mute (psp_audio_set_mute) or
+ * without a device, the outputs only keep the timing. */
 
-int32_t sceAudioChRelease(void)
+#include <SDL3/SDL.h>
+#include <string.h>
+
+#define AUDIO_CHANNELS 8
+#define AUDIO_SRC 8 /* sceAudioOutput2* (the SRC channel) */
+#define AUDIO_FORMAT_MONO 0x10
+#define AUDIO_ERR_CHANNEL 0x80260003
+#define AUDIO_ERR_NOT_RESERVED 0x80260008
+#define AUDIO_ERR_NO_FREE 0x80260002
+
+typedef struct AudioChannel {
+    bool reserved;
+    int samples;   /* per output call */
+    bool mono;
+    SDL_AudioStream *stream;
+    uint64_t next_ns; /* muted: when the last buffer would have finished */
+} AudioChannel;
+
+static struct {
+    bool mute, tried;
+    SDL_AtomicInt closed; /* psp_audio_shutdown ran: outputs only keep the timing */
+    SDL_AtomicInt busy;   /* output calls in progress */
+    SDL_AudioDeviceID dev;
+    AudioChannel ch[AUDIO_CHANNELS + 1];
+} g_audio;
+
+void psp_audio_set_mute(bool mute)
 {
-    PSP_STUB("sceAudio", 0x6FC46853);
+    g_audio.mute = mute;
+}
+
+bool psp_audio_muted(void)
+{
+    return g_audio.mute || !g_audio.dev;
+}
+
+/* At exit: the game's sound thread may still be sending, so stop taking its output
+ * and wait for a call in progress before the streams and the device go. */
+void psp_audio_shutdown(void)
+{
+    SDL_SetAtomicInt(&g_audio.closed, 1);
+    while (SDL_GetAtomicInt(&g_audio.busy) > 0)
+        SDL_Delay(1);
+    for (int i = 0; i <= AUDIO_CHANNELS; i++)
+        if (g_audio.ch[i].stream) {
+            SDL_DestroyAudioStream(g_audio.ch[i].stream);
+            g_audio.ch[i].stream = NULL;
+        }
+    if (g_audio.dev)
+        SDL_CloseAudioDevice(g_audio.dev);
+    g_audio.dev = 0;
+}
+
+static char g_driver[32];
+
+void psp_audio_set_driver(const char *name)
+{
+    SDL_strlcpy(g_driver, name ? name : "", sizeof g_driver);
+}
+
+const char *psp_audio_driver(void)
+{
+    return SDL_WasInit(SDL_INIT_AUDIO) ? SDL_GetCurrentAudioDriver() : NULL;
+}
+
+/* The 32-bit build with the user-local sysroot (tools/setup_pc_deps.sh): SDL finds
+ * libpulse.so.0 there through the binary's RPATH, but libpulse looks for its private
+ * libpulsecommon-*.so only along its own RUNPATH, the system's
+ * /usr/lib/i386-linux-gnu/pulseaudio, which a 64-bit system doesn't have. Loading it
+ * from the sysroot first lets that lookup find it already loaded. */
+static void preload_pulse(void)
+{
+#ifdef PCPORT_I386_LIBDIR
+    static bool done;
+    if (done)
+        return;
+    done = true;
+    const char *dir = PCPORT_I386_LIBDIR "/pulseaudio";
+    int n = 0;
+    char **found = SDL_GlobDirectory(dir, "libpulsecommon-*.so", 0, &n);
+    if (found && n > 0) {
+        char path[512];
+        SDL_snprintf(path, sizeof path, "%s/%s", dir, found[0]);
+        if (!SDL_LoadObject(path))
+            SDL_Log("[audio] %s: %s", path, SDL_GetError());
+    }
+    SDL_free(found);
+#endif
+}
+
+/* Opens the playback device on first use and logs what SDL picked: the drivers built
+ * in, the one in use (SDL tries them in order and falls back to "dummy", which plays
+ * nothing, when none works), the device and its format. */
+static void audio_open_device(void)
+{
+    if (g_audio.tried)
+        return;
+    g_audio.tried = true;
+    if (g_audio.mute) {
+        SDL_Log("[audio] muted (--mute): no device opened");
+        return;
+    }
+    char drivers[256] = "";
+    for (int i = 0; i < SDL_GetNumAudioDrivers(); i++)
+        SDL_snprintf(drivers + SDL_strlen(drivers), sizeof drivers - SDL_strlen(drivers), "%s%s",
+                     i ? ", " : "", SDL_GetAudioDriver(i));
+    if (g_driver[0])
+        SDL_SetHint(SDL_HINT_AUDIO_DRIVER, g_driver);
+    preload_pulse();
+    if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+        SDL_Log("[audio] no audio (drivers built in: %s%s%s): %s", drivers,
+                g_driver[0] ? "; asked for " : "", g_driver, SDL_GetError());
+        return;
+    }
+    const char *drv = SDL_GetCurrentAudioDriver();
+    SDL_Log("[audio] driver \"%s\" (built in: %s)%s", drv ? drv : "?", drivers,
+            drv && !SDL_strcmp(drv, "dummy") ? ": nothing will be heard" : "");
+    SDL_AudioSpec spec = {SDL_AUDIO_S16LE, 2, 44100};
+    g_audio.dev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+    if (!g_audio.dev) {
+        SDL_Log("[audio] no playback device: %s", SDL_GetError());
+        return;
+    }
+    SDL_AudioSpec got;
+    int frames = 0;
+    SDL_GetAudioDeviceFormat(g_audio.dev, &got, &frames);
+    SDL_Log("[audio] playback on \"%s\": %d Hz, %d channels, format 0x%X, %d-frame buffer",
+            SDL_GetAudioDeviceName(g_audio.dev), got.freq, got.channels, (unsigned)got.format, frames);
+}
+
+void psp_audio_open(void)
+{
+    audio_open_device();
+}
+
+static int channel_open(int ch, int samples, int format)
+{
+    audio_open_device();
+    AudioChannel *c = &g_audio.ch[ch];
+    c->reserved = true;
+    c->samples = samples;
+    c->mono = format == AUDIO_FORMAT_MONO;
+    c->next_ns = 0;
+    if (g_audio.dev && !c->stream) {
+        SDL_AudioSpec spec = {SDL_AUDIO_S16LE, 2, 44100};
+        c->stream = SDL_CreateAudioStream(&spec, &spec);
+        if (c->stream && !SDL_BindAudioStream(g_audio.dev, c->stream)) {
+            SDL_DestroyAudioStream(c->stream);
+            c->stream = NULL;
+        }
+    }
+    return ch;
+}
+
+static void channel_close(AudioChannel *c)
+{
+    if (c->stream) {
+        SDL_DestroyAudioStream(c->stream);
+        c->stream = NULL;
+    }
+    c->reserved = false;
+}
+
+/* Queues one buffer at volumes l / r (0x8000 = full) and, when blocking, waits until
+ * the channel holds no more than two buffers. Returns the samples queued. */
+static int channel_output(AudioChannel *c, int l, int r, const void *buf, bool blocking)
+{
+    SDL_AddAtomicInt(&g_audio.busy, 1);
+    int n = c->samples;
+    if (SDL_GetAtomicInt(&g_audio.closed) || !g_audio.dev || g_audio.mute || !c->stream) {
+        SDL_AddAtomicInt(&g_audio.busy, -1);
+        /* keep the pace without a device */
+        uint64_t now = SDL_GetTicksNS(), len = (uint64_t)n * 1000000000ull / 44100;
+        if (c->next_ns < now)
+            c->next_ns = now;
+        c->next_ns += len;
+        if (blocking && c->next_ns > now + 2 * len)
+            SDL_DelayNS(c->next_ns - now - 2 * len);
+        return n;
+    }
+    static int16_t tmp[2 * 4096];
+    if (n > 4096)
+        n = 4096;
+    const int16_t *in = buf;
+    for (int i = 0; i < n; i++) {
+        int sl = c->mono ? in[i] : in[2 * i], sr = c->mono ? in[i] : in[2 * i + 1];
+        tmp[2 * i] = (int16_t)(sl * l / 0x8000);
+        tmp[2 * i + 1] = (int16_t)(sr * r / 0x8000);
+    }
+    SDL_PutAudioStreamData(c->stream, tmp, n * 4);
+    if (blocking)
+        while (!SDL_GetAtomicInt(&g_audio.closed) && SDL_GetAudioStreamQueued(c->stream) > 2 * n * 4)
+            SDL_Delay(1);
+    SDL_AddAtomicInt(&g_audio.busy, -1);
+    return n;
+}
+
+static AudioChannel *reserved(int ch)
+{
+    return ch >= 0 && ch <= AUDIO_CHANNELS && g_audio.ch[ch].reserved ? &g_audio.ch[ch] : NULL;
+}
+
+int32_t sceAudioChReserve(int ch, int samples, int format)
+{
+    if (ch < 0) {
+        for (ch = AUDIO_CHANNELS - 1; ch >= 0 && g_audio.ch[ch].reserved; ch--)
+            ;
+        if (ch < 0)
+            return (int32_t)AUDIO_ERR_NO_FREE;
+    }
+    if (ch >= AUDIO_CHANNELS || g_audio.ch[ch].reserved)
+        return (int32_t)AUDIO_ERR_CHANNEL;
+    int r = channel_open(ch, samples, format);
+    PSP_TRACE(r, "ch %d, %d samples, format 0x%X", ch, samples, format);
+    return r;
+}
+
+int32_t sceAudioChRelease(int ch)
+{
+    AudioChannel *c = reserved(ch);
+    if (!c || ch == AUDIO_SRC)
+        return (int32_t)AUDIO_ERR_NOT_RESERVED;
+    channel_close(c);
     return 0;
 }
 
-int32_t sceAudioChReserve(void)
+int32_t sceAudioOutputBlocking(int ch, int vol, const void *buf)
 {
-    PSP_STUB("sceAudio", 0x5EC81C55);
+    AudioChannel *c = reserved(ch);
+    return c ? channel_output(c, vol, vol, buf, true) : (int32_t)AUDIO_ERR_NOT_RESERVED;
+}
+
+int32_t sceAudioOutputPanned(int ch, int l, int r, const void *buf)
+{
+    AudioChannel *c = reserved(ch);
+    return c ? channel_output(c, l, r, buf, false) : (int32_t)AUDIO_ERR_NOT_RESERVED;
+}
+
+int32_t sceAudioOutputPannedBlocking(int ch, int l, int r, const void *buf)
+{
+    AudioChannel *c = reserved(ch);
+    return c ? channel_output(c, l, r, buf, true) : (int32_t)AUDIO_ERR_NOT_RESERVED;
+}
+
+int32_t sceAudioChangeChannelVolume(int ch, int l, int r)
+{
+    (void)l, (void)r; /* volumes go with each output call here */
+    return reserved(ch) ? 0 : (int32_t)AUDIO_ERR_NOT_RESERVED;
+}
+
+int32_t sceAudioChangeChannelConfig(int ch, int format)
+{
+    AudioChannel *c = reserved(ch);
+    if (!c)
+        return (int32_t)AUDIO_ERR_NOT_RESERVED;
+    c->mono = format == AUDIO_FORMAT_MONO;
     return 0;
 }
 
-int32_t sceAudioChangeChannelConfig(void)
+int32_t sceAudioSetChannelDataLen(int ch, int samples)
 {
-    PSP_STUB("sceAudio", 0x95FD0C2D);
+    AudioChannel *c = reserved(ch);
+    if (!c)
+        return (int32_t)AUDIO_ERR_NOT_RESERVED;
+    c->samples = samples;
     return 0;
 }
 
-int32_t sceAudioChangeChannelVolume(void)
+int32_t sceAudioGetChannelRestLength(int ch)
 {
-    PSP_STUB("sceAudio", 0xB7E1D8E7);
-    return 0;
+    AudioChannel *c = reserved(ch);
+    if (!c)
+        return (int32_t)AUDIO_ERR_NOT_RESERVED;
+    return c->stream ? SDL_GetAudioStreamQueued(c->stream) / 4 : 0;
 }
 
-int32_t sceAudioGetChannelRestLength(void)
+/* The SRC channel: stereo at 44100 Hz here (the game asks for that rate). */
+int32_t sceAudioOutput2Reserve(int samples)
 {
-    PSP_STUB("sceAudio", 0xB011922F);
-    return 0;
-}
-
-int32_t sceAudioOutput2OutputBlocking(void)
-{
-    PSP_STUB("sceAudio", 0x2D53F36E);
+    if (g_audio.ch[AUDIO_SRC].reserved)
+        return (int32_t)AUDIO_ERR_CHANNEL;
+    channel_open(AUDIO_SRC, samples, 0);
+    PSP_TRACE(0, "%d samples", samples);
     return 0;
 }
 
 int32_t sceAudioOutput2Release(void)
 {
-    PSP_STUB("sceAudio", 0x43196845);
+    channel_close(&g_audio.ch[AUDIO_SRC]);
     return 0;
 }
 
-int32_t sceAudioOutput2Reserve(void)
+int32_t sceAudioOutput2OutputBlocking(int vol, const void *buf)
 {
-    PSP_STUB("sceAudio", 0x01562BA3);
-    return 0;
+    AudioChannel *c = reserved(AUDIO_SRC);
+    return c ? channel_output(c, vol, vol, buf, true) : (int32_t)AUDIO_ERR_NOT_RESERVED;
 }
 
-int32_t sceAudioOutputBlocking(void)
-{
-    PSP_STUB("sceAudio", 0x136CAF51);
-    return 0;
-}
-
-int32_t sceAudioOutputPanned(void)
-{
-    PSP_STUB("sceAudio", 0xE2D56B2D);
-    return 0;
-}
-
-int32_t sceAudioOutputPannedBlocking(void)
-{
-    PSP_STUB("sceAudio", 0x13F592BC);
-    return 0;
-}
-
-int32_t sceAudioSetChannelDataLen(void)
-{
-    PSP_STUB("sceAudio", 0xCB2E439E);
-    return 0;
-}
-
-/* ---- sceSasCore (27 imports) ---- */
-
-int32_t __sceSasCore(void)
-{
-    PSP_STUB("sceSasCore", 0xA3589D81);
-    return 0;
-}
-
-int32_t __sceSasCoreWithMix(void)
-{
-    PSP_STUB("sceSasCore", 0x50A14DFC);
-    return 0;
-}
-
-int32_t __sceSasGetAllEnvelopeHeights(void)
-{
-    PSP_STUB("sceSasCore", 0x07F58C24);
-    return 0;
-}
-
-int32_t __sceSasGetEndFlag(void)
-{
-    PSP_STUB("sceSasCore", 0x68A46B95);
-    return 0;
-}
-
-int32_t __sceSasGetEnvelopeHeight(void)
-{
-    PSP_STUB("sceSasCore", 0x74AE582A);
-    return 0;
-}
-
-int32_t __sceSasGetGrain(void)
-{
-    PSP_STUB("sceSasCore", 0xBD11B7C2);
-    return 0;
-}
-
-int32_t __sceSasGetOutputmode(void)
-{
-    PSP_STUB("sceSasCore", 0xE175EF66);
-    return 0;
-}
-
-int32_t __sceSasGetPauseFlag(void)
-{
-    PSP_STUB("sceSasCore", 0x2C8E6AB3);
-    return 0;
-}
-
-int32_t __sceSasInit(void)
-{
-    PSP_STUB("sceSasCore", 0x42778A9F);
-    return 0;
-}
-
-int32_t __sceSasRevEVOL(void)
-{
-    PSP_STUB("sceSasCore", 0xD5A229C9);
-    return 0;
-}
-
-int32_t __sceSasRevParam(void)
-{
-    PSP_STUB("sceSasCore", 0x267A6DD2);
-    return 0;
-}
-
-int32_t __sceSasRevType(void)
-{
-    PSP_STUB("sceSasCore", 0x33D4AB37);
-    return 0;
-}
-
-int32_t __sceSasRevVON(void)
-{
-    PSP_STUB("sceSasCore", 0xF983B186);
-    return 0;
-}
-
-int32_t __sceSasSetADSR(void)
-{
-    PSP_STUB("sceSasCore", 0x019B25EB);
-    return 0;
-}
-
-int32_t __sceSasSetADSRmode(void)
-{
-    PSP_STUB("sceSasCore", 0x9EC3676A);
-    return 0;
-}
-
-int32_t __sceSasSetGrain(void)
-{
-    PSP_STUB("sceSasCore", 0xD1E0A01E);
-    return 0;
-}
-
-int32_t __sceSasSetKeyOff(void)
-{
-    PSP_STUB("sceSasCore", 0xA0CF2FA4);
-    return 0;
-}
-
-int32_t __sceSasSetKeyOn(void)
-{
-    PSP_STUB("sceSasCore", 0x76F01ACA);
-    return 0;
-}
-
-int32_t __sceSasSetNoise(void)
-{
-    PSP_STUB("sceSasCore", 0xB7660A23);
-    return 0;
-}
-
-int32_t __sceSasSetOutputmode(void)
-{
-    PSP_STUB("sceSasCore", 0xE855BF76);
-    return 0;
-}
-
-int32_t __sceSasSetPause(void)
-{
-    PSP_STUB("sceSasCore", 0x787D04D5);
-    return 0;
-}
-
-int32_t __sceSasSetPitch(void)
-{
-    PSP_STUB("sceSasCore", 0xAD84D37F);
-    return 0;
-}
-
-int32_t __sceSasSetSL(void)
-{
-    PSP_STUB("sceSasCore", 0x5F9529F6);
-    return 0;
-}
-
-int32_t __sceSasSetSimpleADSR(void)
-{
-    PSP_STUB("sceSasCore", 0xCBCD4F79);
-    return 0;
-}
-
-int32_t __sceSasSetVoice(void)
-{
-    PSP_STUB("sceSasCore", 0x99944089);
-    return 0;
-}
-
-int32_t __sceSasSetVoicePCM(void)
-{
-    PSP_STUB("sceSasCore", 0xE1CD9561);
-    return 0;
-}
-
-int32_t __sceSasSetVolume(void)
-{
-    PSP_STUB("sceSasCore", 0x440CA7D8);
-    return 0;
-}
-
-/* ---- sceAtrac3plus (11 imports) ---- */
-
-int32_t sceAtracAddStreamData(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x7DB31251);
-    return 0;
-}
-
-int32_t sceAtracDecodeData(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x6A8C3CD5);
-    return 0;
-}
-
-int32_t sceAtracGetInternalErrorInfo(void)
-{
-    PSP_STUB("sceAtrac3plus", 0xE88F759B);
-    return 0;
-}
-
-int32_t sceAtracGetRemainFrame(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x9AE849A7);
-    return 0;
-}
-
-int32_t sceAtracGetSoundSample(void)
-{
-    PSP_STUB("sceAtrac3plus", 0xA2BBA8BE);
-    return 0;
-}
-
-int32_t sceAtracGetStreamDataInfo(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x5D268707);
-    return 0;
-}
-
-int32_t sceAtracIsSecondBufferNeeded(void)
-{
-    PSP_STUB("sceAtrac3plus", 0xECA32A99);
-    return 0;
-}
-
-int32_t sceAtracReinit(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x132F1ECA);
-    return 0;
-}
-
-int32_t sceAtracReleaseAtracID(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x61EB33F5);
-    return 0;
-}
-
-int32_t sceAtracSetDataAndGetID(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x7A20E7AF);
-    return 0;
-}
-
-int32_t sceAtracSetLoopNum(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x868120B5);
-    return 0;
-}
+/* sceAtrac3plus: atrac.c */
 
 /* ---- sceMp3 (13 imports) ---- */
 

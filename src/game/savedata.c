@@ -166,6 +166,8 @@ void savedata_card_name(int card, char *out, size_t n)
 #define LIMIT_BASE 0x479B0
 #define MAP_BASE 0x47F30
 #define MONEY 0x48394
+#define BGM_FLAGS 0x44E98 /* + list * 0x18C */
+#define BGM_MODE 0x4533C  /* + list * 4 */
 #define LIMIT_WORDS 0x83
 
 static const struct { uint16_t off, count; } k_stock[STOCK_GROUPS] = {
@@ -175,6 +177,18 @@ static const struct { uint16_t off, count; } k_stock[STOCK_GROUPS] = {
 static uint8_t *db_bytes(void)
 {
     return (uint8_t *)&g_save.db;
+}
+
+bool savedata_bgm_enabled(int list, int row)
+{
+    if (list < 0 || list > 2 || row < 0 || row > 0x62)
+        return false;
+    return get_word(db_bytes() + BGM_FLAGS + 0x18C * list + 4 * row) != 0;
+}
+
+int savedata_bgm_mode(int list)
+{
+    return list >= 0 && list <= 2 ? (int)get_word(db_bytes() + BGM_MODE + 4 * list) : 0;
 }
 
 static uint8_t *stock_word(int group, int id)
