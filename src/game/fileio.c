@@ -573,6 +573,18 @@ static int32_t read_from_set(const char *name, void *buf, uint32_t cap)
     return (int32_t)n;
 }
 
+/* Loose files in the pack (chexa.idx entries outside any file set), for ReadFile's
+ * fall-back. Opened on first use. */
+static Pack g_loose;
+static int g_loose_state; /* 0 not tried, 1 open, -1 failed */
+
+static const PackEntry *loose_entry(const char *norm)
+{
+    if (g_loose_state == 0)
+        g_loose_state = pack_open(&g_loose, "disc0:/PSP_GAME/USRDIR") < 0 ? -1 : 1;
+    return g_loose_state > 0 ? pack_find(&g_loose, norm) : NULL;
+}
+
 int32_t fileio_file_size(const char *name)
 {
     char norm[1024];
@@ -580,7 +592,10 @@ int32_t fileio_file_size(const char *name)
         return -1;
     const FileSetSlot *s;
     const FstsMember *m = find_member(norm, &s);
-    return m ? (int32_t)m->size : -1;
+    if (m)
+        return (int32_t)m->size;
+    const PackEntry *e = loose_entry(norm);
+    return e && !e->is_dir ? (int32_t)e->size : -1;
 }
 
 int32_t fileio_read_file(const char *name, void *buf, uint32_t cap)
@@ -591,6 +606,13 @@ int32_t fileio_read_file(const char *name, void *buf, uint32_t cap)
     int32_t n = read_from_set(norm, buf, cap);
     if (n > 0)
         return n;
-    SDL_Log("[fileio] ReadFile(\"%s\"): not in an open file set (loose pack files not written yet)", norm);
+    /* Then the loose pack entries (the PackFile branch of FUN_08b1385c). */
+    const PackEntry *e = loose_entry(norm);
+    if (e && !e->is_dir) {
+        long r = pack_read(&g_loose, e, buf, cap);
+        if (r > 0)
+            return (int32_t)r;
+    }
+    SDL_Log("[fileio] ReadFile(\"%s\"): not found in the file sets or the pack", norm);
     return -1;
 }

@@ -20,6 +20,7 @@
 #include "gamedata.h"
 #include "battle.h"
 #include "entrance.h"
+#include "modelview.h"
 #include "pad.h"
 
 #include <stdint.h>
@@ -359,8 +360,13 @@ static void main_loop(void)
     /* The root screen (FUN_088f1d98) sets a black clear colour and starts the entrance
      * as its state-3 child. When that ends it would open the next screens. */
     render_set_clear_color(gfx, 0);
-    entrance_start();
     int entrance_running = 1;
+    if (g_modelview_path || g_modelview_oke >= 0 || g_modelview_map >= 0) {
+        modelview_start();
+        entrance_running = 3;
+    } else {
+        entrance_start();
+    }
     g_startup_stop_reason = "main loop: frames run until sceKernelExitGame";
     SDL_Log("[startup] CApplication::Start: display on; entering the main loop");
     for (uint32_t frame = 0;; frame++) {
@@ -372,7 +378,9 @@ static void main_loop(void)
         int step = render_interval(gfx);
         pad_update(step);
         float dt = (float)step * (1.0f / 60.0f);
-        if (entrance_running == 1 && !entrance_update(dt)) {
+        if (entrance_running == 3)
+            modelview_update(dt);
+        else if (entrance_running == 1 && !entrance_update(dt)) {
             if (entrance_selection() == 1) {
                 battle_mode_start();
                 entrance_running = 2;

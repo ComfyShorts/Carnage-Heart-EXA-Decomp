@@ -19,6 +19,9 @@ typedef struct Picture Picture;
 Picture *picture_load(const char *name);
 void picture_release(Picture *p);
 
+/* A picture from a GIM image in memory (copied), e.g. one embedded in a model. */
+Picture *picture_from_memory(const char *name, const void *data, int32_t size);
+
 int picture_width(const Picture *p);  /* FUN_08b57b9c(level 0) */
 int picture_height(const Picture *p); /* FUN_08b57bec(level 0) */
 int picture_frames(const Picture *p);
