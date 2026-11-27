@@ -14,3 +14,4 @@ config/undefined_syms_auto.txt
 config/reloc_addrs_auto.txt
 config/reloc_addrs_auto_ignore.txt
 .deps/
+saves/

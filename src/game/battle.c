@@ -2,6 +2,7 @@
 #include "battle.h"
 #include "battle_sim.h"
 #include "battle_menu.h"
+#include "savedata.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -122,12 +123,16 @@ static bool start_battle(void)
 {
     const BattleSetup *set = battle_menu_setup();
     memset(&g_b, 0, sizeof g_b);
-    if (!open_pack() || !load_record(set->oke_path[0], &g_b.oke[0].rec) ||
-        !load_record(set->oke_path[1], &g_b.oke[1].rec))
-        return false;
+    for (int side = 0; side < 2; side++) {
+        const OkeDataBase *card = savedata_card(set->oke_card[side]);
+        if (card) /* a saved OKE card */
+            g_b.oke[side].rec = *card;
+        else if (!open_pack() || !load_record(set->oke_path[side], &g_b.oke[side].rec))
+            return false;
+    }
     g_b.time_limit = set->time_limit;
     uint32_t seed = 0x12345678u;
-    for (const char *c = set->oke_path[1]; *c; c++)
+    for (const char *c = set->oke_path[1][0] ? set->oke_path[1] : set->oke_label[1]; *c; c++)
         seed = seed * 31u + (uint8_t)*c;
     battle_sim_start(&g_b, seed ^ (uint32_t)set->map);
     scene_load();

@@ -20,7 +20,8 @@
 
 /* What the screens hand to the battle. */
 typedef struct BattleSetup {
-    char oke_path[2][64]; /* [0] the player's side, [1] the enemy's */
+    int oke_card[2];      /* [0] the player's side, [1] the enemy's: a saved card (0-31), */
+    char oke_path[2][64]; /* or -1 and a record in the pack */
     char oke_label[2][48];
     int stage;            /* CPresetStage index (0xAF entries) */
     int map;              /* land/mapNN */

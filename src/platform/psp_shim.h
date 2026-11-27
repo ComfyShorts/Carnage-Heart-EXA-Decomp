@@ -44,6 +44,11 @@ bool psp_io_mount(const char *device, const char *host_dir, bool writable);
 /* Mount disc0: from either the disc root or its PSP_GAME/USRDIR folder. */
 bool psp_io_mount_disc(const char *dir);
 
+/* Save data (savedata.c): the host folder that stands for the memory stick's
+ * PSP/SAVEDATA, one directory per save. Default "saves". */
+void psp_savedata_set_root(const char *dir);
+const char *psp_savedata_root(void);
+
 /* Kernel (kernel.c). */
 int psp_kernel_threads_alive(void);  /* PSP threads currently running */
 void psp_kernel_request_exit(void);  /* the user quit: notify the game's exit callback */

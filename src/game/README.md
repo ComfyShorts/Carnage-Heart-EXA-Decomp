@@ -15,6 +15,8 @@ So far:
   the `CPgChipTarget` robot interface.
 - `okedb.h`: the 0x1EC0-byte robot design record (`COkeDataBase`) as a C struct.
 - `packfile.c`/`lz.c`: the game's file pack index and ARZ decoder, read through `sceIo`.
+- `savedata.c`: `CSaveMngr`'s start-up check and the Battle Data list, load and save,
+  through `sceUtilitySavedata*`, and the `CCarnageHeart` blocks they store.
 
 CMake picks up every `*.c` file here automatically.
 

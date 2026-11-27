@@ -56,6 +56,10 @@ add_executable(chexa-io-test tests/io_test.c)
 chexa_target_setup(chexa-io-test)
 target_link_libraries(chexa-io-test PRIVATE chexa_core)
 
+add_executable(chexa-savedata-test tests/savedata_test.c)
+chexa_target_setup(chexa-savedata-test)
+target_link_libraries(chexa-savedata-test PRIVATE chexa_core)
+
 add_executable(chexa-gu-test tests/gu_test.c)
 chexa_target_setup(chexa-gu-test)
 target_link_libraries(chexa-gu-test PRIVATE chexa_core)
@@ -65,6 +69,7 @@ target_link_libraries(chexa-gu-test PRIVATE chexa_core)
 enable_testing()
 add_test(NAME io_disc COMMAND chexa-io-test)
 add_test(NAME gu_render COMMAND chexa-gu-test)
+add_test(NAME savedata_roundtrip COMMAND chexa-savedata-test ${CMAKE_CURRENT_BINARY_DIR}/test-saves/unit)
 add_test(NAME pgchip_one_record COMMAND chexa-pgchip-test --ticks 20 -q)
 add_test(NAME pgchip_all_records COMMAND chexa-pgchip-test --all --ticks 600)
 add_test(NAME battle_presets COMMAND chexa-battle-test --all
@@ -74,7 +79,8 @@ set(CHEXA_TEST_DISC "$ENV{CHEXA_DISC}")
 if(NOT CHEXA_TEST_DISC)
   set(CHEXA_TEST_DISC /mnt/c/psp/chexa)
 endif()
-add_test(NAME startup_path COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup --frames 30)
+add_test(NAME startup_path COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup --frames 30
+         --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/startup)
 set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                      PASS_REGULAR_EXPRESSION "the game called sceKernelExitGame")
 set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets startup_path PROPERTIES SKIP_RETURN_CODE 77)
@@ -83,7 +89,7 @@ set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not
 # RUNPATH) also covers their own dependencies, such as libxcb.
 if(PCPORT_I386_LIBDIR)
-  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test chexa-battle-test)
+  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test chexa-battle-test chexa-savedata-test)
     set_target_properties(${exe} PROPERTIES BUILD_RPATH "${PCPORT_I386_LIBDIR}")
     target_link_options(${exe} PRIVATE "-Wl,--disable-new-dtags")
   endforeach()

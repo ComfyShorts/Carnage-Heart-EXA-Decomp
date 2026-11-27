@@ -20,6 +20,7 @@
 #include "psp_imports.h"
 #include "psp_shim.h"
 #include "render.h"
+#include "savedata.h"
 #include "ui.h"
 
 #define MENU_TWEEN_TIME UI_TWEEN_TIME
@@ -262,6 +263,7 @@ enum {
     PHASE_LOGO = 3,
     PHASE_MOVIE = 4,
     PHASE_TOP_MENU = 5, /* Start Game / Continue / Network Play */
+    PHASE_LOAD = 6,     /* Continue: the save list (CSystemMngr type 3); stand-in, see below */
 };
 
 #define IDLE_VBLANKS 0xF3C /* about 65 seconds without input: phase 10 (attract) */
@@ -281,6 +283,12 @@ typedef struct EntranceMngr {
     Wnd black;          /* +0x68 */
     UiAsk ask;          /* +0x74: phase 9's question */
     bool idle_warned, stop_warned;
+    /* Phase 6, the port's stand-in for CSystemMngr's load screens. */
+    Wnd load_wnd;       /* an empty stack entry for the phase */
+    UiMenu load_menu;
+    int load_state;
+    const char *load_msg;
+    bool loaded;        /* the entrance ended on a loaded Battle Data save */
 } EntranceMngr;
 
 static EntranceMngr g_mngr;
@@ -310,6 +318,7 @@ static void mngr_init(EntranceMngr *m)
     menu_create(&m->mode_menu, PART_TI_MENB0, PART_TI_MENL0, 0xD, 0xE, 0, 0xA6);
     m->black = (Wnd){.kind = WND_COLOR, .x = 0, .y = 0, .w = 0x1E0, .h = 0x110, .visible = true,
                      .opacity = 1.0f};
+    m->load_wnd = (Wnd){.kind = WND_COLOR, .visible = false};
     m->initialised = true;
     mngr_open(m, PHASE_NONE, 0);
 }
@@ -351,6 +360,12 @@ static void mngr_open(EntranceMngr *m, int phase, int arg)
         menu_open(&m->mode_menu, 0);
         m->closing_mode = false;
         break;
+    case PHASE_LOAD: /* FUN_088d438c(6) + CSystemMngr::Initialize(3) */
+        stack_push(&m->stack, &m->load_wnd, PHASE_LOAD, arg);
+        m->load_state = 0;
+        m->load_msg = NULL;
+        savedata_list_start();
+        break;
     default:
         SDL_Log("[entrance] CEntranceMngr: phase %d isn't ported; staying on the current screen", phase);
         break;
@@ -366,9 +381,12 @@ static void phase_top_menu(EntranceMngr *m)
             SDL_Log("[entrance] Start Game chosen: opening the mode menu");
             menu_close(&m->top_menu, 1);
             mngr_open(m, PHASE_MODE_MENU, 0);
+        } else if (m->top_menu.cursor == 1) {
+            SDL_Log("[entrance] Continue chosen: the Battle Data list");
+            mngr_open(m, PHASE_LOAD, 0);
         } else if (!m->stop_warned) {
-            /* 1 Continue, 2 Network Play: pop and open phase 6 (the save list / net). */
-            SDL_Log("[entrance] menu item %d chosen: phase 6 (load/network) isn't ported", m->top_menu.cursor);
+            /* 2 Network Play: phase 6 with the network screens. */
+            SDL_Log("[entrance] Network Play chosen: isn't ported");
             m->stop_warned = true;
         }
         return;
@@ -378,6 +396,81 @@ static void phase_top_menu(EntranceMngr *m)
     else if (sceDisplayGetVcount() - m->idle_vcount > IDLE_VBLANKS && !m->idle_warned) {
         SDL_Log("[entrance] idle on the title: phase 10 (attract) isn't ported");
         m->idle_warned = true;
+    }
+}
+
+/* Phase 6, Continue. The game opens CSystemMngr type 3: a menu of the kinds of save
+ * (mode 4), then CSaveMngr's own list of that kind's files (exec type 1, drawn by
+ * UpdateSelectFileList FUN_08a676f0). The port lists the Battle Data files (Story Mode
+ * isn't ported) in a plain menu, loads the chosen one (state 0x2B) and opens Battle
+ * Mode on it. The texts here are the port's. */
+#define LOAD_X 150
+#define LOAD_Y 64
+
+static void load_build(EntranceMngr *m)
+{
+    const SaveListEntry *list;
+    int n = savedata_list(&list);
+    ui_menu_init(&m->load_menu, LOAD_X + 10, LOAD_Y + 24, 24 - 5, 12,
+                 text_style(0, 6, 12, 12, 0, 0, 0xFF303030, 0));
+    static char names[UI_MENU_MAX][SAVE_FILE_MAX];
+    for (int i = 0; i < n && i < UI_MENU_MAX; i++) {
+        snprintf(names[i], sizeof names[i], "%.*s", (int)strlen(list[i].file) - 4, list[i].file);
+        UiMenuItem *it = ui_menu_add(&m->load_menu, names[i], i, 0, PART_BF_MENB4, PART_BF_MENL4);
+        it->disabled = list[i].broken;
+    }
+    if (n > 0) {
+        ui_menu_open(&m->load_menu);
+        m->load_msg = "Choose the Battle Data to load.";
+    } else {
+        m->load_msg = savedata_result() ? "The save data couldn't be read." : "There is no Battle Data.";
+    }
+}
+
+static void phase_load(EntranceMngr *m, float dt)
+{
+    switch (m->load_state) {
+    case 0: /* the file list */
+        if (!savedata_list_update()) {
+            load_build(m);
+            m->load_state = 1;
+        }
+        break;
+    case 1: /* choosing */
+        ui_menu_update(&m->load_menu, dt);
+        if (m->load_menu.count)
+            ui_menu_input(&m->load_menu);
+        if (pad_pressed(PSP_CTRL_CROSS)) {
+            ui_menu_close(&m->load_menu);
+            mngr_pop_phase(m);
+            m->top_menu.active = true;
+        } else if (pad_pressed(PSP_CTRL_CIRCLE) && m->load_menu.count) {
+            const SaveListEntry *list;
+            savedata_list(&list);
+            const SaveListEntry *e = &list[m->load_menu.cursor];
+            if (e->broken) {
+                m->load_msg = "This data is damaged.";
+            } else {
+                savedata_load_start(e->file);
+                m->load_msg = "Loading...";
+                m->load_state = 2;
+            }
+        }
+        break;
+    case 2: /* loading */
+        ui_menu_update(&m->load_menu, dt);
+        if (savedata_io_update())
+            break;
+        if (savedata_result() == 0) {
+            /* The load leaves game mode 2: straight to Battle Mode. */
+            m->selection = 1;
+            m->loaded = true;
+            m->done = true;
+        } else {
+            m->load_msg = "The save data couldn't be read.";
+            m->load_state = 1;
+        }
+        break;
     }
 }
 
@@ -413,9 +506,15 @@ static void phase_mode_menu(EntranceMngr *m)
     }
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         m->selection = m->mode_menu.cursor;
+        if (m->selection == 1 && savedata_story_completed()) {
+            /* FUN_0889c400: the system data's +0x74, Story Mode completed. Then
+             * there's no question: straight to phase 7. */
+            SDL_Log("[entrance] Battle Mode: Story Mode completed, no question; player-name entry (OSK) skipped");
+            m->done = true;
+            return;
+        }
         if (m->selection == 1) {
-            /* FUN_0889c400 (+0x74) says whether the tutorials were seen; with no save
-             * data they weren't, so the game asks first (phase 9, FUN_088d4c84). */
+            /* Not completed: the game asks first (phase 9, FUN_088d4c84). */
             ui_ask_open(&m->ask, design_string(0x11, 1), design_string(0x5, 1), k_no(), 0);
             m->mode_menu.active = false;
             return;
@@ -462,6 +561,9 @@ static void mngr_update(EntranceMngr *m, float dt)
     case PHASE_MODE_MENU:
         phase_mode_menu(m);
         break;
+    case PHASE_LOAD:
+        phase_load(m, dt);
+        break;
     default:
         break;
     }
@@ -503,6 +605,16 @@ static void mngr_draw(void *ctx)
     for (int i = 0; i < m->stack.count; i++)
         wnd_draw(m->stack.e[i].wnd);
     ui_ask_draw(&m->ask);
+    if (phase == PHASE_LOAD) {
+        int rows = m->load_menu.count > 0 ? m->load_menu.count : 1;
+        ui_frame(ui_part(PART_BF_SWND4), LOAD_X, LOAD_Y, 180, 34 + 19 * rows, 8, 1.0f);
+        const char *caption = gamedata_string(0x00437D64u); /* "Battle Data" (FUN_08ab82f0) */
+        if (caption)
+            ui_text(caption, &m->load_menu.style, LOAD_X + 12, LOAD_Y + 7, 1.0f);
+        ui_menu_draw(&m->load_menu);
+        if (m->load_msg)
+            ui_help_draw(m->load_msg);
+    }
 }
 
 /* ---- the entrance screen (FUN_088d2d30) ---- */
@@ -511,6 +623,7 @@ static struct {
     int state;
     int fileset;
     bool fileset_open;
+    bool checked;
 } g_entrance;
 
 void entrance_start(void)
@@ -523,6 +636,11 @@ void entrance_start(void)
 int entrance_selection(void)
 {
     return g_mngr.selection;
+}
+
+bool entrance_loaded(void)
+{
+    return g_mngr.loaded;
 }
 
 int entrance_update(float dt)
@@ -539,12 +657,17 @@ int entrance_update(float dt)
         }
         if (!font_init())
             SDL_Log("[entrance] fonts unavailable: menu text won't be drawn");
-        /* FUN_088d30d8: CSystemMngr in mode 0xD (CSaveMngr's start-up check), then
-         * state 1 runs it until it's done. Not ported. */
-        SDL_Log("[entrance] CSystemMngr (save-data check) skipped");
+        /* FUN_088d30d8: CSystemMngr in mode 0xD, CSaveMngr's start-up check (type 4,
+         * exec 3), then state 1 runs it until it's done. Only the first time: back
+         * from Battle Mode the system data is already in. */
+        if (!g_entrance.checked)
+            savedata_check_start();
         g_entrance.state = 1;
         break;
     case 1:
+        if (savedata_check_update())
+            break;
+        g_entrance.checked = true;
         /* FUN_088d35a4: CEntranceMngr joins the layer list and initialises. */
         mngr_init(&g_mngr);
         g_entrance.state = 2;

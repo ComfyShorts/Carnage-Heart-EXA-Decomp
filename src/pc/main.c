@@ -8,6 +8,10 @@
  *   --startup         run the game's start-up path (needs --disc); quits when it stops
  *   --trace           log every call of an implemented import, not just the first
  *   --ms DIR          folder to serve as the memory stick (ms0:), writable. Optional
+ *   --saves DIR       folder for save data, laid out as the memory stick's PSP/SAVEDATA
+ *                     (one directory per save). Default saves/
+ *   --make-test-save [NAME]  write a Battle Data save NAME.CHE (default TESTDATA) holding
+ *                     a few of the shipped preset OKEs, then go on (needs --disc)
  *   --frames N        quit after N frames (for scripted runs). With --startup, N frames
  *                     shown by the game: then the HOME menu's exit is requested
  *   --gu-trace N      log the game's sceGu calls during its first N frames
@@ -40,6 +44,8 @@
 #include "ge.h"
 #include "startup.h"
 #include "modelview.h"
+#include "gamedata.h"
+#include "savedata.h"
 
 #ifdef PCPORT_M32
 /* The decompiled structs assume the PSP's ILP32 layout. */
@@ -107,11 +113,16 @@ int main(int argc, char **argv)
     int startup = 0;
     const char *disc = getenv("CHEXA_DISC");
     const char *ms = NULL;
+    const char *test_save = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--disc") && i + 1 < argc)
             disc = argv[++i];
         else if (!strcmp(argv[i], "--ms") && i + 1 < argc)
             ms = argv[++i];
+        else if (!strcmp(argv[i], "--saves") && i + 1 < argc)
+            psp_savedata_set_root(argv[++i]);
+        else if (!strcmp(argv[i], "--make-test-save"))
+            test_save = i + 1 < argc && strncmp(argv[i + 1], "--", 2) ? argv[++i] : "TESTDATA";
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             frames = strtol(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--shot") && i + 2 < argc) {
@@ -157,7 +168,7 @@ int main(int argc, char **argv)
                                                                                        : "orig/first_frame.png");
         else {
             fprintf(stderr,
-                    "usage: %s [--disc DIR] [--ms DIR] [--startup] [--trace] [--frames N] [--scale N] "
+                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
                     "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
                     argv[0]);
@@ -181,6 +192,19 @@ int main(int argc, char **argv)
     }
     if (ms && !psp_io_mount("ms0", ms, true))
         return 1;
+    if (test_save) {
+        /* The name the game's keyboard would take (8 characters) plus ".CHE". */
+        char file[SAVE_FILE_MAX];
+        snprintf(file, sizeof file, "%.8s.CHE", test_save);
+        if (!disc) {
+            fprintf(stderr, "--make-test-save needs the game files (--disc DIR or CHEXA_DISC)\n");
+            return 2;
+        }
+        if (!gamedata_available())
+            gamedata_open(g_game_elf_path);
+        if (!savedata_make_test_save(file))
+            return 1;
+    }
     if (startup && !disc) {
         fprintf(stderr, "--startup needs the game files (--disc DIR or CHEXA_DISC)\n");
         return 2;

@@ -148,29 +148,7 @@ int32_t sceUtilityOskUpdate(void)
     return 0;
 }
 
-int32_t sceUtilitySavedataGetStatus(void)
-{
-    PSP_STUB("sceUtility", 0x8874DBE0);
-    return 0;
-}
-
-int32_t sceUtilitySavedataInitStart(void)
-{
-    PSP_STUB("sceUtility", 0x50C4CD57);
-    return 0;
-}
-
-int32_t sceUtilitySavedataShutdownStart(void)
-{
-    PSP_STUB("sceUtility", 0x9790B33C);
-    return 0;
-}
-
-int32_t sceUtilitySavedataUpdate(void)
-{
-    PSP_STUB("sceUtility", 0xD4B95FFB);
-    return 0;
-}
+/* sceUtilitySavedata*: savedata.c */
 
 int32_t sceUtilityScreenshotContStart(void)
 {

@@ -4,8 +4,8 @@
  * they're written here:
  *
  *   entrance screen  FUN_088d2d30 (0x44 bytes), update FUN_088d36e4: opens the
- *                    "entrance" file set, runs CSystemMngr (a save-data check, not
- *                    ported) and then CEntranceMngr; drawn as a CRender node.
+ *                    "entrance" file set, runs CSystemMngr (the save-data check,
+ *                    savedata.c) and then CEntranceMngr; drawn as a CRender node.
  *   CEntranceMngr    ctor FUN_088d6770, init FUN_088d6b40, update FUN_088d6360,
  *                    draw FUN_088d63b4: the title's phases and its window stack.
  *   CEntranceWnd     ctor FUN_088d6f48, create FUN_088d7104, update FUN_088d7778,
@@ -17,6 +17,8 @@
 #ifndef GAME_ENTRANCE_H
 #define GAME_ENTRANCE_H
 
+#include <stdbool.h>
+
 /* Constructs the screen (as the root screen does) and registers it for drawing. */
 void entrance_start(void);
 
@@ -26,5 +28,9 @@ int entrance_update(float dt);
 /* What the player chose in the mode menu once the entrance has ended (0 Story Mode,
  * 1 Battle Mode). */
 int entrance_selection(void);
+
+/* True when the entrance ended on a Battle Data save loaded through Continue (the cards
+ * are in g_save); false for a new game. */
+bool entrance_loaded(void);
 
 #endif
