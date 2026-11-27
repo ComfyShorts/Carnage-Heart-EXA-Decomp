@@ -284,7 +284,11 @@ int32_t sceAudioGetChannelRestLength(int ch)
     AudioChannel *c = reserved(ch);
     if (!c)
         return (int32_t)AUDIO_ERR_NOT_RESERVED;
-    return c->stream ? SDL_GetAudioStreamQueued(c->stream) / 4 : 0;
+    if (c->stream)
+        return SDL_GetAudioStreamQueued(c->stream) / 4;
+    /* No device: what would still be playing, by the same clock the outputs keep. */
+    uint64_t now = SDL_GetTicksNS();
+    return c->next_ns > now ? (int32_t)((c->next_ns - now) * 44100 / 1000000000ull) : 0;
 }
 
 /* The SRC channel: stereo at 44100 Hz here (the game asks for that rate). */

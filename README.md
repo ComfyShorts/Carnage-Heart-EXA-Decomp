@@ -104,6 +104,11 @@ dynamically: `tools/setup_pc_deps.sh --libavcodec` fetches the 32-bit one into `
 (`--libavcodec-only` for just that step). Without it the port builds with effects only.
 See "Sound" and "Music" in `docs/screens.md` and "Battle sounds" in `docs/battle.md`.
 
+Before the title the opening movie (`movie/che_op.pmf`, H.264 video and ATRAC3plus
+sound) plays through the `sceMpeg` imports on the same libavcodec; any button stops it,
+as on the PSP, and `--skip-movie` leaves it out. Without libavcodec it is skipped. See
+"Opening movie" in `docs/screens.md`.
+
 Every import logs its first call, implemented or not, with arguments and result for the
 implemented ones (`--trace` or `PSP_SHIM_LOG=all` logs every call). At exit a summary
 lists every import called, in first-call order, marking the ones that are still stubs.

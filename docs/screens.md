@@ -9,7 +9,7 @@ render list, using the game's own images from the "entrance" file set.
 | Screen | State |
 |---|---|
 | Company logo (`title/logo_a.gim`, ARTDINK) | Drawn for one frame at (112, 72), as in the game. An opaque black window is drawn over it the same frame, so the frame shows black (see below) |
-| Opening movie (`movie/che_op.pmf`) | Skipped and logged. There's no MPEG player yet. The publisher and developer logos you see on a PSP are most likely in this movie |
+| Opening movie (`movie/che_op.pmf`) | Plays with its sound, 39.6 s: black, the Natsume logo (from about 2.5 s), the CG intro, the title card. Any button stops it, as in the game (see "Opening movie" below). `--skip-movie` leaves it out |
 | Title: `ti_back` in 4×2 tiles, `ti_title` at (70, 12) | Matches the original images |
 | Top menu: Start Game / Continue / Network Play | Buttons, text, the fade and slide-in from the left, cursor highlight (additive), up/down |
 | Mode menu: Story Mode / Battle Mode | Circle on Start Game slides the top menu out to the right and this one in from the left. Cross goes back |
@@ -28,7 +28,57 @@ Its draw (`FUN_088d63b4`) draws `logo_a` first, then the window stack, and phase
 pushed the full-screen colour window (`+0x68`, 480×272) with colour (0, 0, 0, 255).
 `FUN_0888f264` fills the rectangle with that colour × opacity (1.0), which covers the
 logo. The port follows that order. If the colour window's opacity turns out to be
-animated somewhere not yet read, this would change.
+animated somewhere not yet read, this would change. Opening phase 3 (`FUN_088d4a10`)
+also sets up a 0.2 s fade from 255 to 0 in the manager (`+0x7C` .. `+0x91`, the time
+from `DAT_08be7834`), but nothing in the entrance code reads those fields and the phase
+is gone the next update, so the port leaves it out. The logos a PSP shows come from the
+movie: the Natsume logo is its first picture after the black lead-in.
+
+### Opening movie
+
+Phase 4 (`FUN_088d5c20`) calls the movie player, `FUN_08b1d0ec("movie/che_op.pmf",
+1, 0, 440, 253, 0)`, which holds the game thread until the movie ends, then opens
+phase 0 (the title). The ending calls the same player with `movie/ending.pmf` and
+skip mode 0 (`FUN_08968758`).
+
+The file is PSMF version 0015: a 2048-byte header (stream offset `+8`, 0x800; stream
+size `+0xC`, 0x80D000; first and last time stamps 90000 and 3645552 at `+0x56` and
+`+0x5C`) and an MPEG-2 program
+stream in 2048-byte packs:
+
+| Stream | What | A decoder needs |
+|---|---|---|
+| Video, PES `0xE0` | H.264 Main profile, level 2.1, 480×272, 29.97 pictures a second (time stamps 3003 apart), one reference frame, no B-frame reordering (picture order type 2); an access unit delimiter before each picture, the parameter sets in the stream | An H.264 decoder taking Annex B access units, YCbCr 4:2:0 to RGBA |
+| Audio, PES `0xBD` | ATRAC3plus, 44100 Hz stereo, 744-byte frames of 2048 samples (about 128 kbit/s). The payload starts with 4 bytes (channel, 0, offset of the first frame starting in the packet); each frame has an 8-byte header (`0F D0`, then rate index << 13, channels << 10 and (size − 8) / 8, then four zeros) | An ATRAC3plus decoder |
+
+The system libavcodec the music already uses (FFmpeg, LGPL-2.1-or-later, linked
+dynamically) has both decoders (`h264`, `atrac3plus`), so the movie needs no new
+dependency. The demuxing, the time stamps and the colour conversion are the port's own
+(`src/platform/video.c`).
+
+The game only uses `sceMpeg` (25 imports, `src/platform/video.c`); it reads the PSMF
+header itself through `sceMpegQueryStreamOffset` / `sceMpegQueryStreamSize`, and
+imports nothing from `scePsmf`. The player (`src/game/movie.c`):
+
+| Game | What | Port |
+|---|---|---|
+| `FUN_08b1ca28`, `FUN_08b1cb08`, `FUN_08b1b2ec` | Open the file, read the header, seek to the stream | The same, with `sceIoOpen` |
+| `FUN_08b1d0ec` | `sceMpegInit`, a ring buffer of 0x3C0 packets filled by `FUN_08b1b0d8` (whole packets from the file), `sceMpegCreate` with frame width 512, the AVC stream and the ATRAC stream on channel 0 | The same |
+| `FUN_08b1e274` | Four picture buffers of 0x88000 bytes (512×272 RGBA); `sceDisplaySetMode(0, 480, 272)`; two frame buffers at the start of VRAM | The same |
+| `FUN_08b1df28`, soundThread `FUN_08b1bba8` | An audio queue; the thread writes 2048-sample buffers with `sceAudioOutputBlocking` on channel 2 | An SDL thread on its own sceAudio channel, eight buffers |
+| readThread `FUN_08b1bef0` | `sceMpegRingbufferPut` | On the game thread, once per vertical blank |
+| displayThread `FUN_08b1c5c4`, `FUN_08b1c1e0`, `FUN_08b1b7fc` | One picture per vertical blank into the frame buffer not shown (`sceDmacMemcpy`, `sceDisplaySetFrameBuf`); more than two pictures off the audio it drops or repeats one | On the game thread: the next picture when the audio clock (what the channel is playing) reaches its time stamp, dropping to the newest only when more than two behind |
+| `FUN_08b1b158` | Playback starts when both queues are full | The same |
+| `FUN_08b1dafc`, `FUN_08b1c8a0`, `FUN_08b1c7e0`, `FUN_08b1c984` | The decode loop: `sceMpegGetAvcAu` / `sceMpegAvcDecode`, `sceMpegGetAtracAu` / `sceMpegAtracDecode`; at the end `sceMpegAvcDecodeStop` until no picture is left | The same |
+| `FUN_08b1dafc` | Skip: in mode 1 (the opening) any of start, select, the d-pad, L, R, triangle, circle, cross, square; in mode 0 (the ending) start only. `sceMpegAvcDecodeFlush`, state 10, then SE 0xE at volume 1 | The same (`pad_pressed`) |
+| `FUN_08b1bffc` | When `+0x28` holds a picture, draws it over the video at (`+0x34`, `+0x38`) pulsing once a second | Not ported: both movies pass none (the opening passes (440, 253) with no picture) |
+| `FUN_088d4ae0` | Opening phase 4 turns the display off and resets CRender | The display shows nothing until the first picture; CRender takes the screen back at its next swap |
+
+The log shows `[movie] movie/che_op.pmf ended after 1184 pictures (0 dropped), 39.62 s`,
+or `skipped after N pictures` when a button stopped it. `chexa-movie-test` decodes a
+movie without the game (CTest `movie_decode`; `--png N FILE` and `--wav FILE` write a
+picture or the sound, which are game data, so keep them in `orig/`), and `movie_skip`
+checks that circle stops the opening.
 
 ## Classes
 
@@ -464,18 +514,28 @@ size is rounded up to a power of two.
 frames from frame N:
 
 ```sh
-build/pc-m32/chexa-pc --disc DIR --startup --frames 150 --shot 2 orig/logo.png \
+build/pc-m32/chexa-pc --disc DIR --startup --skip-movie --frames 150 --shot 2 orig/logo.png \
     --shot 60 orig/title.png --press 70 circle --shot 100 orig/menu2.png \
     --press 110 down --shot 120 orig/menu2_battle.png
 ```
 
-Frame 2 is the logo frame (black), frame 4 onwards is the title. The keyboard plays
+Frame 2 is the logo frame (black), frame 4 onwards is the title. Without `--skip-movie`
+each movie picture is a displayed frame too: the 1184 pictures follow the first frame
+or two (frame 80 is the Natsume logo, 1180 the title card) and the title comes after
+them, unless a button stops it:
+
+```sh
+build/pc-m32/chexa-pc --disc DIR --startup --frames 1260 --shot 80 orig/movie_logo.png \
+    --shot 600 orig/movie_600.png --shot 1250 orig/after_movie.png
+build/pc-m32/chexa-pc --disc DIR --startup --press 40 circle --frames 80 --shot 60 orig/skipped.png
+``` The keyboard plays
 the pad: arrows, Z/Enter = circle, X/Backspace = cross, A = square, S = triangle,
 Q/W = L/R, Space = start, Right Shift = select.
 
 ## Next
 
-- The opening movie: an MPEG/PMF player (sceMpeg, sceVideocodec) to play `che_op.pmf`.
+- The ending movie (`movie/ending.pmf`, the same player with skip mode 0) once Story
+  Mode's end is ported; the player's overlay picture (`FUN_08b1bffc`).
 - `CSystemMngr`'s own menus (the kinds of save, settings) and `CSaveMngr`'s file list
   and message dialogs; Story Data; the keyboard for save names.
 - The phases after the menus: 0xC (new story game), 7 (the player-name keyboard),
