@@ -14,7 +14,9 @@
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
+#include "gmo.h"
 #include "heap.h"
+#include "okemodel.h"
 #include "packfile.h"
 #include "pad.h"
 #include "pgchip.h"
@@ -22,6 +24,7 @@
 #include "psp_imports.h"
 #include "psp_shim.h"
 #include "render.h"
+#include "terrain.h"
 
 #define DEG (3.14159265f / 180.0f)
 
@@ -94,6 +97,41 @@ static bool load_record(const char *path, OkeDataBase *out)
 
 static Battle g_b;
 
+/* The 3D scene: the field and the two bodies (see docs/battle.md). */
+#define BATTLE_MAP 1        /* stand-in: the arena's map choice isn't read yet */
+#define OKE_HW_BODY 0x240   /* s32 in the hardware block: body type (COkeFile id) */
+#define OKE_HW_PAINT 0x244  /* s32: paint scheme 0-3 (assumed from the presets) */
+static struct {
+    Terrain *land;
+    Gmo *sky;
+    OkeModel *body[2];
+    float cam_eye[3], cam_at[3];
+    bool cam_valid;
+} g_scene;
+
+static int hw_word(const OkeDataBase *rec, int off)
+{
+    int32_t v;
+    memcpy(&v, rec->hardware + off, sizeof v);
+    return v;
+}
+
+static void scene_load(void)
+{
+    if (!g_scene.land) {
+        g_scene.land = terrain_load(BATTLE_MAP);
+        char path[48];
+        snprintf(path, sizeof path, "land/map%02d/map%02d_sky.gmo", BATTLE_MAP, BATTLE_MAP);
+        g_scene.sky = gmo_load(path);
+    }
+    for (int i = 0; i < 2; i++) {
+        okemodel_free(g_scene.body[i]);
+        const OkeDataBase *rec = &g_b.oke[i].rec;
+        g_scene.body[i] = okemodel_load(hw_word(rec, OKE_HW_BODY), hw_word(rec, OKE_HW_PAINT));
+    }
+    g_scene.cam_valid = false;
+}
+
 /* ---- screens ---- */
 
 typedef enum { SCR_PICK_MINE, SCR_PICK_THEIRS, SCR_BATTLE, SCR_RESULT } Screen;
@@ -122,6 +160,7 @@ static bool start_battle(void)
         !load_record(g_theirs[g.pick[1]].path, &g_b.oke[1].rec))
         return false;
     battle_sim_start(&g_b, 0x12345678u ^ (uint32_t)(g.pick[0] * 131 + g.pick[1]));
+    scene_load();
     SDL_Log("[battle] %s vs %s", g_mine[g.pick[0]].label, g_theirs[g.pick[1]].label);
     return true;
 }
@@ -142,20 +181,6 @@ static void fill_rect(int x, int y, int w, int h, uint32_t abgr)
     v[1] = (ColorVertex){abgr, (int16_t)(x + w), (int16_t)(y + h), 0, 0};
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, NULL, v);
-}
-
-static void fill_triangle(float x0, float y0, float x1, float y1, float x2, float y2, uint32_t abgr)
-{
-    ColorVertex *v = sceGuGetMemory(3 * (int)sizeof *v);
-    if (!v)
-        return;
-    v[0] = (ColorVertex){abgr, (int16_t)x0, (int16_t)y0, 0, 0};
-    v[1] = (ColorVertex){abgr, (int16_t)x1, (int16_t)y1, 0, 0};
-    v[2] = (ColorVertex){abgr, (int16_t)x2, (int16_t)y2, 0, 0};
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuDisable(GU_CULL_FACE);
-    sceGuDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 3, NULL, v);
-    sceGuEnable(GU_CULL_FACE);
 }
 
 static void text(const char *s, int x, int y, uint32_t color)
@@ -219,67 +244,162 @@ static void list_input(int side, int count)
 
 /* ---- the battle screen ---- */
 
-#define VIEW_X 112
-#define VIEW_Y 8
-#define VIEW_SIZE 256
-
-static float sx(float x) { return VIEW_X + x * VIEW_SIZE / FIELD; }
-static float sy(float y) { return VIEW_Y + y * VIEW_SIZE / FIELD; }
-
-static void draw_oke(const Oke *o, uint32_t color)
+/* The simulation's 800x800 field maps onto the terrain's extent; its heading 0 is
+ * "up" (-z) and turns clockwise seen from above. */
+static void world_pos(float sx, float sy, float out[3])
 {
-    float x = sx(o->x), y = sy(o->y), h = o->heading * DEG, r = OKE_RADIUS * VIEW_SIZE / FIELD + 2;
-    float fx = sinf(h), fy = -cosf(h);
-    fill_triangle(x + fx * r * 1.6f, y + fy * r * 1.6f, x - fx * r + fy * r, y - fy * r - fx * r,
-                  x - fx * r - fy * r, y - fy * r + fx * r, o->hp > 0 ? color : 0xFF404040);
-    if (o->defend_left > 0.0f)
-        fill_rect((int)x - 1, (int)y - 1, 3, 3, 0xFFFFFFFF);
+    float e[4] = {-360, -360, 720, 720};
+    if (g_scene.land)
+        terrain_extent(g_scene.land, e);
+    out[0] = e[0] + sx / FIELD * e[2];
+    out[2] = e[1] + sy / FIELD * e[3];
+    out[1] = g_scene.land ? terrain_height(g_scene.land, out[0], out[2]) : 0.0f;
 }
 
+static void draw_oke3d(int side)
+{
+    const Oke *o = &g_b.oke[side];
+    float p[3];
+    world_pos(o->x, o->y, p);
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+    ScePspFVector3 t = {p[0], p[1], p[2]};
+    sceGumTranslate(&t);
+    sceGumRotateY(3.14159265f - o->heading * DEG);
+    if (o->hp <= 0) /* stand-in for the wreck: knocked over */
+        sceGumRotateZ(1.4f);
+    okemodel_draw(g_scene.body[side], 0);
+}
+
+/* Stand-in for CBattleSceneCamera: follows your OKE from behind and above, eased. */
+static void update_camera(float dt)
+{
+    const Oke *o = &g_b.oke[0];
+    float p[3];
+    world_pos(o->x, o->y, p);
+    float h = o->heading * DEG, fx = sinf(h), fz = -cosf(h);
+    float eye[3] = {p[0] - fx * 34.0f, p[1] + 16.0f, p[2] - fz * 34.0f};
+    float at[3] = {p[0] + fx * 30.0f, p[1] + 4.0f, p[2] + fz * 30.0f};
+    if (g_scene.land) {
+        float ground = terrain_height(g_scene.land, eye[0], eye[2]) + 4.0f;
+        if (eye[1] < ground)
+            eye[1] = ground;
+    }
+    float k = g_scene.cam_valid ? 1.0f - expf(-dt * 8.0f) : 1.0f;
+    for (int i = 0; i < 3; i++) {
+        g_scene.cam_eye[i] += (eye[i] - g_scene.cam_eye[i]) * k;
+        g_scene.cam_at[i] += (at[i] - g_scene.cam_at[i]) * k;
+    }
+    g_scene.cam_valid = true;
+}
+
+typedef struct ShotVertex {
+    uint32_t color;
+    float x, y, z;
+} ShotVertex;
+
+static void draw_shots3d(void)
+{
+    ShotVertex *v = sceGuGetMemory(sizeof(ShotVertex) * MAX_SHOTS * 2);
+    int n = 0;
+    for (int i = 0; i < MAX_SHOTS; i++) {
+        const Shot *s = &g_b.shots[i];
+        if (!s->live)
+            continue;
+        float a[3], b[3];
+        world_pos(s->x, s->y, a);
+        world_pos(s->x - s->vx * 0.05f, s->y - s->vy * 0.05f, b);
+        uint32_t c = s->owner ? 0xFF4080FF : 0xFFFFC040;
+        v[n++] = (ShotVertex){c, a[0], a[1] + 4.0f, a[2]};
+        v[n++] = (ShotVertex){c, b[0], b[1] + 4.0f, b[2]};
+    }
+    if (!n)
+        return;
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+    sceGumUpdateMatrix();
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDrawArray(GU_LINES, GU_COLOR_8888 | GU_VERTEX_32BITF, n, NULL, v);
+}
+
+static void draw_scene3d(void)
+{
+    sceGuViewport(2048, 2048, 480, 272);
+    sceGumMatrixMode(GU_PROJECTION);
+    sceGumLoadIdentity();
+    sceGumPerspective(55.0f, 480.0f / 272.0f, 1.0f, 2000.0f);
+    sceGumMatrixMode(GU_VIEW);
+    sceGumLoadIdentity();
+    ScePspFVector3 eye = {g_scene.cam_eye[0], g_scene.cam_eye[1], g_scene.cam_eye[2]};
+    ScePspFVector3 at = {g_scene.cam_at[0], g_scene.cam_at[1], g_scene.cam_at[2]}, up = {0, 1, 0};
+    sceGumLookAt(&eye, &at, &up);
+    sceGuDisable(GU_CULL_FACE);
+    sceGuShadeModel(1);
+    sceGuTexFilter(1, 1);
+    sceGuTexFunc(0, 1);
+    /* The sky model around the camera, behind everything. */
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDepthMask(1);
+    fill_rect(0, 0, 480, 272, 0xFF000000);
+    if (g_scene.sky) {
+        sceGumMatrixMode(GU_MODEL);
+        sceGumLoadIdentity();
+        sceGumTranslate(&eye);
+        gmo_draw(g_scene.sky);
+    }
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthMask(0);
+    sceGuDepthFunc(7);
+    terrain_draw(g_scene.land);
+    for (int i = 0; i < 2; i++)
+        draw_oke3d(i);
+    draw_shots3d();
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+    sceGumUpdateMatrix();
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuEnable(GU_CULL_FACE);
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuTexFilter(7, 1); /* back to the frame's reset state (render.c) */
+}
+
+/* Stand-in HUD (the game's CBattleDisplayMngr isn't ported yet): name, HP bar and
+ * the chip interpreter's state for each side. */
 static void draw_side_panel(const Oke *o, const char *label, int x, uint32_t color)
 {
-    fill_rect(x, 8, 100, 256, 0xA0000000);
-    text(o->side == 0 ? "YOU" : "OPPONENT", x + 6, 12, color);
-    text(label, x + 6, 30, 0xFFFFFFFF);
-    char line[32];
-    snprintf(line, sizeof line, "HP %3d%%", o->hp);
-    text(line, x + 6, 56, 0xFFFFFFFF);
-    fill_rect(x + 6, 74, 88, 6, 0xFF303030);
-    fill_rect(x + 6, 74, 88 * o->hp / 100, 6, o->hp > 30 ? 0xFF40D040 : 0xFF2040E0);
-    snprintf(line, sizeof line, "CPU %d", oke_cpu_part(&o->rec));
-    text(line, x + 6, 90, 0xFFC0C0C0);
-    snprintf(line, sizeof line, "%d chips/s", o->vm.speed);
-    text(line, x + 6, 106, 0xFFC0C0C0);
-    snprintf(line, sizeof line, "prog %d pc %d", o->vm.current, o->vm.prog[o->vm.current].current);
-    text(line, x + 6, 122, 0xFFC0C0C0);
-    snprintf(line, sizeof line, "shots %d", o->shots_fired);
-    text(line, x + 6, 146, 0xFFC0C0C0);
-    snprintf(line, sizeof line, "hits %d", o->hits);
-    text(line, x + 6, 162, 0xFFC0C0C0);
+    fill_rect(x, 4, 118, 52, 0x90000000);
+    text(o->side == 0 ? "YOU" : "OPPONENT", x + 4, 6, color);
+    text(label, x + 4, 20, 0xFFFFFFFF);
+    fill_rect(x + 4, 36, 110, 5, 0xFF303030);
+    fill_rect(x + 4, 36, 110 * o->hp / 100, 5, o->hp > 30 ? 0xFF40D040 : 0xFF2040E0);
+    char line[40];
+    snprintf(line, sizeof line, "HP %d%% hits %d", o->hp, o->hits);
+    text(line, x + 4, 42, 0xFFC0C0C0);
+}
+
+/* A small top-down radar, standing in for CBattleRadarMngr. */
+static void draw_radar(void)
+{
+    const int rx = 404, ry = 196, rs = 70;
+    fill_rect(rx, ry, rs, rs, 0x90000000);
+    for (int i = 0; i < 2; i++) {
+        const Oke *o = &g_b.oke[i];
+        int x = rx + (int)(o->x * rs / FIELD), y = ry + (int)(o->y * rs / FIELD);
+        fill_rect(x - 2, y - 2, 4, 4, o->hp <= 0 ? 0xFF404040 : i == 0 ? 0xFFFF9040 : 0xFF4040FF);
+    }
 }
 
 static void draw_battle(void)
 {
-    fill_rect(0, 0, 480, 272, 0xFF201810);
-    /* The field: a 6x6 grid. */
-    fill_rect(VIEW_X, VIEW_Y, VIEW_SIZE, VIEW_SIZE, 0xFF304028);
-    for (int i = 0; i <= 6; i++) {
-        int p = VIEW_SIZE * i / 6;
-        fill_rect(VIEW_X + p, VIEW_Y, 1, VIEW_SIZE, 0xFF486040);
-        fill_rect(VIEW_X, VIEW_Y + p, VIEW_SIZE, 1, 0xFF486040);
-    }
-    for (int i = 0; i < MAX_SHOTS; i++)
-        if (g_b.shots[i].live)
-            fill_rect((int)sx(g_b.shots[i].x) - 1, (int)sy(g_b.shots[i].y) - 1, 3, 3,
-                      g_b.shots[i].owner ? 0xFF4080FF : 0xFFFFC040);
-    draw_oke(&g_b.oke[0], 0xFFFF9040);
-    draw_oke(&g_b.oke[1], 0xFF4040FF);
+    update_camera(g.screen == SCR_BATTLE && g.t >= START_BANNER ? 1.0f / 60.0f : 1.0f);
+    draw_scene3d();
     draw_side_panel(&g_b.oke[0], g_mine[g.pick[0]].label, 4, 0xFFFF9040);
-    draw_side_panel(&g_b.oke[1], g_theirs[g.pick[1]].label, 376, 0xFF4040FF);
+    draw_side_panel(&g_b.oke[1], g_theirs[g.pick[1]].label, 358, 0xFF4040FF);
+    draw_radar();
     char t[16];
     float left = TIME_LIMIT - g_b.time;
     snprintf(t, sizeof t, "%3d", left > 0 ? (int)ceilf(left) : 0);
-    text_centered(t, 240, 12, 0xFFFFFFFF);
+    text_centered(t, 240, 8, 0xFFFFFFFF);
 
     if (g.screen == SCR_BATTLE && g.t < START_BANNER) {
         Picture *p = pic("parts/bs/bs_start.gim");
