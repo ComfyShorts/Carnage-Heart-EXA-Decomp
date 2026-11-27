@@ -20,90 +20,10 @@
 #include "psp_imports.h"
 #include "psp_shim.h"
 #include "render.h"
+#include "ui.h"
 
-/* ---- parts cache (FUN_0888763c) ----
- *
- * The game has 0x2F2 interface textures named in a table at 0x08c79468 and loads
- * them on first use (FUN_08887834). Names without a slash live in "parts/bf/". Only
- * the entries the title uses are listed. */
-
-enum {
-    PART_SD_WIND0 = 0x51,
-    PART_TI_MENL0 = 0x5D, /* menu cursor */
-    PART_TI_MENB0 = 0x5E, /* menu button */
-    PART_TI_BACK = 0x5F,  /* title background, 480x272 */
-    PART_TI_TITLE = 0x60, /* title logo, 352x160 */
-    PART_LOGO_A = 0x71,   /* company logo */
-    PART_COUNT = 0x2F2,
-};
-
-static const struct { int index; const char *name; } k_part_names[] = {
-    {PART_TI_MENL0, "title/ti_menl0"}, {PART_TI_MENB0, "title/ti_menb0"},
-    {PART_TI_BACK, "title/ti_back"},   {PART_TI_TITLE, "title/ti_title"},
-    {PART_LOGO_A, "title/logo_a"},
-};
-
-static Picture *g_parts[PART_COUNT];
-
-static Picture *part(int index)
-{
-    if (index < 0 || index >= PART_COUNT)
-        return NULL;
-    if (g_parts[index])
-        return g_parts[index];
-    const char *name = NULL;
-    for (size_t i = 0; i < SDL_arraysize(k_part_names); i++)
-        if (k_part_names[i].index == index)
-            name = k_part_names[i].name;
-    if (!name) {
-        SDL_Log("[parts] texture 0x%X isn't listed in the port yet", index);
-        return NULL;
-    }
-    char path[96];
-    if (strchr(name, '/'))
-        snprintf(path, sizeof path, "%s.gim", name);
-    else
-        snprintf(path, sizeof path, "parts/bf/%s.gim", name);
-    g_parts[index] = picture_load(path);
-    return g_parts[index];
-}
-
-/* ---- tweens (the CTimeValue members of the windows) ----
- *
- * An eased move from `from` to `to` over `duration` seconds:
- * value = (1 + e^-4 - e^(-4t/d)) * (to - from) + from. */
-
-typedef struct Tween {
-    float from, to, duration, t;
-    bool active;
-} Tween;
-
-static void tween_start(Tween *tw, float from, float to, float duration)
-{
-    *tw = (Tween){from, to, duration, 0.0f, true};
-}
-
-static float tween_value(const Tween *tw)
-{
-    if (!tw->active || tw->from == tw->to || tw->t <= 0.0f)
-        return tw->active && tw->t > 0.0f ? tw->to : tw->from;
-    if (tw->t >= tw->duration)
-        return tw->to;
-    return (1.0f + expf(-4.0f) - expf(-4.0f * tw->t / tw->duration)) * (tw->to - tw->from) + tw->from;
-}
-
-static bool tween_done(const Tween *tw)
-{
-    return !tw->active || tw->t >= tw->duration;
-}
-
-static void tween_step(Tween *tw, float dt)
-{
-    if (tw->active && tw->t < tw->duration)
-        tw->t += dt;
-}
-
-#define MENU_TWEEN_TIME (1.0f / 6.0f) /* DAT_08be7bc4 */
+#define MENU_TWEEN_TIME UI_TWEEN_TIME
+#define part ui_part
 
 /* ---- windows (CWnd and the two kinds the title uses) ---- */
 
@@ -224,26 +144,6 @@ static float menu_pulse(const Wnd *w)
     return 0.3f + 0.7f * (s + 1.0f) * 0.5f;
 }
 
-typedef struct QuadVertex {
-    int16_t u, v;
-    uint32_t color;
-    int16_t x, y, z, pad;
-} QuadVertex;
-
-/* A textured 4-vertex strip in through mode (vertex type 0x80011E). */
-static void draw_quad(int x, int y, int w, int h, uint32_t color)
-{
-    QuadVertex *v = sceGuGetMemory(4 * (int)sizeof *v);
-    if (!v)
-        return;
-    v[0] = (QuadVertex){0, 0, color, (int16_t)x, (int16_t)y, 0, 0};
-    v[1] = (QuadVertex){(int16_t)w, 0, color, (int16_t)(x + w), (int16_t)y, 0, 0};
-    v[2] = (QuadVertex){0, (int16_t)h, color, (int16_t)x, (int16_t)(y + h), 0, 0};
-    v[3] = (QuadVertex){(int16_t)w, (int16_t)h, color, (int16_t)(x + w), (int16_t)(y + h), 0, 0};
-    sceGuDrawArray(GU_TRIANGLE_STRIP,
-                   GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 4, NULL, v);
-}
-
 /* CEntranceWnd::Draw (FUN_088d7efc) */
 static void menu_draw(const Wnd *w)
 {
@@ -261,7 +161,7 @@ static void menu_draw(const Wnd *w)
         sceGuEnable(GU_TEXTURE_2D);
         sceGuDisable(GU_CULL_FACE);
         picture_bind(button);
-        draw_quad(w->x, y, bw, bh, color);
+        ui_quad(w->x, y, bw, bh, color);
         sceGuEnable(GU_CULL_FACE);
 
         const char *s = design_string(w->first + i, 1);
@@ -281,7 +181,7 @@ static void menu_draw(const Wnd *w)
             sceGuDisable(GU_CULL_FACE);
             sceGuBlendFunc(0, 2, 10, 0xFFFFFFFF, 0xFFFFFFFF); /* additive */
             picture_bind(cursor);
-            draw_quad(w->x, y, picture_width(cursor), picture_height(cursor), (uint32_t)a << 24 | 0xFFFFFF);
+            ui_quad(w->x, y, picture_width(cursor), picture_height(cursor), (uint32_t)a << 24 | 0xFFFFFF);
             sceGuBlendFunc(0, 2, 3, 0xFFFFFFFF, 0xFFFFFFFF);
             sceGuEnable(GU_CULL_FACE);
         }
@@ -379,6 +279,7 @@ typedef struct EntranceMngr {
     Wnd mode_menu;      /* +0x60 */
     WndStack stack;     /* +0x64 */
     Wnd black;          /* +0x68 */
+    UiAsk ask;          /* +0x74: phase 9's question */
     bool idle_warned, stop_warned;
 } EntranceMngr;
 
@@ -480,6 +381,14 @@ static void phase_top_menu(EntranceMngr *m)
     }
 }
 
+/* The dialog class (FUN_088c0ba0) isn't in the export; its "No" is taken from
+ * CBattleTestString's table (0x08c6ad50, string 32), "Yes" from CDesignString 5. */
+static const char *k_no(void)
+{
+    uint32_t p = gamedata_word(0x00466D50u + 4u * 32u, 0);
+    return p ? gamedata_string(p >= 0x08804000u ? p - 0x08804000u : p) : NULL;
+}
+
 /* FUN_088d5510 */
 static void phase_mode_menu(EntranceMngr *m)
 {
@@ -488,15 +397,27 @@ static void phase_mode_menu(EntranceMngr *m)
             mngr_pop_phase(m);
         return;
     }
+    if (m->ask.open) {
+        /* Phase 9 (FUN_088d5eb8): circle on Yes goes on to phase 7, the player-name
+         * keyboard (sceUtility OSK); No or cross stays on the mode menu. */
+        int r = ui_ask_update(&m->ask, 1.0f / 60.0f);
+        if (r == 1) {
+            /* Phase 7 (FUN_088d5a70) saves the name, sets game mode 2 and fades out
+             * (phase 0xB). There's no on-screen keyboard here: the name isn't taken. */
+            SDL_Log("[entrance] Battle Mode: player-name entry (OSK) skipped; opening Battle Mode");
+            m->done = true;
+        }
+        if (r >= 0)
+            m->mode_menu.active = true;
+        return;
+    }
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         m->selection = m->mode_menu.cursor;
         if (m->selection == 1) {
-            /* The game asks "no tutorials, start anyway?" (phase 9), takes a player
-             * name on the on-screen keyboard (phase 7), fades out (phase 0xB) and opens
-             * the briefing scene. The port goes straight to its battle setup. */
-            SDL_Log("[entrance] Battle Mode chosen: tutorial dialog, name entry and briefing "
-                    "skipped; starting the port's battle setup");
-            m->done = true;
+            /* FUN_0889c400 (+0x74) says whether the tutorials were seen; with no save
+             * data they weren't, so the game asks first (phase 9, FUN_088d4c84). */
+            ui_ask_open(&m->ask, design_string(0x11, 1), design_string(0x5, 1), k_no(), 0);
+            m->mode_menu.active = false;
             return;
         }
         if (!m->stop_warned) {
@@ -581,6 +502,7 @@ static void mngr_draw(void *ctx)
         draw_title(); /* phases 6, 7 and 0xB draw something else; not ported */
     for (int i = 0; i < m->stack.count; i++)
         wnd_draw(m->stack.e[i].wnd);
+    ui_ask_draw(&m->ask);
 }
 
 /* ---- the entrance screen (FUN_088d2d30) ---- */

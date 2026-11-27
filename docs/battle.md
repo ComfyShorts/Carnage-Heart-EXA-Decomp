@@ -1,14 +1,21 @@
 # Battle Mode
 
-Choosing **Battle Mode** on the title's mode menu now leads to a playable battle
-between two shipped preset designs:
+Choosing **Battle Mode** on the title's mode menu now runs the game's own Battle Mode
+screens (see `docs/screens.md`): the top menu, Battle, then either the **Test
+Program** (Enemy and Friend OKEs from the OKE cards, the map, test time, "Start
+battle?") or the **Battle Arena** (one of the game's 100 opponents, your OKE, "Start
+Battle Arena?"). The battle then starts from those choices:
 
-1. **Choose your OKE**: the 50 arena designs, the two test designs and the tutorial
-   model answers.
-2. **Choose your opponent**: the 50 arena designs.
-3. **Battle**: "BATTLE START", then both robots run their own chip programs until one
-   is destroyed or 120 seconds pass. WINNER, LOSER or DRAW follows. Circle goes back to
-   the opponent list, and cross on the first list goes back to the title.
+- your side's OKE and the enemy's: the chosen cards, or the arena opponent's leader
+  (the record's first OKE file);
+- the map: the chosen stage, or the opponent's, through `CPresetStage`'s table
+  (`0x08c21854`, field 0 = `land/mapNN`); "Select Randomly" picks one of 00-24;
+- the time limit: the Test Time, or the opponent's (`+0x114` of its record).
+
+"BATTLE START", then both robots run their own chip programs until one is destroyed
+or time runs out. WINNER, LOSER or DRAW follows, and circle goes back to the screen
+the battle was started from. A new game's cards are what you can field: the two
+simulation OKEs (save data, OKE Configuration and the shop aren't ported).
 
 Code: `src/game/battle.c` (screens and drawing), `src/game/battle_sim.c` (the
 simulation), `src/game/gmo.c`, `okemodel.c`, `terrain.c` (models and field),
@@ -16,7 +23,7 @@ simulation), `src/game/gmo.c`, `okemodel.c`, `terrain.c` (models and field),
 
 ```sh
 build/pc-m32/chexa-pc --disc DIR --startup --press 70 circle --press 90 down \
-    --press 110 circle --shot 130 orig/pick.png      # Battle Mode -> OKE list
+    --press 110 circle --press 130 circle --shot 170 orig/bm_top.png  # Battle Mode
 build/pc-m32/chexa-battle-test --mine preset/arena/oke_b15_1.bin \
     --theirs preset/arena/oke_b04_1.bin --trace 40   # one battle, first 40 chips
 build/pc-m32/chexa-battle-test --arena -v            # all 2450 arena pairings
@@ -46,39 +53,42 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Movement modifiers | Stand-in | `FUN_08858c8c` / `FUN_08858d44` scale each command by the OKE's performance (legs, weight); taken as 100%, so every body of a type moves alike. Commands 0x206-0x208 and 0x20a-0x210 (pose speed, waits, altitude, loop mode) are skipped |
 | Poses | Partly | the pose each script's pose command names is drawn straight away; the game blends to it over the command's frames. No blending yet |
 | Weapons on the body | Stand-in | the `PARTS2` defaults; the equipment-dependent part choice isn't read |
-| Map choice | Stand-in | always map 01 (`BATTLE_MAP`); the arena's own stage pick isn't traced |
+| Map choice | **Real** | the stage picked on the Test Program's map screen, or the arena opponent's stage, through `CPresetStage` (`FUN_08a35844`, table at `0x08c21854`). Map size and barricade are chosen but not simulated (the field stays 720×720) |
+| OKE choice | **Real** (partly) | the cards chosen on the Test Program's team screen or the arena's team screen, and the arena opponent's OKE files. One OKE a side: of an arena team, only its leader fights |
+| Time limit | **Real** | Test Time (30-300 s, `CBattleParam +8`) or the arena record's `+0x114` (90-120 s); `Battle.time_limit` |
 | Terrain height scale and tiles | Stand-in | height = byte × block-0 height / 255 over the used cells; one tile texture (`mapNN_a00.gim`); vertex shading from the map's light direction instead of GE lighting |
 | Battle camera | Stand-in | a chase camera behind your OKE (`CBattleSceneCamera` isn't read) |
-| What the robot does with the other chip orders (`CBattleOke`) | Stand-in | a 2D simulation with guessed units on a 720×720 field (the terrain's size): jumps, the special moves and the bodies without scripts move at 50 units/s and turn at 180°/s; melee 10% within 36 units, a 120 s limit. Heights don't affect it |
+| What the robot does with the other chip orders (`CBattleOke`) | Stand-in | a 2D simulation with guessed units on a 720×720 field (the terrain's size): jumps, the special moves and the bodies without scripts move at 50 units/s and turn at 180°/s; melee 10% within 36 units. Heights don't affect it |
 | HUD windows and gauges | **Real** (partly) | the `CIndicatorBase` window table at `0x003ed78c` (`FUN_089011d8` / `FUN_0890126c`), each window cut from the `bs_wind0` atlas; the status window's HP, heat and energy gauges as `FUN_089104fc` / `FUN_089106ac` / `FUN_08910860` draw them (130 px per 1000, positions at `0x003f0514`, heights at `0x003f0508`). Only windows 2 (status) and 3 (radar) are drawn. Energy isn't simulated and shows full; heat shows the simulated heat |
 | Radar contents | Stand-in | `bs_radm2` dots placed by hand inside window 3, centred on your OKE; `CBattleRadarMngr` isn't read |
 | Lock-on and gun sight | **Real** (mostly) | Lock-On (`FUN_088464b0`) locks a target found in range and otherwise keeps the old lock; only Cancel Lock-On clears it (`FUN_088465dc`). `CBattleOkeGunSightController` (`+0xb470`) at 30 Hz: the tracker (`FUN_0883baa4`) gives the locked target's direction and distance (200 without a lock, the sight then holds its last yaw, straight ahead at first); the sight turns half the remaining angle a frame, at most 30° (body table `+0x50`), with up to 50% extra while it keeps turning one way, aiming one frame ahead (`FUN_0884a1c8`, `FUN_0883b300`, `FUN_0883b214`). The HUD mark eases after the aim point at (0.5 + momentum) of the way, at most 20 a frame (`+0x54`, `FUN_0884a4d8`): `gunsite` while locked, `gundot` otherwise |
 | Reticle chips and lead | **Real** (mostly) | Start Reticle (`FUN_0883be40`) readies weapon 1-5 (8: broken off, 9: empty slot), 5 puts it away and resets the sight, 6 readies the next usable one. "Current weapon" in the fire chips means the readied one; with none they fail with 0x11. Move Reticle (`FUN_0883c0d4`) sets the sight's goal yaw (0.01°, ±180, relative with b2 = 1) and holds the tracker off for 2 s; it is ignored while firing in mode 2 or 3. Shoot Reticle (`FUN_08848288`) fires at the sight's HUD point (mode 1), Select and Fire at the target itself (mode 2), Firing Direction along its angle (mode 3) (`FUN_0883c298`). The gun rises while the fire control aims, at 2 × body `+0x38` / 100 per second, and drops at once otherwise (`FUN_088509bc`). Once fully raised, with the chip's spread setting 0, 1 or 4 (table `0x08cce2c0` is 0 there), the shot leads: target + its velocity × distance / bullet speed, one pass (`FUN_0883e2c4`). In mode 1 the lead goes into the sight, in mode 2 into the shot. The fire control stays aiming until the weapon is put away |
 | Pitch, muzzle cone, part targeting | Stand-in | pitch isn't simulated (shots have no height), so the reticle's pitch is ignored and the mark's height is a stand-in. Shots leave from the body's centre, not the muzzle (`+0x30` of the slot), and aren't limited to the weapon's aiming cone (`DAT_08cce2d8`, `FUN_08810edc`) or its turret limits. Selecting a target part (weapon mounts) isn't ported. The spread values themselves (table `0x08cce2c0`) aren't applied as scatter |
 | Names, timer | Stand-in | plain text where the game has its top windows |
-| Selection screens | Stand-in | for the game's flow (below), drawn with the title's art |
+| Selection screens | **Real** (partly) | the game's Battle Mode, Battle, Test Program and Battle Arena screens; their stand-ins are listed in `docs/screens.md` |
 
 The tables come from your EBOOT at run time (`--elf`), so nothing is copied into the
 repository. Without it, rough defaults are used.
 
-### The game's own flow after Battle Mode (not ported)
+### The game's flow after Battle Mode
 
 From the entrance code (`FUN_088d5510`, `FUN_088d497c`, `FUN_088d5a70`,
 `FUN_088d61b8`, `FUN_088d317c`):
 
 - Phase 9: a yes/no dialog ("there are no tutorials in Battle Mode"), skipped when a
-  flag at `+0x74` of a game-state object is set.
-- Phase 7: the player's name on the system on-screen keyboard (sceUtilityOsk).
-- Phase 0xB: fade to black, then the entrance ends.
-- `FUN_088d317c` → `FUN_088d2ff8`: the **briefing** scene (0x1410 bytes,
-  `FUN_0893f578`, file set "briefing"). That's the management side: hangar, OKE design,
-  `CBattleSelectMngr` and its arena opponents.
+  flag at `+0x74` of a game-state object is set. Ported (always asked).
+- Phase 7: the player's name on the system on-screen keyboard (sceUtilityOsk). Not
+  ported: skipped.
+- Phase 0xB: fade to black, then the entrance ends; `FUN_088d317c` →
+  `FUN_088d3d80` mode 4 makes the scene `FUN_0882fba4`, which runs `CBattleModeFlow`
+  (`FUN_088372a0`) and the scene behind it (`FUN_0887459c`, not drawn).
+- `CBattleModeFlow`'s sub-flows (`FUN_08837c64`): 0 `CDesignFlow`, 1
+  `CTeamFormationFlow`, 2 `CBattleSelectFlow` (ported), 3 `CShopFlow`, 4 system.
+  `CBattleSelectFlow`'s (`FUN_08880bc4`): 3 `CBattleTestFlow` (ported), 4
+  `CBattleMissionFlow`, 5 `CBattleArenaFlow` (ported), 6 `CMatchMakeFlow`.
 - The battle itself is `CBattleScene` / `CBattleSceneMngr` (file set "battlescene":
   3D effect models `effect/*.gmo`, HUD art `parts/bs/*`), with `CBattleOke` behind
   each robot.
-- `CRootTest` (`FUN_08a60ac8`, the debug menu the root screen opens after the
-  entrance) has a `BATTLE_SCENE` entry and a `CBattleTestFlow` / `CBattleTestMngr`
-  (`FUN_08822b0c` and neighbours). That's a likely shortcut into the real battle scene.
 
 ## How the presets behave in the stand-in
 
@@ -146,7 +156,8 @@ height map dumped from a running game or emulator.
 ## Missing
 
 - **The battle field**: scenery models (`mapNN_nature*.gmo`, `piece_*`, `distant*`),
-  obstacles, the `.bbx` collision boxes, the stage choice and CLandTexture's tiles.
+  obstacles, the `.bbx` collision boxes, map size and barricades, and CLandTexture's
+  tiles.
 - **The robots**: pose blending, the movement modifiers from the hardware stats,
   jumps, flight and altitude, ground height and slopes in the physics, weapon parts by
   equipment, wreck parts, flying types. The renderer still lacks GE lighting and
@@ -161,5 +172,5 @@ height map dumped from a running game or emulator.
 - **Behaviour**: `CBattleOke` (hardware stats: legs, weapons, armour, engine, heat,
   ammunition; flying types; collision) isn't ported, so who wins says little about the
   real game.
-- **Flow**: the dialog, name entry, briefing, hangar and the game's own opponent
-  selection.
+- **Flow**: name entry, save data, OKE Configuration, Team Formation, the shop,
+  missions and matchmaking; teams of more than one OKE.
