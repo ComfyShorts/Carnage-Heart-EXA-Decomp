@@ -47,6 +47,13 @@ typedef struct Oke {
     float react_left;  /* a flinch (scripts 0x57-0x5a) is playing */
     float down_left;   /* knocked down (state +0xb6ac = 2) */
     float push_x, push_y, push_spin; /* this frame's knock-back (+0xb040 / +0xb050) */
+    /* CBattleOkeGunSightController (+0xb470): the sight's yaw relative to the body
+     * (+0x50), its target yaw now and last frame (+0x58 / +0x60), last step and
+     * momentum (+0x68 / +0x24), aim distance (+0x1c); the HUD mark's point (+0x70)
+     * and its momentum (+0x2c). Ticks at 30 Hz. */
+    float sight_yaw, sight_goal, sight_goal_prev, sight_step, sight_bonus, sight_dist;
+    float mark_x, mark_y, mark_bonus, sight_clock;
+    float aim_speed, mark_speed; /* degrees / units per frame */
     ActKind act;
     float act_left;    /* seconds */
     float vx, vy, turn_rate;

@@ -466,6 +466,69 @@ static int t_firing_direction(PgChipTarget *t, int b2, int b3, int b4, int b5, i
     return res;
 }
 
+/* One 30 Hz frame of the gun sight. FUN_0883baa4 aims at the locked target's
+ * body (lead only applies to the reticle chips, mode 1: not used here) and gives
+ * the distance, 200 without a lock; FUN_0884a1c8 turns the sight half the way per
+ * frame, at most 30 degrees (body table +0x50), with up to 50% extra while it keeps
+ * turning the same way; FUN_0883b300 / FUN_0883b214 keep it within a turn. */
+static void sight_tick(Oke *o)
+{
+    Oke *e = ENEMY(o);
+    bool tracking = o->locked && e->hp > 0;
+    if (tracking) {
+        o->sight_goal_prev = o->sight_goal;
+        o->sight_goal = wrap180(atan2f(e->x - o->x, -(e->y - o->y)) / DEG - o->heading);
+        o->sight_dist = hypotf(e->x - o->x, e->y - o->y);
+    } else {
+        o->sight_dist = 200.0f;
+    }
+    float goal = o->sight_goal;
+    if (tracking) /* one frame ahead */
+        goal += wrap180(o->sight_goal - o->sight_goal_prev);
+    float best = goal;
+    for (int k = -1; k <= 1; k += 2)
+        if (fabsf(goal + 360.0f * k - o->sight_yaw) < fabsf(best - o->sight_yaw))
+            best = goal + 360.0f * k;
+    goal = best;
+    float limit = o->aim_speed > 0.0f ? o->aim_speed : 30.0f;
+    float step = (goal - o->sight_yaw) * 0.5f;
+    if (step > limit) step = limit;
+    if (step < -limit) step = -limit;
+    if (fabsf(step) < 0.0017453292f) {
+        o->sight_yaw = goal;
+        o->sight_step = 0.0f;
+        o->sight_bonus = 0.0f;
+    } else {
+        if (o->sight_step * step > 0.0f) {
+            o->sight_bonus = o->sight_bonus + 0.05f > 0.5f ? 0.5f : o->sight_bonus + 0.05f;
+            step += (goal - o->sight_yaw) * o->sight_bonus;
+        } else {
+            o->sight_bonus = 0.0f;
+        }
+        o->sight_yaw += step;
+        o->sight_step = step;
+    }
+    o->sight_yaw = wrap180(o->sight_yaw);
+
+    /* FUN_0884a4d8: the HUD mark follows the aim point at (0.5 + momentum) of the
+     * way, at most 20 units a frame per axis (body table +0x54). */
+    float h = (o->heading + o->sight_yaw) * DEG;
+    float ax = o->x + sinf(h) * o->sight_dist, ay = o->y - cosf(h) * o->sight_dist;
+    float dx = ax - o->mark_x, dy = ay - o->mark_y, f;
+    if (hypotf(dx, dy) < 1.0f) {
+        o->mark_bonus = 0.0f;
+        f = 0.5f;
+    } else {
+        o->mark_bonus = o->mark_bonus + 0.05f > 0.5f ? 0.5f : o->mark_bonus + 0.05f;
+        f = o->mark_bonus + 0.5f;
+    }
+    float ml = o->mark_speed > 0.0f ? o->mark_speed : 20.0f;
+    dx *= f;
+    dy *= f;
+    o->mark_x += dx > ml ? ml : dx < -ml ? -ml : dx;
+    o->mark_y += dy > ml ? ml : dy < -ml ? -ml : dy;
+}
+
 static void fire_step(Oke *o, float dt)
 {
     if (o->firing < 0)
@@ -491,9 +554,13 @@ static void fire_step(Oke *o, float dt)
         if (pellets < 1 || pellets > 16)
             pellets = 1;
         float tx, ty;
+        (void)e;
         if (o->aim_at_enemy) {
-            tx = e->x;
-            ty = e->y;
+            /* FUN_0883c5a4: the gun points at the sight's aim point, the body's
+             * heading turned by the sight's yaw, out at the aim distance. */
+            float h = (o->heading + o->sight_yaw) * DEG;
+            tx = o->x + sinf(h) * o->sight_dist;
+            ty = o->y - cosf(h) * o->sight_dist;
         } else {
             float h = (o->heading + o->aim_angle) * DEG;
             tx = o->x + sinf(h) * 100.0f;
@@ -582,8 +649,11 @@ static int t_lock_on(PgChipTarget *t, PgChipRange r, int a, int b, int c)
 {
     (void)a; (void)b; (void)c;
     Oke *o = O(t), *e = ENEMY(o);
-    o->locked = in_range(o, r, e->x, e->y);
-    return o->locked ? 0 : 2;
+    /* FUN_088464b0: a target found in range becomes the lock; otherwise the old
+     * lock stays. Always accepted. */
+    if (e->hp > 0 && in_range(o, r, e->x, e->y))
+        o->locked = true;
+    return 0;
 }
 
 static int t_cancel_lock_on(PgChipTarget *t) { O(t)->locked = false; return 0; }
@@ -718,6 +788,14 @@ static void oke_init(Oke *o, Battle *b, int side, float x, float y, float headin
     o->stagger = word_at(bt + 0x30, 40);
     o->react_left = o->down_left = 0.0f;
     o->push_x = o->push_y = o->push_spin = 0.0f;
+    float as = float_at(bt + 0x50, 30.0f), ms = float_at(bt + 0x54, 20.0f); /* FUN_089ed9c0 / _9e8 */
+    o->aim_speed = as > 0.0f && as < 360.0f ? as : 30.0f;
+    o->mark_speed = ms > 0.0f && ms < 1000.0f ? ms : 20.0f;
+    o->sight_yaw = o->sight_goal = o->sight_goal_prev = o->sight_step = o->sight_bonus = 0.0f;
+    o->sight_dist = 200.0f;
+    o->sight_clock = o->mark_bonus = 0.0f;
+    o->mark_x = x + sinf(heading * DEG) * 200.0f;
+    o->mark_y = y - cosf(heading * DEG) * 200.0f;
     oke_motion_reset(&o->motion, oke_scripts_get(body));
     o->scripted = false;
     for (int i = 0; i < 5; i++) {
@@ -752,6 +830,8 @@ static void oke_step(Oke *o, float dt)
     o->motion.vy += o->push_y / 30.0f;
     o->motion.omega += o->push_spin / 30.0f / DEG;
     o->push_x = o->push_y = o->push_spin = 0.0f;
+    for (o->sight_clock += dt; o->sight_clock >= 1.0f / 30.0f; o->sight_clock -= 1.0f / 30.0f)
+        sight_tick(o);
     fire_step(o, dt);
     if (o->motion.s && (o->act == ACT_NONE || o->scripted)) {
         oke_motion_step(&o->motion, dt, &o->x, &o->y, &o->heading);
