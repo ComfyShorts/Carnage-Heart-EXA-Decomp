@@ -90,4 +90,15 @@ bool psp_platform_pump(void);   /* handle window events; false once the user qui
 void psp_platform_present(void);
 void psp_platform_shutdown(void);
 
+/* --perf (perf.c): per-frame timings, logged every 120 frames. PERF_BEGIN returns 0
+ * when it is off, and psp_perf_end ignores a 0 start. */
+enum { PERF_LOGIC, PERF_CHIPS, PERF_BUILD, PERF_GE, PERF_RASTER, PERF_WAIT, PERF_COUNT };
+extern bool g_psp_perf;
+uint64_t psp_perf_now(void);
+#define PERF_BEGIN() (g_psp_perf ? psp_perf_now() : 0)
+void psp_perf_enable(bool on);
+void psp_perf_end(int part, uint64_t t0);
+void psp_perf_frame(int vblanks, int interval); /* game thread, after each swap */
+void psp_perf_present(uint64_t work_ns, uint64_t wait_ns); /* main thread, each present */
+
 #endif

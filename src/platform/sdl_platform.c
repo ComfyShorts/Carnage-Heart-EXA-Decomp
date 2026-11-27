@@ -52,14 +52,22 @@ void psp_platform_present(void)
     /* The frame buffer the game is displaying, or a dark placeholder with the screen
      * outline while the display is off. */
     static uint32_t pixels[PSP_SCREEN_W * PSP_SCREEN_H];
+    uint64_t t0 = PERF_BEGIN();
     SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_renderer);
     if (psp_display_snapshot(pixels, NULL)) {
-        if (!g_screen)
+        if (!g_screen) {
             g_screen = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING,
                                          PSP_SCREEN_W, PSP_SCREEN_H);
+            /* The PSP's display ignores the frame buffer's alpha (it holds the stencil),
+             * so copy the picture without blending: correct, and the renderer's
+             * cheapest path. */
+            if (g_screen) {
+                SDL_SetTextureScaleMode(g_screen, SDL_SCALEMODE_NEAREST);
+                SDL_SetTextureBlendMode(g_screen, SDL_BLENDMODE_NONE);
+            }
+        }
         if (g_screen) {
-            SDL_SetTextureScaleMode(g_screen, SDL_SCALEMODE_NEAREST);
             SDL_UpdateTexture(g_screen, NULL, pixels, PSP_SCREEN_W * 4);
             SDL_RenderTexture(g_renderer, g_screen, NULL, NULL);
         }
@@ -70,7 +78,10 @@ void psp_platform_present(void)
         SDL_SetRenderDrawColor(g_renderer, 90, 120, 170, 255);
         SDL_RenderRect(g_renderer, &screen);
     }
+    uint64_t t1 = PERF_BEGIN();
     SDL_RenderPresent(g_renderer);
+    if (t0)
+        psp_perf_present(t1 - t0, psp_perf_now() - t1);
 }
 
 void psp_platform_shutdown(void)

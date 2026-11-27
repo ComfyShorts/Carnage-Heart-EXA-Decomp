@@ -10,8 +10,15 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Optimized by default: the GE is a software rasterizer, and a Debug build (no -O)
+# can't hold 60 frames a second (docs/graphics.md, "Performance"). RelWithDebInfo
+# keeps the symbols; configure with -DCMAKE_BUILD_TYPE=Debug (or the m32-debug preset)
+# to step through the code.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE Debug)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  message(STATUS "Debug build: unoptimized, expect well under 60 frames a second")
 endif()
 
 # SDL3: the 32-bit static build from tools/setup_pc_deps.sh, or a system SDL3 for 64-bit.
@@ -26,6 +33,10 @@ function(chexa_target_setup target)
   target_compile_options(${target} PRIVATE -Wall -Wextra -Wno-unused-parameter)
   if(CMAKE_SIZEOF_VOID_P EQUAL 4)
     target_compile_definitions(${target} PRIVATE PCPORT_M32=1)
+    # i386 code defaults to x87 floating point, where every float-to-int conversion
+    # reloads the FPU control word and results depend on register spills. Every
+    # x86-64 CPU, which the 32-bit build targets, has SSE2.
+    target_compile_options(${target} PRIVATE -msse2 -mfpmath=sse)
   endif()
   # 64-bit off_t/ino_t/time_t even in the 32-bit build: without them stat() fails with
   # EOVERFLOW on file systems with large inode numbers (e.g. WSL's /mnt/c).

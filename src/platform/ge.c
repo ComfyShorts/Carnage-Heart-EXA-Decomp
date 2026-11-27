@@ -15,10 +15,14 @@
 #include "psp_imports.h"
 #include "psp_shim.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
 #include <SDL3/SDL.h>
+#ifdef __SSE2__
+#include <emmintrin.h>
+#endif
 
 #ifdef PCPORT_M32
 _Static_assert(sizeof(void *) == 4, "GE lists carry 32-bit host addresses");
@@ -166,6 +170,19 @@ static uint16_t encode16(uint32_t c, int fmt)
 
 /* ---- textures ---- */
 
+/* One primitive's texture state, decoded from the registers once (tex_setup) instead
+ * of for every texel. */
+typedef struct Tex {
+    const uint8_t *base;
+    int tpf, bpp, stride;
+    bool swizzle;
+    uint32_t row_blocks;  /* swizzled: 16-byte blocks per row of the buffer */
+    int w, h, cu, cv;     /* size, clamp (1) or wrap (0) */
+    int filter_min, filter_mag;
+    int clut_shift, clut_mask, clut_offset;
+    const uint32_t *clut; /* 512 entries as RGBA, for the CLUT formats */
+} Tex;
+
 static uint32_t tex_addr(int level)
 {
     return arg(CMD_TBP0 + level) | (g_ge.reg[CMD_TBW0 + level] & 0xFF0000) << 8;
@@ -177,75 +194,133 @@ static int bits_per_texel(int tpf)
     return tpf <= 10 ? bpp[tpf] : 32;
 }
 
-static uint32_t clut_lookup(uint32_t index)
+/* The CLUT as RGBA, decoded again only after a CLOAD or when its format changes.
+ * A 32-bit CLUT has 256 entries; the table repeats them so that an index masked
+ * with 511 works for both. */
+static uint32_t g_clut_rgba[512];
+static uint32_t g_clut_gen = 1, g_clut_rgba_gen;
+static int g_clut_rgba_fmt = -1;
+
+static const uint32_t *clut_table(int fmt)
 {
+    if (g_clut_rgba_gen != g_clut_gen || g_clut_rgba_fmt != fmt) {
+        for (int i = 0; i < 512; i++)
+            g_clut_rgba[i] = fmt == 3 ? ((const uint32_t *)g_ge.clut)[i & 255]
+                                      : decode16(((const uint16_t *)g_ge.clut)[i], fmt);
+        g_clut_rgba_gen = g_clut_gen;
+        g_clut_rgba_fmt = fmt;
+    }
+    return g_clut_rgba;
+}
+
+static void tex_setup(Tex *x)
+{
+    x->tpf = arg(CMD_TPF) & 15;
+    x->stride = g_ge.reg[CMD_TBW0] & 0x7FF;
+    x->bpp = bits_per_texel(x->tpf);
+    x->base = psp_ge_ptr(tex_addr(0));
+    x->swizzle = arg(CMD_TMODE) & 1;
+    x->row_blocks = (uint32_t)x->stride * (uint32_t)x->bpp / 8 / 16;
+    x->w = 1 << (arg(CMD_TSIZE0) & 15);
+    x->h = 1 << ((arg(CMD_TSIZE0) >> 8) & 15);
+    x->cu = arg(CMD_TWRAP) & 1;
+    x->cv = (arg(CMD_TWRAP) >> 8) & 1;
+    x->filter_min = arg(CMD_TFLT) & 1;
+    x->filter_mag = (arg(CMD_TFLT) >> 8) & 1;
     uint32_t mode = arg(CMD_CLUT);
-    int fmt = mode & 3, shift = (mode >> 2) & 31, mask = (mode >> 8) & 255, offset = (mode >> 16) & 31;
-    uint32_t i = ((index >> shift) & mask) | (uint32_t)(offset << 4);
-    if (fmt == 3)
-        return ((const uint32_t *)g_ge.clut)[i & 255];
-    return decode16(((const uint16_t *)g_ge.clut)[i & 511], fmt);
+    x->clut_shift = (mode >> 2) & 31;
+    x->clut_mask = (mode >> 8) & 255;
+    x->clut_offset = ((mode >> 16) & 31) << 4;
+    x->clut = x->tpf >= 4 && x->tpf <= 7 ? clut_table(mode & 3) : NULL;
+    if (x->tpf > 7)
+        unsupported("DXT textures");
+}
+
+static inline uint32_t clut_lookup(const Tex *x, uint32_t index)
+{
+    return x->clut[(((index >> x->clut_shift) & (uint32_t)x->clut_mask) | (uint32_t)x->clut_offset) & 511];
 }
 
 /* One texel of level 0, (u, v) already wrapped into range. */
-static uint32_t texel(int u, int v)
+static inline uint32_t texel(const Tex *x, int u, int v)
 {
-    int tpf = arg(CMD_TPF) & 15;
-    int stride = g_ge.reg[CMD_TBW0] & 0x7FF;
-    int bpp = bits_per_texel(tpf);
-    const uint8_t *base = psp_ge_ptr(tex_addr(0));
     uint32_t off_bits;
-    if (arg(CMD_TMODE) & 1) {
-        /* Swizzled: 16-byte by 8-row blocks laid out row of blocks after row. */
-        uint32_t row_bytes = (uint32_t)stride * bpp / 8;
-        uint32_t xb = (uint32_t)u * bpp / 8;
-        uint32_t block = (uint32_t)(v / 8) * (row_bytes / 16) + xb / 16;
+    if (x->swizzle) {
+        /* 16-byte by 8-row blocks laid out row of blocks after row. */
+        uint32_t xb = (uint32_t)u * (uint32_t)x->bpp / 8;
+        uint32_t block = (uint32_t)(v / 8) * x->row_blocks + xb / 16;
         uint32_t byte = block * 128 + (uint32_t)(v % 8) * 16 + xb % 16;
-        off_bits = byte * 8 + (bpp == 4 ? (u & 1) * 4 : 0);
+        off_bits = byte * 8 + (x->bpp == 4 ? (u & 1) * 4 : 0);
     } else {
-        off_bits = ((uint32_t)v * stride + (uint32_t)u) * bpp;
+        off_bits = ((uint32_t)v * (uint32_t)x->stride + (uint32_t)u) * (uint32_t)x->bpp;
     }
-    const uint8_t *p = base + off_bits / 8;
-    switch (tpf) {
-    case 0: case 1: case 2: return decode16(*(const uint16_t *)p, tpf);
+    const uint8_t *p = x->base + off_bits / 8;
+    switch (x->tpf) {
+    case 0: case 1: case 2: return decode16(*(const uint16_t *)p, x->tpf);
     case 3: return *(const uint32_t *)p;
-    case 4: return clut_lookup((off_bits & 4) ? *p >> 4 : *p & 15);
-    case 5: return clut_lookup(*p);
-    case 6: return clut_lookup(*(const uint16_t *)p);
-    case 7: return clut_lookup(*(const uint32_t *)p);
-    default: unsupported("DXT textures"); return 0xFFFF00FF;
+    case 4: return clut_lookup(x, (off_bits & 4) ? *p >> 4 : *p & 15);
+    case 5: return clut_lookup(x, *p);
+    case 6: return clut_lookup(x, *(const uint16_t *)p);
+    case 7: return clut_lookup(x, *(const uint32_t *)p);
+    default: return 0xFFFF00FF; /* DXT */
     }
 }
 
-static int wrap(int c, int size, int clamp)
+static inline int wrap(int c, int size, int clamp)
 {
     if (clamp)
         return c < 0 ? 0 : c >= size ? size - 1 : c;
     return c & (size - 1);
 }
 
-/* Sample at texel coordinates (u, v) (texel centres at +0.5). */
-static uint32_t sample(float u, float v, bool magnify)
+/* (int)floorf(f) without the library call (SSE2 has no floor instruction). */
+static inline int ifloor(float f)
 {
-    int w = 1 << (arg(CMD_TSIZE0) & 15), h = 1 << ((arg(CMD_TSIZE0) >> 8) & 15);
-    int cu = arg(CMD_TWRAP) & 1, cv = (arg(CMD_TWRAP) >> 8) & 1;
-    int filter = magnify ? (arg(CMD_TFLT) >> 8) & 1 : arg(CMD_TFLT) & 1;
-    if (!filter)
-        return texel(wrap((int)floorf(u), w, cu), wrap((int)floorf(v), h, cv));
-    float fu = u - 0.5f, fv = v - 0.5f;
-    int u0 = (int)floorf(fu), v0 = (int)floorf(fv);
-    float au = fu - u0, av = fv - v0;
-    uint32_t t[4] = {
-        texel(wrap(u0, w, cu), wrap(v0, h, cv)), texel(wrap(u0 + 1, w, cu), wrap(v0, h, cv)),
-        texel(wrap(u0, w, cu), wrap(v0 + 1, h, cv)), texel(wrap(u0 + 1, w, cu), wrap(v0 + 1, h, cv)),
-    };
+    int i = (int)f;
+    return f < (float)i && i != INT_MIN ? i - 1 : i;
+}
+
+/* The four texels weighted per channel, in SSE lanes: the same float operations in
+ * the same order as one channel at a time, so the same result. */
+static inline uint32_t bilerp(uint32_t t0, uint32_t t1, uint32_t t2, uint32_t t3, float au, float av)
+{
+#ifdef __SSE2__
+    const __m128i z = _mm_setzero_si128();
+#define CH4(t) _mm_cvtepi32_ps(_mm_unpacklo_epi16(_mm_unpacklo_epi8(_mm_cvtsi32_si128((int)(t)), z), z))
+    __m128 c0 = CH4(t0), c1 = CH4(t1), c2 = CH4(t2), c3 = CH4(t3);
+#undef CH4
+    __m128 iu = _mm_set1_ps(1 - au), fu = _mm_set1_ps(au);
+    __m128 iv = _mm_set1_ps(1 - av), fv = _mm_set1_ps(av);
+    __m128 a = _mm_add_ps(_mm_mul_ps(c0, iu), _mm_mul_ps(c1, fu));
+    __m128 b = _mm_add_ps(_mm_mul_ps(c2, iu), _mm_mul_ps(c3, fu));
+    __m128 r = _mm_add_ps(_mm_add_ps(_mm_mul_ps(a, iv), _mm_mul_ps(b, fv)), _mm_set1_ps(0.5f));
+    __m128i i = _mm_cvttps_epi32(r);
+    i = _mm_packs_epi32(i, i);
+    i = _mm_packus_epi16(i, i);
+    return (uint32_t)_mm_cvtsi128_si32(i);
+#else
     uint32_t out = 0;
     for (int s = 0; s < 32; s += 8) {
-        float a = ((t[0] >> s) & 255) * (1 - au) + ((t[1] >> s) & 255) * au;
-        float b = ((t[2] >> s) & 255) * (1 - au) + ((t[3] >> s) & 255) * au;
+        float a = ((t0 >> s) & 255) * (1 - au) + ((t1 >> s) & 255) * au;
+        float b = ((t2 >> s) & 255) * (1 - au) + ((t3 >> s) & 255) * au;
         out |= (uint32_t)(a * (1 - av) + b * av + 0.5f) << s;
     }
     return out;
+#endif
+}
+
+/* Sample at texel coordinates (u, v) (texel centres at +0.5). */
+static inline uint32_t sample(const Tex *x, float u, float v, bool magnify)
+{
+    int filter = magnify ? x->filter_mag : x->filter_min;
+    if (!filter)
+        return texel(x, wrap(ifloor(u), x->w, x->cu), wrap(ifloor(v), x->h, x->cv));
+    float fu = u - 0.5f, fv = v - 0.5f;
+    int u0 = ifloor(fu), v0 = ifloor(fv);
+    float au = fu - u0, av = fv - v0;
+    int ua = wrap(u0, x->w, x->cu), ub = wrap(u0 + 1, x->w, x->cu);
+    int va = wrap(v0, x->h, x->cv), vb = wrap(v0 + 1, x->h, x->cv);
+    return bilerp(texel(x, ua, va), texel(x, ub, va), texel(x, ua, vb), texel(x, ub, vb), au, av);
 }
 
 /* ---- vertices ---- */
@@ -379,15 +454,37 @@ static void project(Vtx *v, const Clip *c)
 
 /* ---- pixels ---- */
 
+/* One primitive's drawing state, decoded from the registers once (target()). The
+ * per-pixel code below does the same arithmetic as reading the registers each time,
+ * in the same order, so it draws the same pixels. */
 typedef struct Target {
     uint8_t *fb;
     int fbw, psm;
     uint16_t *zb;
     int zbw;
-    int x0, y0, x1, y1; /* scissor, inclusive */
+    int x0, y0, x1, y1;     /* scissor, inclusive */
+    int bx0, by0, bx1, by1; /* the scissor within the buffer */
     bool clear;
     uint32_t cmode;
+    uint32_t clear_keep;    /* clear mode: the bits kept */
+    bool clear_z;
     bool tex, through;
+    Tex tx;
+    int tfunc;              /* texture function */
+    bool trgba, tdbl;
+    uint32_t tenv;
+    bool ate;               /* alpha test */
+    int at_func;
+    uint32_t at_ref, at_mask;
+    bool ste, ste_test;     /* stencil: enabled, and tested (not in 565) */
+    int st_func, sop_fail, sop_zfail, sop_zpass;
+    uint32_t st_ref, st_mask;
+    bool ztest, zwrite;
+    int z_func;
+    bool abe, blend_std;    /* blending; the usual src alpha / 1 - src alpha */
+    int sf, df, op;
+    uint32_t sfix, dfix;
+    uint32_t keep;          /* bits a write keeps (pixel masks, stencil) */
 } Target;
 
 static bool compare(int func, uint32_t a, uint32_t b)
@@ -404,20 +501,14 @@ static bool compare(int func, uint32_t a, uint32_t b)
     }
 }
 
-static uint32_t read_fb(const Target *t, int x, int y)
+static inline uint32_t read_fb(const Target *t, int x, int y)
 {
     if (t->psm == 3)
         return ((uint32_t *)t->fb)[y * t->fbw + x];
     return decode16(((uint16_t *)t->fb)[y * t->fbw + x], t->psm);
 }
 
-/* Stencil lives in the frame buffer's alpha bits. */
-static uint32_t stencil_of(const Target *t, uint32_t dst_raw_alpha)
-{
-    return dst_raw_alpha;
-}
-
-static void write_fb(const Target *t, int x, int y, uint32_t c, uint32_t keep_mask)
+static inline void write_fb(const Target *t, int x, int y, uint32_t c, uint32_t keep_mask)
 {
     if (t->psm == 3) {
         uint32_t *p = &((uint32_t *)t->fb)[y * t->fbw + x];
@@ -451,17 +542,47 @@ static uint32_t blend_factor(int sel, uint32_t src, uint32_t dst, uint32_t fix, 
     }
 }
 
-static uint32_t blend(uint32_t src, uint32_t dst)
+#ifdef __SSE2__
+/* x / 255 for 0 <= x <= 65025, in 16-bit lanes: (x + 1 + (x >> 8)) >> 8 is exact there. */
+static inline __m128i div255_epu16(__m128i x)
 {
-    uint32_t a = arg(CMD_ALPHA);
-    int sf = a & 15, df = (a >> 4) & 15, op = (a >> 8) & 15;
+    return _mm_srli_epi16(_mm_add_epi16(_mm_add_epi16(x, _mm_set1_epi16(1)), _mm_srli_epi16(x, 8)), 8);
+}
+
+static inline __m128i unpack4(uint32_t c)
+{
+    return _mm_unpacklo_epi8(_mm_cvtsi32_si128((int)c), _mm_setzero_si128());
+}
+
+static inline uint32_t pack4(__m128i v)
+{
+    return (uint32_t)_mm_cvtsi128_si32(_mm_packus_epi16(v, v));
+}
+#endif
+
+static inline uint32_t blend(const Target *t, uint32_t src, uint32_t dst)
+{
+    if (t->blend_std) {
+        /* (s * sa + d * (255 - sa)) / 255: at most 65025, so 16-bit lanes are exact. */
+        uint32_t sa = src >> 24;
+#ifdef __SSE2__
+        __m128i m = _mm_add_epi16(_mm_mullo_epi16(unpack4(src), _mm_set1_epi16((short)sa)),
+                                  _mm_mullo_epi16(unpack4(dst), _mm_set1_epi16((short)(255 - sa))));
+        return (pack4(div255_epu16(m)) & 0x00FFFFFFu) | (src & 0xFF000000u);
+#else
+        uint32_t out = src & 0xFF000000u;
+        for (int ch = 0; ch < 24; ch += 8)
+            out |= (((src >> ch) & 255) * sa + ((dst >> ch) & 255) * (255 - sa)) / 255 << ch;
+        return out;
+#endif
+    }
     uint32_t out = src & 0xFF000000u;
     for (int ch = 0; ch < 24; ch += 8) {
         int s = (src >> ch) & 255, d = (dst >> ch) & 255;
-        int fs = (int)blend_factor(sf, src, dst, arg(CMD_SFIX), ch, true);
-        int fd = (int)blend_factor(df, src, dst, arg(CMD_DFIX), ch, false);
+        int fs = (int)blend_factor(t->sf, src, dst, t->sfix, ch, true);
+        int fd = (int)blend_factor(t->df, src, dst, t->dfix, ch, false);
         int r;
-        switch (op) {
+        switch (t->op) {
         case 0: r = (s * fs + d * fd) / 255; break;
         case 1: r = (s * fs - d * fd) / 255; break;
         case 2: r = (d * fd - s * fs) / 255; break;
@@ -475,12 +596,18 @@ static uint32_t blend(uint32_t src, uint32_t dst)
     return out;
 }
 
-static uint32_t tex_function(uint32_t prim, uint32_t tex)
+static inline uint32_t tex_function(const Target *tg, uint32_t prim, uint32_t tex)
 {
-    uint32_t f = arg(CMD_TFUNC);
-    int func = f & 7;
-    bool rgba = (f >> 8) & 1, dbl = (f >> 16) & 1;
-    uint32_t env = arg(CMD_TEC);
+    int func = tg->tfunc;
+    bool rgba = tg->trgba, dbl = tg->tdbl;
+#ifdef __SSE2__
+    if (func == 0 && !dbl) {
+        /* Modulate: p * t / 255 in every channel (alpha only with RGBA). */
+        uint32_t m = pack4(div255_epu16(_mm_mullo_epi16(unpack4(prim), unpack4(tex))));
+        return rgba ? m : (m & 0x00FFFFFFu) | (prim & 0xFF000000u);
+    }
+#endif
+    uint32_t env = tg->tenv;
     uint32_t out = 0;
     for (int ch = 0; ch < 32; ch += 8) {
         int p = (prim >> ch) & 255, t = (tex >> ch) & 255, e = (env >> ch) & 255;
@@ -489,7 +616,6 @@ static uint32_t tex_function(uint32_t prim, uint32_t tex)
         if (alpha) {
             if (!rgba) r = p;
             else if (func == 1 || func == 3) r = func == 1 ? p : t;
-            else if (func == 4) r = p * t / 255;
             else r = p * t / 255;
         } else {
             int ta = tex >> 24;
@@ -511,13 +637,12 @@ static void stencil_op(const Target *t, int x, int y, int op)
 {
     if (t->psm == 0)
         return;
-    uint32_t sref = (arg(CMD_STST) >> 8) & 255;
     uint32_t dst = read_fb(t, x, y);
     uint32_t s = dst >> 24, n;
     switch (op) {
     case 0: return; /* keep */
     case 1: n = 0; break;
-    case 2: n = sref; break;
+    case 2: n = t->st_ref; break;
     case 3: n = ~s & 255; break;
     case 4: n = s < 255 ? s + 1 : 255; break;
     default: n = s ? s - 1 : 0; break;
@@ -525,53 +650,47 @@ static void stencil_op(const Target *t, int x, int y, int op)
     write_fb(t, x, y, (dst & 0xFFFFFF) | n << 24, 0x00FFFFFF);
 }
 
-static void plot(const Target *t, int x, int y, float z, uint32_t color, float u, float v, bool magnify)
+static inline void plot(const Target *t, int x, int y, float z, uint32_t color, float u, float v, bool magnify)
 {
-    if (x < t->x0 || x > t->x1 || y < t->y0 || y > t->y1 || x < 0 || y < 0 || x >= t->fbw || y >= 1024)
+    if (x < t->bx0 || x > t->bx1 || y < t->by0 || y > t->by1)
         return;
-    int zi = (int)(z + 0.5f);
-    zi = zi < 0 ? 0 : zi > 65535 ? 65535 : zi;
     g_ge.pixels++;
     if (t->clear) {
-        uint32_t keep = 0xFFFFFFFFu;
-        if (t->cmode & 0x100) keep &= 0xFF000000u;
-        if (t->cmode & 0x200) keep &= 0x00FFFFFFu;
-        if (keep != 0xFFFFFFFFu)
-            write_fb(t, x, y, color, keep);
-        if ((t->cmode & 0x400) && t->zb)
+        int zi = (int)(z + 0.5f);
+        zi = zi < 0 ? 0 : zi > 65535 ? 65535 : zi;
+        if (t->clear_keep != 0xFFFFFFFFu)
+            write_fb(t, x, y, color, t->clear_keep);
+        if (t->clear_z)
             t->zb[y * t->zbw + x] = (uint16_t)zi;
         return;
     }
     if (t->tex)
-        color = tex_function(color, sample(u, v, magnify));
-    if ((g_ge.reg[CMD_ATE] & 1)) {
-        uint32_t at = arg(CMD_ATST), m = (at >> 16) & 255;
-        if (!compare(at & 7, (color >> 24) & m, ((at >> 8) & 255) & m))
-            return;
-    }
-    if ((g_ge.reg[CMD_STE] & 1) && t->psm != 0) {
-        uint32_t st = arg(CMD_STST), m = (st >> 16) & 255;
-        uint32_t s = stencil_of(t, read_fb(t, x, y) >> 24);
-        if (!compare(st & 7, ((st >> 8) & 255) & m, s & m)) {
-            stencil_op(t, x, y, arg(CMD_SOP) & 7);
+        color = tex_function(t, color, sample(&t->tx, u, v, magnify));
+    if (t->ate && !compare(t->at_func, (color >> 24) & t->at_mask, t->at_ref & t->at_mask))
+        return;
+    if (t->ste_test) {
+        uint32_t s = read_fb(t, x, y) >> 24;
+        if (!compare(t->st_func, t->st_ref & t->st_mask, s & t->st_mask)) {
+            stencil_op(t, x, y, t->sop_fail);
             return;
         }
     }
-    bool ztest = (g_ge.reg[CMD_ZTE] & 1) && t->zb;
-    if (ztest && !compare(arg(CMD_ZTST) & 7, (uint32_t)zi, t->zb[y * t->zbw + x])) {
-        if (g_ge.reg[CMD_STE] & 1)
-            stencil_op(t, x, y, (arg(CMD_SOP) >> 8) & 7);
-        return;
+    int zi = 0;
+    if (t->ztest) {
+        zi = (int)(z + 0.5f);
+        zi = zi < 0 ? 0 : zi > 65535 ? 65535 : zi;
+        if (!compare(t->z_func, (uint32_t)zi, t->zb[y * t->zbw + x])) {
+            if (t->ste)
+                stencil_op(t, x, y, t->sop_zfail);
+            return;
+        }
     }
-    if (g_ge.reg[CMD_STE] & 1)
-        stencil_op(t, x, y, (arg(CMD_SOP) >> 16) & 7);
-    if (g_ge.reg[CMD_ABE] & 1)
-        color = blend(color, read_fb(t, x, y));
-    uint32_t keep = arg(CMD_PMSKC) | (g_ge.reg[CMD_PMSKA] & 255) << 24;
-    if (g_ge.reg[CMD_STE] & 1)
-        keep |= 0xFF000000u; /* alpha holds the stencil, already written */
-    write_fb(t, x, y, color, keep);
-    if (ztest && !(g_ge.reg[CMD_ZMSK] & 1))
+    if (t->ste)
+        stencil_op(t, x, y, t->sop_zpass);
+    if (t->abe)
+        color = blend(t, color, read_fb(t, x, y));
+    write_fb(t, x, y, color, t->keep);
+    if (t->zwrite)
         t->zb[y * t->zbw + x] = (uint16_t)zi;
 }
 
@@ -599,12 +718,56 @@ static bool target(Target *t, bool through)
     t->y0 = (arg(CMD_SCISSOR1) >> 10) & 0x3FF;
     t->x1 = arg(CMD_SCISSOR2) & 0x3FF;
     t->y1 = (arg(CMD_SCISSOR2) >> 10) & 0x3FF;
+    t->bx0 = t->x0 > 0 ? t->x0 : 0;
+    t->by0 = t->y0 > 0 ? t->y0 : 0;
+    t->bx1 = t->x1 < t->fbw - 1 ? t->x1 : t->fbw - 1;
+    t->by1 = t->y1 < 1023 ? t->y1 : 1023;
     t->clear = g_ge.reg[CMD_CMODE] & 1;
     t->cmode = arg(CMD_CMODE);
+    t->clear_keep = 0xFFFFFFFFu;
+    if (t->cmode & 0x100) t->clear_keep &= 0xFF000000u;
+    if (t->cmode & 0x200) t->clear_keep &= 0x00FFFFFFu;
+    t->clear_z = (t->cmode & 0x400) && t->zb;
     t->tex = (g_ge.reg[CMD_TME] & 1) && !t->clear;
     t->through = through;
     if (t->tex && (arg(CMD_TMAP) & 3) != 0)
         unsupported("texture projection/environment mapping");
+    if (t->tex) {
+        tex_setup(&t->tx);
+        uint32_t f = arg(CMD_TFUNC);
+        t->tfunc = f & 7;
+        t->trgba = (f >> 8) & 1;
+        t->tdbl = (f >> 16) & 1;
+        t->tenv = arg(CMD_TEC);
+    }
+    uint32_t at = arg(CMD_ATST);
+    t->ate = g_ge.reg[CMD_ATE] & 1;
+    t->at_func = at & 7;
+    t->at_ref = (at >> 8) & 255;
+    t->at_mask = (at >> 16) & 255;
+    uint32_t st = arg(CMD_STST), sop = arg(CMD_SOP);
+    t->ste = g_ge.reg[CMD_STE] & 1;
+    t->ste_test = t->ste && t->psm != 0;
+    t->st_func = st & 7;
+    t->st_ref = (st >> 8) & 255;
+    t->st_mask = (st >> 16) & 255;
+    t->sop_fail = sop & 7;
+    t->sop_zfail = (sop >> 8) & 7;
+    t->sop_zpass = (sop >> 16) & 7;
+    t->ztest = (g_ge.reg[CMD_ZTE] & 1) && t->zb;
+    t->zwrite = t->ztest && !(g_ge.reg[CMD_ZMSK] & 1);
+    t->z_func = arg(CMD_ZTST) & 7;
+    uint32_t a = arg(CMD_ALPHA);
+    t->abe = g_ge.reg[CMD_ABE] & 1;
+    t->sf = a & 15;
+    t->df = (a >> 4) & 15;
+    t->op = (a >> 8) & 15;
+    t->sfix = arg(CMD_SFIX);
+    t->dfix = arg(CMD_DFIX);
+    t->blend_std = t->sf == 2 && t->df == 3 && t->op == 0;
+    t->keep = arg(CMD_PMSKC) | (g_ge.reg[CMD_PMSKA] & 255) << 24;
+    if (t->ste)
+        t->keep |= 0xFF000000u; /* alpha holds the stencil, already written */
     return t->fbw > 0;
 }
 
@@ -633,14 +796,116 @@ static void draw_sprite(const Target *t, const Vtx *a, const Vtx *b)
     uint32_t color = pack(b->c);
     float du = xb > xa ? (ub - ua) / (xb - xa) : 0, dv = yb > ya ? (vb - va) / (yb - ya) : 0;
     bool mag = fabsf(du) < 1.0f && fabsf(dv) < 1.0f;
-    for (int y = y0 < t->y0 ? t->y0 : y0; y < y1 && y <= t->y1; y++)
-        for (int x = x0 < t->x0 ? t->x0 : x0; x < x1 && x <= t->x1; x++)
-            plot(t, x, y, b->z, color, ua + (x + 0.5f - xa) * du, va + (y + 0.5f - ya) * dv, mag);
+    /* Only the pixels plot() would keep: the scissor within the buffer. */
+    int ys = y0 < t->by0 ? t->by0 : y0, ye = y1 - 1 < t->by1 ? y1 - 1 : t->by1;
+    int xs = x0 < t->bx0 ? t->bx0 : x0, xe = x1 - 1 < t->bx1 ? x1 - 1 : t->bx1;
+    if (t->clear) {
+        /* What plot() does in clear mode, a row at a time. */
+        if (xs > xe || ys > ye)
+            return;
+        int zi = (int)(b->z + 0.5f);
+        zi = zi < 0 ? 0 : zi > 65535 ? 65535 : zi;
+        uint32_t keep = t->clear_keep;
+        uint16_t n16 = 0, keep16 = 0;
+        if (t->psm != 3) {
+            n16 = encode16(color, t->psm);
+            keep16 = encode16(keep, t->psm);
+            if (t->psm == 1)
+                keep16 = (uint16_t)((keep16 & 0x7FFF) | ((keep >> 24) ? 0x8000 : 0));
+        }
+        for (int y = ys; y <= ye; y++) {
+            if (keep != 0xFFFFFFFFu) {
+                if (t->psm == 3) {
+                    uint32_t *p = (uint32_t *)t->fb + (size_t)y * t->fbw;
+                    if (keep == 0)
+                        for (int x = xs; x <= xe; x++) p[x] = color;
+                    else
+                        for (int x = xs; x <= xe; x++) p[x] = (p[x] & keep) | (color & ~keep);
+                } else {
+                    uint16_t *p = (uint16_t *)t->fb + (size_t)y * t->fbw;
+                    for (int x = xs; x <= xe; x++) p[x] = (uint16_t)((p[x] & keep16) | (n16 & ~keep16));
+                }
+            }
+            if (t->clear_z) {
+                uint16_t *z = t->zb + (size_t)y * t->zbw;
+                for (int x = xs; x <= xe; x++) z[x] = (uint16_t)zi;
+            }
+        }
+        g_ge.pixels += (uint32_t)((xe - xs + 1) * (ye - ys + 1));
+        return;
+    }
+    for (int y = ys; y <= ye; y++) {
+        float v = va + (y + 0.5f - ya) * dv;
+        for (int x = xs; x <= xe; x++)
+            plot(t, x, y, b->z, color, ua + (x + 0.5f - xa) * du, v, mag);
+    }
 }
 
 static float edge(const Vtx *a, const Vtx *b, float x, float y)
 {
     return (b->x - a->x) * (y - a->y) - (b->y - a->y) * (x - a->x);
+}
+
+/* One row of a triangle: the edge functions' parts that only depend on the row. */
+typedef struct TriRow {
+    float py, a12, a20; /* (v2 - v1).x * (py - v1.y), (v0 - v2).x * (py - v2.y) */
+} TriRow;
+
+typedef struct Tri {
+    const Vtx *v0, *v1, *v2;
+    float area;
+} Tri;
+
+/* edge(v1, v2, px, py) and edge(v2, v0, px, py), with the row's parts precomputed:
+ * the same operations in the same order. */
+static inline float e12(const Tri *r, const TriRow *w, float px)
+{
+    return w->a12 - (r->v2->y - r->v1->y) * (px - r->v1->x);
+}
+
+static inline float e20(const Tri *r, const TriRow *w, float px)
+{
+    return w->a20 - (r->v0->y - r->v2->y) * (px - r->v2->x);
+}
+
+/* The coverage test of draw_triangle for pixel x of the row. */
+static inline bool covered(const Tri *r, const TriRow *w, int x, float *pw0, float *pw1, float *pw2)
+{
+    float px = x + 0.5f;
+    float w0 = e12(r, w, px) / r->area, w1 = e20(r, w, px) / r->area;
+    float w2 = 1 - w0 - w1;
+    if (w0 < 0 || w1 < 0 || w2 < 0)
+        return false;
+    /* Shared edges: only draw pixels exactly on an edge for one side. */
+    if ((w0 == 0 && e12(r, w, px + 1) / r->area < 0) || (w1 == 0 && e20(r, w, px + 1) / r->area < 0) ||
+        (w2 == 0 && edge(r->v0, r->v1, px + 1, w->py) / r->area < 0))
+        return false;
+    *pw0 = w0;
+    *pw1 = w1;
+    *pw2 = w2;
+    return true;
+}
+
+/* Where along the row the edge from a to b is on the inside (s: the sign of the
+ * area), narrowing [lo, hi]; false when no pixel centre can be. Approximate: the
+ * caller widens it and tests every pixel exactly. */
+static bool edge_span(const Vtx *a, const Vtx *b, float py, float s, bool exact, float *lo, float *hi)
+{
+    float k = (b->x - a->x) * (py - a->y) * s, d = (b->y - a->y) * s;
+    /* inside: k - d * (px - a.x) >= 0. With d 0 the edge function is exactly k for
+     * w0 and w1; w2 is 1 - w0 - w1, which can round the other way, so it never rules
+     * a row out. */
+    if (d == 0)
+        return k >= 0 || !exact;
+    float x = a->x + k / d;
+    if (!isfinite(x))
+        return true;
+    if (d > 0) {
+        if (x < *hi) *hi = x;
+    } else if (x > *lo) {
+        *lo = x;
+    }
+    return true;
 }
 
 static void draw_triangle(const Target *t, const Vtx *v0, const Vtx *v1, const Vtx *v2, bool gouraud)
@@ -661,10 +926,17 @@ static void draw_triangle(const Target *t, const Vtx *v0, const Vtx *v1, const V
     if (y0 < t->y0) y0 = t->y0;
     if (x1 > t->x1) x1 = t->x1;
     if (y1 > t->y1) y1 = t->y1;
-    float uv[3][2];
-    texcoords(t, v0, &uv[0][0], &uv[0][1]);
-    texcoords(t, v1, &uv[1][0], &uv[1][1]);
-    texcoords(t, v2, &uv[2][0], &uv[2][1]);
+    /* plot() drops pixels outside the buffer, so they needn't be visited. */
+    if (x0 < t->bx0) x0 = t->bx0;
+    if (y0 < t->by0) y0 = t->by0;
+    if (x1 > t->bx1) x1 = t->bx1;
+    if (y1 > t->by1) y1 = t->by1;
+    float uv[3][2] = {{0}};
+    if (t->tex) {
+        texcoords(t, v0, &uv[0][0], &uv[0][1]);
+        texcoords(t, v1, &uv[1][0], &uv[1][1]);
+        texcoords(t, v2, &uv[2][0], &uv[2][1]);
+    }
     /* Perspective-correct texture coordinates outside through mode. */
     float iw[3] = {1, 1, 1};
     if (!t->through) {
@@ -672,20 +944,42 @@ static void draw_triangle(const Target *t, const Vtx *v0, const Vtx *v1, const V
         iw[1] = 1 / v1->w;
         iw[2] = 1 / v2->w;
     }
+    bool need_z = t->clear ? t->clear_z : t->ztest;
     uint32_t flat = pack(v2->c);
-    for (int y = y0; y <= y1; y++)
-        for (int x = x0; x <= x1; x++) {
-            float px = x + 0.5f, py = y + 0.5f;
-            float w0 = edge(v1, v2, px, py) / area, w1 = edge(v2, v0, px, py) / area;
-            float w2 = 1 - w0 - w1;
-            if (w0 < 0 || w1 < 0 || w2 < 0)
+    Tri r = {v0, v1, v2, area};
+    float s = area > 0 ? 1.0f : -1.0f;
+    /* Far outside the screen the edge functions lose precision: test the whole row. */
+    float big = fmaxf(fmaxf(fabsf(minx), fabsf(maxx)), fmaxf(fabsf(miny), fabsf(maxy)));
+    bool estimate = big < 16384.0f;
+    for (int y = y0; y <= y1; y++) {
+        TriRow w;
+        w.py = y + 0.5f;
+        w.a12 = (v2->x - v1->x) * (w.py - v1->y);
+        w.a20 = (v0->x - v2->x) * (w.py - v2->y);
+        /* An estimate of the covered span, widened, then grown while the exact test
+         * still passes at either end. */
+        float lo = -1e30f, hi = 1e30f;
+        if (estimate && (!edge_span(v1, v2, w.py, s, true, &lo, &hi) || !edge_span(v2, v0, w.py, s, true, &lo, &hi) ||
+                         !edge_span(v0, v1, w.py, s, false, &lo, &hi)))
+            lo = 1e30f, hi = -1e30f;
+        int xs = x0, xe = x1;
+        if (lo > -1e29f && lo - 2.5f > (float)x0) xs = (int)(lo - 2.5f);
+        if (hi < 1e29f && hi + 2.5f < (float)x1) xe = (int)(hi + 2.5f);
+        float d0, d1, d2;
+        if (lo > hi + 4.0f) {
+            xs = x0;
+            xe = x0 - 1; /* clearly empty */
+        } else {
+            while (xs > x0 && covered(&r, &w, xs - 1, &d0, &d1, &d2))
+                xs--;
+            while (xe < x1 && covered(&r, &w, xe + 1, &d0, &d1, &d2))
+                xe++;
+        }
+        for (int x = xs; x <= xe; x++) {
+            float w0, w1, w2;
+            if (!covered(&r, &w, x, &w0, &w1, &w2))
                 continue;
-            /* Shared edges: only draw pixels exactly on an edge for one side. */
-            if ((w0 == 0 && edge(v1, v2, px + 1, py) / area < 0) ||
-                (w1 == 0 && edge(v2, v0, px + 1, py) / area < 0) ||
-                (w2 == 0 && edge(v0, v1, px + 1, py) / area < 0))
-                continue;
-            float z = w0 * v0->z + w1 * v1->z + w2 * v2->z;
+            float z = need_z ? w0 * v0->z + w1 * v1->z + w2 * v2->z : 0;
             uint32_t color = flat;
             if (gouraud) {
                 float c[4];
@@ -693,11 +987,56 @@ static void draw_triangle(const Target *t, const Vtx *v0, const Vtx *v1, const V
                     c[i] = w0 * v0->c[i] + w1 * v1->c[i] + w2 * v2->c[i];
                 color = pack(c);
             }
-            float q = w0 * iw[0] + w1 * iw[1] + w2 * iw[2];
-            float u = (w0 * uv[0][0] * iw[0] + w1 * uv[1][0] * iw[1] + w2 * uv[2][0] * iw[2]) / q;
-            float v = (w0 * uv[0][1] * iw[0] + w1 * uv[1][1] * iw[1] + w2 * uv[2][1] * iw[2]) / q;
+            float u = 0, v = 0;
+            if (t->tex) {
+                float q = w0 * iw[0] + w1 * iw[1] + w2 * iw[2];
+                u = (w0 * uv[0][0] * iw[0] + w1 * uv[1][0] * iw[1] + w2 * uv[2][0] * iw[2]) / q;
+                v = (w0 * uv[0][1] * iw[0] + w1 * uv[1][1] * iw[1] + w2 * uv[2][1] * iw[2]) / q;
+            }
             plot(t, x, y, z, color, u, v, true);
         }
+    }
+}
+
+/* Narrows [*lo, *hi) to the steps i whose coordinate floorf(p + d * (i / steps)) lies
+ * in [c0, c1], that is p + d * (i / steps) >= c0 and < c1 + 1. The coordinate only
+ * moves one way as i grows (float division, multiplication and addition are
+ * monotonic), so those steps are one run, found by binary search on the same
+ * expression. */
+static float line_at(float p, float d, int i, int steps)
+{
+    return p + d * ((float)i / steps);
+}
+
+/* The first i in [0, steps] for which (line_at(i) >= edge) == want, given that it
+ * only changes from false to true as i grows. */
+static int line_first(float p, float d, int steps, float edge, bool want)
+{
+    int l = 0, h = steps;
+    while (l < h) {
+        int m = l + (h - l) / 2;
+        if ((line_at(p, d, m, steps) >= edge) == want)
+            h = m;
+        else
+            l = m + 1;
+    }
+    return l;
+}
+
+static void line_steps(float p, float d, int steps, int c0, int c1, int *lo, int *hi)
+{
+    if (!isfinite(p) || !isfinite(d))
+        return; /* keep every step */
+    int a, b;
+    if (d >= 0) {
+        a = line_first(p, d, steps, (float)c0, true);      /* >= c0 from here */
+        b = line_first(p, d, steps, (float)c1 + 1, true);  /* >= c1 + 1 from here */
+    } else {
+        a = line_first(p, d, steps, (float)c1 + 1, false); /* < c1 + 1 from here */
+        b = line_first(p, d, steps, (float)c0, false);     /* < c0 from here */
+    }
+    if (a > *lo) *lo = a;
+    if (b < *hi) *hi = b;
 }
 
 static void draw_line(const Target *t, const Vtx *a, const Vtx *b)
@@ -709,7 +1048,11 @@ static void draw_line(const Target *t, const Vtx *a, const Vtx *b)
     float ua, va, ub, vb;
     texcoords(t, a, &ua, &va);
     texcoords(t, b, &ub, &vb);
-    for (int i = 0; i < steps; i++) {
+    /* A line can end far off screen: only step where plot() would draw. */
+    int lo = 0, hi = steps;
+    line_steps(a->x, dx, steps, t->bx0, t->bx1, &lo, &hi);
+    line_steps(a->y, dy, steps, t->by0, t->by1, &lo, &hi);
+    for (int i = lo; i < hi; i++) {
         float s = (float)i / steps, c[4];
         for (int k = 0; k < 4; k++)
             c[k] = a->c[k] + (b->c[k] - a->c[k]) * s;
@@ -765,6 +1108,14 @@ static void clip_triangle(const Target *t, Vtx *in, Clip *cin, bool gouraud)
     }
 }
 
+/* --perf: the rasterizer's share of the GE time. */
+#define RASTER(call)                              \
+    do {                                          \
+        uint64_t perf_t0_ = PERF_BEGIN();         \
+        call;                                     \
+        psp_perf_end(PERF_RASTER, perf_t0_);      \
+    } while (0)
+
 static void do_prim(uint32_t data)
 {
     int type = (data >> 16) & 7, count = data & 0xFFFF;
@@ -809,7 +1160,7 @@ static void do_prim(uint32_t data)
                 if (c.w <= 1e-6f) break;
                 project(&v, &c);
             }
-            plot(&t, (int)floorf(v.x), (int)floorf(v.y), v.z, pack(v.c), v.u, v.v, true);
+            RASTER(plot(&t, (int)floorf(v.x), (int)floorf(v.y), v.z, pack(v.c), v.u, v.v, true));
             break;
         case 1: case 2: /* lines, line strip */
             if (!f.through) {
@@ -817,7 +1168,7 @@ static void do_prim(uint32_t data)
                 project(&v, &c);
             }
             if (have && (type == 2 || (i & 1)))
-                draw_line(&t, &win[0], &v);
+                RASTER(draw_line(&t, &win[0], &v));
             win[0] = v;
             have = 1;
             break;
@@ -827,7 +1178,7 @@ static void do_prim(uint32_t data)
                 project(&v, &c);
             }
             if (i & 1)
-                draw_sprite(&t, &win[0], &v);
+                RASTER(draw_sprite(&t, &win[0], &v));
             win[0] = v;
             break;
         default: { /* triangles, strip, fan */
@@ -865,9 +1216,9 @@ static void do_prim(uint32_t data)
                 tri[2] = win[1]; ctri[2] = cwin[1];
             }
             if (f.through)
-                draw_triangle(&t, &tri[0], &tri[1], &tri[2], gouraud);
+                RASTER(draw_triangle(&t, &tri[0], &tri[1], &tri[2], gouraud));
             else
-                clip_triangle(&t, tri, ctri, gouraud);
+                RASTER(clip_triangle(&t, tri, ctri, gouraud));
             break;
         }
         }
@@ -997,6 +1348,7 @@ static void run_list(GeList *l)
             uint32_t addr = arg(CMD_CBP) | (g_ge.reg[CMD_CBPH] & 0xFF0000) << 8;
             uint32_t bytes = (a & 0x3F) * 32;
             memcpy(g_ge.clut, psp_ge_ptr(addr), bytes > sizeof g_ge.clut ? sizeof g_ge.clut : bytes);
+            g_clut_gen++; /* the decoded table is stale */
             break;
         }
         case CMD_TRXKICK: g_ge.reg[cmd] = op; do_transfer(); break;
@@ -1038,7 +1390,9 @@ static int enqueue(const void *list, void *stall, int cbid, void *argp, bool hea
         l->stall = (uint32_t)(uintptr_t)stall;
         l->cbid = cbid;
         l->arg = argp;
+        uint64_t t0 = PERF_BEGIN();
         run_list(l);
+        psp_perf_end(PERF_GE, t0);
         r = l->id;
     }
     SDL_UnlockMutex(g_ge_lock);
@@ -1081,7 +1435,9 @@ int32_t sceGeListUpdateStallAddr(int qid, void *stall)
     for (int i = 0; i < MAX_LISTS; i++)
         if (g_lists[i].used && g_lists[i].id == qid) {
             g_lists[i].stall = (uint32_t)(uintptr_t)stall;
+            uint64_t t0 = PERF_BEGIN();
             run_list(&g_lists[i]);
+            psp_perf_end(PERF_GE, t0);
             r = 0;
             break;
         }
@@ -1157,4 +1513,9 @@ int32_t sceGeContinue(void)
 uint32_t psp_ge_stats_prims(void)
 {
     return g_ge.prims;
+}
+
+uint32_t psp_ge_stats_pixels(void)
+{
+    return g_ge.pixels;
 }

@@ -15,6 +15,8 @@
  *   --mute            no sound output (the sound code still runs, timed by the clock)
  *   --tone            play a 1 s 440 Hz tone through sceAudio and exit (an audio check)
  *   --skip-movie      don't play the opening movie (movie/che_op.pmf)
+ *   --perf            log frame times and where they go every 120 frames, and battle
+ *                     loading times (see docs/graphics.md, "Performance")
  *   --audio-driver NAME  SDL's audio driver (pulseaudio, pipewire, alsa, dummy...;
  *                     default: SDL's choice, or $SDL_AUDIO_DRIVER)
  *   --frames N        quit after N frames (for scripted runs). With --startup, N frames
@@ -163,6 +165,8 @@ int main(int argc, char **argv)
             test_save = i + 1 < argc && strncmp(argv[i + 1], "--", 2) ? argv[++i] : "TESTDATA";
         else if (!strcmp(argv[i], "--mute"))
             psp_audio_set_mute(true);
+        else if (!strcmp(argv[i], "--perf"))
+            psp_perf_enable(true);
         else if (!strcmp(argv[i], "--skip-movie"))
             movie_set_skip_all(true);
         else if (!strcmp(argv[i], "--tone"))
@@ -214,7 +218,7 @@ int main(int argc, char **argv)
                                                                                        : "orig/first_frame.png");
         else {
             fprintf(stderr,
-                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--startup] [--trace] [--frames N] [--scale N] "
+                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--perf] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
                     "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
                     argv[0]);

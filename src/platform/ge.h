@@ -32,6 +32,11 @@ uint8_t *psp_ge_ptr(uint32_t addr);
 /* Primitives drawn so far into the frame buffer at VRAM offset fb_offset. */
 uint32_t psp_ge_prims_into(uint32_t fb_offset);
 
+/* Totals since start, for --perf: primitives, and pixels that reached the per-pixel
+ * tests (inside the scissor). */
+uint32_t psp_ge_stats_prims(void);
+uint32_t psp_ge_stats_pixels(void);
+
 /* Log every GE command executed (with --gu-trace). */
 void psp_ge_set_trace(bool on);
 

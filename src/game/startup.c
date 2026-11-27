@@ -35,6 +35,7 @@
 #include "heap.h"
 #include "psp_imports.h"
 #include "render.h"
+#include "psp_shim.h"
 
 const char *g_startup_stop_reason = "user_main has not run";
 int g_startup_status = -1;
@@ -382,6 +383,7 @@ static void main_loop(void)
          * manager), with dt = the frame's vertical blanks / 60. Sound and timers aren't
          * ported. */
         int step = render_interval(gfx);
+        uint64_t perf_t0 = PERF_BEGIN();
         pad_update(step);
         sound_update();
         float dt = (float)step * (1.0f / 60.0f);
@@ -409,6 +411,7 @@ static void main_loop(void)
             entrance_start();
             entrance_running = 1;
         }
+        psp_perf_end(PERF_LOGIC, perf_t0);
         render_end_frame(gfx);
         if (frame + 1 == (uint32_t)g_startup_gu_trace_frames)
             psp_gu_set_trace(false);

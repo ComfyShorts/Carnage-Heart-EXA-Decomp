@@ -651,7 +651,7 @@ static void draw_parts(int x, int y)
         ui_text(nz(part_name(item, id)), id == now ? small_color(0xFF206020) : dark(), x + 12, ry, 1.0f);
     }
     if (g.part_count > PART_ROWS) {
-        char pos[16];
+        char pos[24]; /* two ints and a slash */
         snprintf(pos, sizeof pos, "%d/%d", g.part_cursor + 1, g.part_count);
         ui_text(pos, small(), x + w - 44, y + 8, 1.0f);
     }
