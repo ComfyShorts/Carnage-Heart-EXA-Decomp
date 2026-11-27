@@ -53,27 +53,32 @@ add_executable(chexa-io-test tests/io_test.c)
 chexa_target_setup(chexa-io-test)
 target_link_libraries(chexa-io-test PRIVATE chexa_core)
 
+add_executable(chexa-gu-test tests/gu_test.c)
+chexa_target_setup(chexa-gu-test)
+target_link_libraries(chexa-gu-test PRIVATE chexa_core)
+
 # Tests that need the game's files are skipped (exit 77) when they aren't found.
 # Point them at your dump with CHEXA_DISC=/path/to/disc-root.
 enable_testing()
 add_test(NAME io_disc COMMAND chexa-io-test)
+add_test(NAME gu_render COMMAND chexa-gu-test)
 add_test(NAME pgchip_one_record COMMAND chexa-pgchip-test --ticks 20 -q)
 add_test(NAME pgchip_all_records COMMAND chexa-pgchip-test --all --ticks 600)
-# The game's start-up path up to the first graphics call, with no window shown.
+# The game's start-up path into the main loop: 30 frames drawn, then the HOME-menu exit.
 set(CHEXA_TEST_DISC "$ENV{CHEXA_DISC}")
 if(NOT CHEXA_TEST_DISC)
   set(CHEXA_TEST_DISC /mnt/c/psp/chexa)
 endif()
-add_test(NAME startup_path COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup --frames 6000)
+add_test(NAME startup_path COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup --frames 30)
 set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
-                     PASS_REGULAR_EXPRESSION "start-up path ended: CApplication::Init step 14")
+                     PASS_REGULAR_EXPRESSION "the game called sceKernelExitGame")
 set_tests_properties(io_disc pgchip_one_record pgchip_all_records startup_path PROPERTIES SKIP_RETURN_CODE 77)
 
 # SDL loads libX11 and friends at runtime with dlopen. With the user-local sysroot those
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not
 # RUNPATH) also covers their own dependencies, such as libxcb.
 if(PCPORT_I386_LIBDIR)
-  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test)
+  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test)
     set_target_properties(${exe} PROPERTIES BUILD_RPATH "${PCPORT_I386_LIBDIR}")
     target_link_options(${exe} PRIVATE "-Wl,--disable-new-dtags")
   endforeach()

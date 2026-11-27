@@ -9,11 +9,13 @@
  *                                  (0x000024B0, the per-frame main loop)
  *   CApplication::Init 0x00001714  everything below up to the graphics start-up
  *
- * The port stops inside CApplication::Init just before CGraphics::GetInstance
- * (0x0031C5C0) and its GU initialisation (0x0031BE38 -> 0x00371608, PSPSDK's
- * sceGuInit: sceGeEdramGetAddr, sceKernelCreateEventFlag("SceGuSignal"),
- * sceGeSetCallback, sceGeListEnQueue, sceGeListSync, sceGeDrawSync). That is the
- * first step that needs real graphics. */
+ * CApplication::Init runs up to the GU initialisation (CGraphics, src/game/render.c);
+ * the sound, the game's managers and the "gamecommon" file set after it are skipped.
+ * main then runs the graphics half of CApplication::Start (display set-up, the first
+ * screen's clear colour) and a frame loop that does what the real main loop does for
+ * the screen each frame (CRender's frame end), until the HOME menu's exit callback
+ * calls sceKernelExitGame. The screens and the scene code aren't ported, so nothing
+ * but the clear is drawn. */
 #include "startup.h"
 
 #include <stdint.h>
@@ -22,11 +24,14 @@
 #include <SDL3/SDL.h>
 
 #include "fileio.h"
+#include "gu.h"
 #include "heap.h"
 #include "psp_imports.h"
+#include "render.h"
 
 const char *g_startup_stop_reason = "user_main has not run";
 int g_startup_status = -1;
+int g_startup_gu_trace_frames;
 
 /* ---- newlib heap: sbrk and memalign ---- */
 
@@ -313,17 +318,52 @@ static int application_init(void)
     /* 13. Controller. */
     pad_init();
 
-    /* 14. CGraphics::GetInstance() and GU start-up: the first real graphics. */
-    g_startup_stop_reason =
-        "CApplication::Init step 14: CGraphics::GetInstance (FUN_08b205c0) then GU init "
-        "(FUN_08b1fe38 -> FUN_08b75608, sceGuInit): needs a GE/display implementation";
-    SDL_Log("[startup] stopping before CGraphics::GetInstance + sceGuInit (first real graphics)");
+    /* 14. CGraphics::GetInstance() and GU start-up. */
+    Render *gfx = render_instance();
+    if (!gfx) {
+        SDL_Log("[startup] CGraphics::GetInstance: out of memory");
+        return -1;
+    }
+    psp_gu_set_trace(g_startup_gu_trace_frames > 0);
+    render_gu_init(gfx);
+
+    /* 15-21, not ported yet: CSound (0x121A0 bytes) and its start-up; the timers,
+     * utility, pad and file managers (FUN_08b1f904 .. FUN_089f2ecc); the save-data
+     * manager; the "gamecommon" file set into the default heap; the sound bank; and
+     * AssignSpecialBufferToUtilitySave, which hands the step-7 buffer to the save
+     * dialogs. */
+    SDL_Log("[startup] CApplication::Init: skipping CSound, the managers and the \"gamecommon\" file set "
+            "(not ported)");
     SDL_Log("[startup] state: default heap %u KiB used of %u, fast heap %u KiB, boot set slot %d, "
             "SJIS tables %s, first random number 0x%08X",
             (unsigned)(g_default_heap.used / 1024), (unsigned)(g_default_heap.size / 1024),
             (unsigned)(g_fast_heap.size / 1024), boot_set,
             g_sjis_to_ucs && g_ucs_to_sjis ? "loaded" : "missing", (unsigned)rng_next(&g_rng));
     return 0;
+}
+
+/* ---- main loop ---- */
+
+/* The graphics part of CApplication::Start (FUN_08806960) and of the main loop
+ * (FUN_088064b0). Runs until the exit callback ends the thread in sceKernelExitGame. */
+static void main_loop(void)
+{
+    Render *gfx = render_instance();
+    render_setup_display(gfx, 1);
+    /* The first screen's constructor (FUN_088f1d98, CSceneBoot or similar) sets a black
+     * clear colour; its child screens and the net-play dialogs aren't ported. */
+    render_set_clear_color(gfx, 0);
+    g_startup_stop_reason = "main loop: frames run until sceKernelExitGame";
+    SDL_Log("[startup] CApplication::Start: display on; entering the main loop (screens not ported, "
+            "only the clear is drawn)");
+    for (uint32_t frame = 0;; frame++) {
+        if (g_startup_gu_trace_frames > 0 && frame < (uint32_t)g_startup_gu_trace_frames)
+            SDL_Log("[gu] ---- frame %u ----", (unsigned)frame);
+        /* Before this the real loop updates the scene, sound, timers and pad. */
+        render_end_frame(gfx);
+        if (frame + 1 == (uint32_t)g_startup_gu_trace_frames)
+            psp_gu_set_trace(false);
+    }
 }
 
 /* ---- main (0x0013BE0C) ---- */
@@ -336,8 +376,9 @@ static int game_main(int argc, char **argv)
      * globals (no imports) that nothing before the stop point reads; not written yet. */
     if (application_init() != 0)
         return 1;
-    /* Next in main: CApplication object (0x00001C64), then its run loop (0x000024B0),
-     * which never returns on the PSP. */
+    /* The CApplication object (0x00001C64), then its run loop (0x000024B0), which never
+     * returns on the PSP. */
+    main_loop();
     return 0;
 }
 

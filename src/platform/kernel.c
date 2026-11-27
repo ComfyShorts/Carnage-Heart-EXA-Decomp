@@ -26,7 +26,7 @@
 
 /* ---- object table ---- */
 
-typedef enum ObjKind { OBJ_FREE, OBJ_THREAD, OBJ_CALLBACK, OBJ_MUTEX, OBJ_BLOCK } ObjKind;
+typedef enum ObjKind { OBJ_FREE, OBJ_THREAD, OBJ_CALLBACK, OBJ_MUTEX, OBJ_BLOCK, OBJ_EVENTFLAG } ObjKind;
 
 typedef struct PspThread {
     char name[32];
@@ -62,6 +62,14 @@ typedef struct PspMutex {
     int count;
 } PspMutex;
 
+typedef struct PspEventFlag {
+    char name[32];
+    uint32_t attr;
+    uint32_t bits;
+    SDL_Mutex *lock;
+    SDL_Condition *cond;
+} PspEventFlag;
+
 typedef struct PspBlock {
     char name[32];
     void *raw;  /* what malloc returned */
@@ -84,6 +92,8 @@ typedef struct Obj {
 #define SCE_KERNEL_ERROR_UNKNOWN_CBID     0x800201A2
 #define SCE_KERNEL_ERROR_UNKNOWN_MUTEXID  0x800201C3
 #define SCE_KERNEL_ERROR_UNKNOWN_UID      0x800200CB
+#define SCE_KERNEL_ERROR_UNKNOWN_EVFID    0x800201A9
+#define SCE_KERNEL_ERROR_EVF_ILPAT        0x800201AE
 #define SCE_KERNEL_ERROR_MUTEX_LOCK_OVF   0x800201C5
 #define SCE_KERNEL_ERROR_MUTEX_UNLOCKED   0x800201C7
 #define SCE_KERNEL_ERROR_MUTEX_RECURSIVE  0x800201C4
@@ -644,6 +654,143 @@ int32_t sceKernelUnlockMutex(SceUID id, int count)
         SDL_UnlockMutex(m->lock);
     }
     PSP_TRACE(r, "%d, %d", (int)id, count);
+    return r;
+}
+
+/* ---- event flags ---- */
+
+#define PSP_EVENT_WAITOR 0x01
+#define PSP_EVENT_WAITCLEARALL 0x10
+#define PSP_EVENT_WAITCLEAR 0x20
+
+SceUID sceKernelCreateEventFlag(const char *name, uint32_t attr, uint32_t bits, void *option)
+{
+    PspEventFlag *e = calloc(1, sizeof *e);
+    copy_name(e->name, name);
+    e->attr = attr;
+    e->bits = bits;
+    e->lock = SDL_CreateMutex();
+    e->cond = SDL_CreateCondition();
+    klock();
+    SceUID r = obj_add(OBJ_EVENTFLAG, e);
+    kunlock();
+    if (r < 0) {
+        SDL_DestroyCondition(e->cond);
+        SDL_DestroyMutex(e->lock);
+        free(e);
+    }
+    PSP_TRACE(r, "\"%s\", 0x%X, 0x%X, %p", name ? name : "", (unsigned)attr, (unsigned)bits, option);
+    return r;
+}
+
+int32_t sceKernelDeleteEventFlag(SceUID id)
+{
+    klock();
+    PspEventFlag *e = obj_get(id, OBJ_EVENTFLAG);
+    if (e)
+        obj_remove(id);
+    kunlock();
+    if (e) {
+        SDL_DestroyCondition(e->cond);
+        SDL_DestroyMutex(e->lock);
+        free(e);
+    }
+    int32_t r = e ? 0 : (int32_t)SCE_KERNEL_ERROR_UNKNOWN_EVFID;
+    PSP_TRACE(r, "%d", (int)id);
+    return r;
+}
+
+static PspEventFlag *get_flag(SceUID id)
+{
+    klock();
+    PspEventFlag *e = obj_get(id, OBJ_EVENTFLAG);
+    kunlock();
+    return e;
+}
+
+int32_t sceKernelSetEventFlag(SceUID id, uint32_t bits)
+{
+    PspEventFlag *e = get_flag(id);
+    if (e) {
+        SDL_LockMutex(e->lock);
+        e->bits |= bits;
+        SDL_BroadcastCondition(e->cond);
+        SDL_UnlockMutex(e->lock);
+    }
+    int32_t r = e ? 0 : (int32_t)SCE_KERNEL_ERROR_UNKNOWN_EVFID;
+    PSP_TRACE(r, "%d, 0x%X", (int)id, (unsigned)bits);
+    return r;
+}
+
+int32_t sceKernelClearEventFlag(SceUID id, uint32_t bits)
+{
+    /* Note the PSP's convention: the bits passed are the ones kept. */
+    PspEventFlag *e = get_flag(id);
+    if (e) {
+        SDL_LockMutex(e->lock);
+        e->bits &= bits;
+        SDL_UnlockMutex(e->lock);
+    }
+    int32_t r = e ? 0 : (int32_t)SCE_KERNEL_ERROR_UNKNOWN_EVFID;
+    PSP_TRACE(r, "%d, 0x%X", (int)id, (unsigned)bits);
+    return r;
+}
+
+static int32_t wait_flag(SceUID id, uint32_t bits, uint32_t wait, uint32_t *out_bits, uint32_t *timeout, bool cb)
+{
+    PspEventFlag *e = get_flag(id);
+    if (!e)
+        return SCE_KERNEL_ERROR_UNKNOWN_EVFID;
+    if (!bits)
+        return SCE_KERNEL_ERROR_EVF_ILPAT;
+    if (cb)
+        run_callbacks();
+    uint64_t deadline = timeout ? SDL_GetTicksNS() + (uint64_t)*timeout * 1000 : 0;
+    int32_t r = 0;
+    SDL_LockMutex(e->lock);
+    for (;;) {
+        bool ok = (wait & PSP_EVENT_WAITOR) ? (e->bits & bits) != 0 : (e->bits & bits) == bits;
+        if (ok) {
+            if (out_bits)
+                *out_bits = e->bits;
+            if (wait & PSP_EVENT_WAITCLEARALL)
+                e->bits = 0;
+            else if (wait & PSP_EVENT_WAITCLEAR)
+                e->bits &= ~bits;
+            break;
+        }
+        if (timeout) {
+            uint64_t now = SDL_GetTicksNS();
+            if (now >= deadline) {
+                *timeout = 0;
+                r = SCE_KERNEL_ERROR_WAIT_TIMEOUT;
+                break;
+            }
+            SDL_WaitConditionTimeout(e->cond, e->lock, (Sint32)((deadline - now) / 1000000 + 1));
+        } else {
+            SDL_WaitConditionTimeout(e->cond, e->lock, 10);
+            if (cb) {
+                SDL_UnlockMutex(e->lock);
+                run_callbacks();
+                SDL_LockMutex(e->lock);
+            }
+        }
+    }
+    SDL_UnlockMutex(e->lock);
+    return r;
+}
+
+int32_t sceKernelWaitEventFlag(SceUID id, uint32_t bits, uint32_t wait, uint32_t *out_bits, uint32_t *timeout)
+{
+    int32_t r = wait_flag(id, bits, wait, out_bits, timeout, false);
+    PSP_TRACE(r, "%d, 0x%X, 0x%X", (int)id, (unsigned)bits, (unsigned)wait);
+    return r;
+}
+
+int32_t sceKernelWaitEventFlagCB(SceUID id, uint32_t bits, uint32_t wait, uint32_t *out_bits, uint32_t *timeout)
+{
+    int32_t r = wait_flag(id, bits, wait, out_bits, timeout, true);
+    PSP_TRACE(r, "%d, 0x%X, 0x%X", (int)id, (unsigned)bits, (unsigned)wait);
     return r;
 }
 

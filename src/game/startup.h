@@ -1,5 +1,5 @@
 /* The game's startup path: the ELF entry point, the C runtime start-up, main(), and
- * CApplication::Init as far as it runs without graphics or sound. */
+ * CApplication::Init without sound, and a main loop that only draws the frame clear. */
 #ifndef GAME_STARTUP_H
 #define GAME_STARTUP_H
 
@@ -14,5 +14,8 @@ int game_module_start(SceSize args, void *argp);
  * result: 0 when it ran as far as the port goes, -1 while it hasn't returned. */
 extern const char *g_startup_stop_reason;
 extern int g_startup_status;
+
+/* Log the sceGu calls of the first N frames (0: none). Set before game_module_start. */
+extern int g_startup_gu_trace_frames;
 
 #endif

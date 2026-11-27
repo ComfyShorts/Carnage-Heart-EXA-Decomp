@@ -40,9 +40,16 @@ are relative to it, so `D_0002D698` in the disassembly is the default heap objec
 | 12 | `OpenFileSet("boot", default heap, from top, sync)` (`FUN_08b14984`): finds the set in the index's sorted set table, allocates "FILSETMAN", reads the set from `common.dat` in one go, maps its `FSTS` header | written |
 | 13 | `CLoadModules` (`FUN_0893fb4c`, `FUN_0893fbd4`): two 128 KiB tables, `sceUtilityLoadModule` 0x305, 0x301, 0x300, 0x302, 0x304, 0x303 (the AV codec modules), `ReadFile` of `common/jis2ucs.bin` and `common/ucs2jis.bin` from the boot set, stored as the Shift-JIS conversion tables | written |
 | 14 | `FUN_08b1ecb8`: `sceCtrlSetSamplingMode(1)` and the pad state, with masks 0xF3F0, 0x3F0, 0xF0 | written |
-| 15 | `CGraphics::GetInstance` (`FUN_08b205c0`, 0x520-byte object with a `CClear` at +0x4F8) and `FUN_08b1fe38` → `FUN_08b75608`, PSPSDK's `sceGuInit`: `sceGeEdramGetAddr`, `sceKernelCreateEventFlag("SceGuSignal")`, `sceGeSetCallback`, `sceGeListEnQueue` of the initial display list, `sceGeListSync`, `sceGeDrawSync` | **the port stops here**: first real graphics |
-| 16 | `CSound::GetInstance` (`new` 0x121A0, ctor `FUN_08b35c34`) and a virtual call into it | sound |
-| 17+ | about a dozen manager singletons, the "gamecommon" file set, `FUN_08b36470`, `AssignSpecialBufferToUtilitySavedataExternalMemory` | — |
+| 15 | `CGraphics::GetInstance` (`FUN_08b205c0`, 0x520-byte object with a `CClear` at +0x4F8) and `FUN_08b1fe38` → `FUN_08b75608`, PSPSDK's `sceGuInit`: `sceGeEdramGetAddr`, `sceKernelCreateEventFlag("SceGuSignal")`, `sceGeSetCallback`, `sceGeListEnQueue` of the initial display list, `sceGeListSync`, `sceGeDrawSync` | written (`src/game/render.c`, libgu in `src/platform/gu.c`; see `docs/graphics.md`) |
+| 16 | `CSound::GetInstance` (`new` 0x121A0, ctor `FUN_08b35c34`) and a virtual call into it | skipped: sound |
+| 17+ | about a dozen manager singletons, the "gamecommon" file set, `FUN_08b36470`, `AssignSpecialBufferToUtilitySavedataExternalMemory` | skipped |
+
+After `CApplication::Init`, `main` creates the application object and enters the main
+loop. The port runs the graphics part of `CApplication::Start` (`FUN_08806960`: display
+set-up `FUN_08b1fe70`, then the first screen's black clear colour) and, every frame,
+the graphics part of the loop (`FUN_08b200ec`). The screens and the scene update aren't
+ported. The loop ends when the HOME menu's exit callback calls `sceKernelExitGame`
+(`chexa-pc --frames N` requests that after N displayed frames, as does closing the window).
 
 ## File formats met on the way
 
@@ -83,20 +90,29 @@ sceKernelCreateMutex x2,                                                        
  sceKernelUnlockMutex, sceIoCloseAsync, sceIoWaitAsyncCB) x2,
 sceUtilityLoadModule x6,                                                        CLoadModules
 sceCtrlSetSamplingMode,
-  -- stop: next would be sceGeEdramGetAddr, sceKernelCreateEventFlag, sceGeSetCallback,
-     sceGeListEnQueue, sceGeListSync, sceGeDrawSync (sceGuInit) --
-sceKernelExitDeleteThread                                                       port only: main returns
+sceGeEdramGetAddr, sceKernelCreateEventFlag, sceGeSetCallback,                 sceGuInit
+sceGeListEnQueue, sceGeListSync, sceGeDrawSync,
+  -- CApplication::Start --
+sceGeListEnQueue, sceDisplaySetMode, sceGeListUpdateStallAddr, sceGeDrawSync,  display set-up
+sceDisplaySetFrameBuf,                                                          sceGuDisplay(1)
+  -- each frame --
+sceKernelDcacheWritebackRange, sceGeDrawSync,
+(sceDisplayWaitVblankStartCB, sceDisplayGetVcount)..., sceDisplayGetVcount x2,
+sceDisplaySetFrameBuf, sceGeListEnQueue, sceGeListUpdateStallAddr x2,
+  -- on exit --
+sceKernelExitGame                                                               from the exit callback
 ```
 
-32 distinct imports are called (31 by the game plus `sceIoGetstat`, which `chexa-pc`
+44 distinct imports are called (43 by the game plus `sceIoGetstat`, which `chexa-pc`
 uses itself to check the disc), and all of them are implemented. Kernel objects,
-threads, callbacks and mutexes are in `src/platform/kernel.c`.
+threads, callbacks, mutexes and event flags are in `src/platform/kernel.c`; the GE and
+display imports in `ge.c` and `display.c`.
 
 ## What the port does differently
 
 - The game's block allocator is replaced by `heap.c`, which has the same interface but
   its own block format. newlib's `memalign` is a bump of the `sbrk` break, used once.
-- The static constructors aren't written yet. Nothing before the stop reads what they set up.
+- The static constructors aren't written yet. Nothing the port runs reads what they set up.
 - Pointer fix-ups in the pack index and file sets are replaced by offsets plus bounds checks.
 - The file layer's retry loops, which wait forever for the disc on the PSP, give up after
   30 tries.

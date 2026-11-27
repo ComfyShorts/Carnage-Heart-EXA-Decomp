@@ -8,7 +8,12 @@
  *   --startup         run the game's start-up path (needs --disc); quits when it stops
  *   --trace           log every call of an implemented import, not just the first
  *   --ms DIR          folder to serve as the memory stick (ms0:), writable. Optional
- *   --frames N        quit after N frames (for scripted runs)
+ *   --frames N        quit after N frames (for scripted runs). With --startup, N frames
+ *                     shown by the game: then the HOME menu's exit is requested
+ *   --gu-trace N      log the game's sceGu calls during its first N frames
+ *   --ge-trace        log every GE command executed (very verbose)
+ *   --screenshot [FILE]  save the first frame the game draws as a PNG
+ *                     (default orig/first_frame.png)
  *   --scale N         window scale (default 2, i.e. 960x544)
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
  *                     check the logging (debug only)
@@ -22,6 +27,7 @@
 
 #include "psp_imports.h"
 #include "psp_shim.h"
+#include "ge.h"
 #include "startup.h"
 
 #ifdef PCPORT_M32
@@ -48,7 +54,12 @@ static const char *const k_implemented_funcs[] = {
     "sceKernelDcacheWritebackInvalidateAll", "sceKernelDcacheWritebackRange", "sceKernelStdin",
     "sceKernelStdout", "sceKernelStderr", "sceUtilityGetSystemParamInt", "sceUtilityLoadModule",
     "sceUtilityUnloadModule", "sceImposeSetLanguageMode", "scePowerRegisterCallback",
-    "scePowerUnregisterCallback", "sceRtcGetCurrentClock", "sceGeEdramGetAddr", "sceGeEdramGetSize",
+    "scePowerUnregisterCallback", "sceRtcGetCurrentClock", "sceGeEdramGetAddr", "sceGeEdramGetSize", "sceGeListEnQueue", "sceGeListEnQueueHead",
+    "sceGeListUpdateStallAddr", "sceGeListSync", "sceGeDrawSync", "sceGeSetCallback", "sceGeUnsetCallback",
+    "sceGeBreak", "sceGeContinue", "sceDisplaySetMode", "sceDisplaySetFrameBuf", "sceDisplayGetFrameBuf",
+    "sceDisplayGetVcount", "sceDisplayWaitVblankStartCB", "sceDisplayGetFramePerSec", "sceDmacMemcpy",
+    "sceKernelCreateEventFlag", "sceKernelDeleteEventFlag", "sceKernelSetEventFlag", "sceKernelClearEventFlag",
+    "sceKernelWaitEventFlag", "sceKernelWaitEventFlagCB",
     "sceCtrlSetSamplingMode",
 };
 
@@ -86,10 +97,17 @@ int main(int argc, char **argv)
             startup = 1;
         else if (!strcmp(argv[i], "--trace"))
             psp_trace_enable(true);
+        else if (!strcmp(argv[i], "--gu-trace") && i + 1 < argc)
+            g_startup_gu_trace_frames = (int)strtol(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--ge-trace"))
+            psp_ge_set_trace(true);
+        else if (!strcmp(argv[i], "--screenshot"))
+            psp_display_request_screenshot(i + 1 < argc && strncmp(argv[i + 1], "--", 2) ? argv[++i]
+                                                                                       : "orig/first_frame.png");
         else {
             fprintf(stderr,
                     "usage: %s [--disc DIR] [--ms DIR] [--startup] [--trace] [--frames N] [--scale N] "
-                    "[--call-all-stubs]\n",
+                    "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--call-all-stubs]\n",
                     argv[0]);
             return 2;
         }
@@ -146,8 +164,16 @@ int main(int argc, char **argv)
             }
         }
         psp_platform_present();
-        if (frames >= 0 && ++n >= frames)
+        if (startup) {
+            /* Count the game's frames, then quit the way the HOME menu does. */
+            if (frames >= 0 && !quit_sent && psp_display_frame_count() >= (uint32_t)frames) {
+                SDL_Log("[pc] %ld frames shown: requesting exit", frames);
+                psp_kernel_request_exit();
+                quit_sent = true;
+            }
+        } else if (frames >= 0 && ++n >= frames) {
             break;
+        }
         if (startup && !psp_kernel_threads_alive())
             break;
     }
@@ -159,7 +185,10 @@ int main(int argc, char **argv)
 
     psp_import_report();
     psp_platform_shutdown();
-    if (startup && (psp_kernel_threads_alive() || g_startup_status != 0)) {
+    if (startup) {
+        SDL_Log("[pc] %u frames shown", (unsigned)psp_display_frame_count());
+    }
+    if (startup && (psp_kernel_threads_alive() || (g_startup_status != 0 && !psp_kernel_exit_called()))) {
         SDL_Log("[pc] start-up path did not finish cleanly (status %d)", g_startup_status);
         return 1;
     }

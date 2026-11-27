@@ -46,6 +46,14 @@ sed -i "s# /usr/lib32/libc_nonshared.a# $SYSROOT/usr/lib32/libc_nonshared.a#" "$
 # Runtime packages ship only libfoo.so.N; add the libfoo.so names the build looks for.
 LIBDIR=$SYSROOT/usr/lib/i386-linux-gnu
 for so in "$LIBDIR"/lib*.so.[0-9]; do ln -sf "$(basename "$so")" "${so%.so.*}.so"; done
+# libc6-dev-i386's libm.so (and friends) link to libm.so.6 in the same directory, which
+# the runtime package installs under the system's /usr/lib32 instead. Point dangling links
+# there, or -lm silently falls back to the static libm.a, which doesn't link.
+for so in "$SYSROOT"/usr/lib32/lib*.so; do
+  if [ -L "$so" ] && [ ! -e "$so" ] && [ -e "/usr/lib32/$(readlink "$so")" ]; then
+    ln -sf "/usr/lib32/$(readlink "$so")" "$so"
+  fi
+done
 
 echo "== SDL3 $SDL_VER"
 TARBALL=$DEPS/src/SDL3-$SDL_VER.tar.gz
