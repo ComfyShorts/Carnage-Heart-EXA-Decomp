@@ -60,7 +60,7 @@ structs keep their PSP layout.
 ```sh
 tools/setup_pc_deps.sh                         # no root: multilib sysroot + 32-bit SDL3 in .deps/
 cmake --preset m32 && cmake --build --preset m32
-build/pc-m32/chexa-pc --disc /path/to/disc     # also --ms DIR, --frames N, --scale N
+build/pc-m32/chexa-pc --disc /path/to/disc     # also --ms DIR, --saves DIR, --frames N, --scale N
 build/pc-m32/chexa-pc --disc /path/to/disc --startup   # run the game's start-up path (--trace: log every import call)
 build/pc-m32/chexa-pc --disc /path/to/disc --startup --gu-trace 3 --screenshot   # sceGu calls of 3 frames, first frame to orig/
 build/pc-m32/chexa-pc --disc /path/to/disc --startup --shot 60 orig/title.png --press 70 circle --shot 100 orig/menu.png
@@ -71,7 +71,10 @@ CHEXA_DISC=/path/to/disc ctest --test-dir build/pc-m32
 `PSP_GAME/USRDIR` folder, and serves it read-only as `disc0:`, where the game looks for
 `disc0:/PSP_GAME/USRDIR/...`. Lookups are case-insensitive like the UMD. `--ms` serves a
 writable folder as the memory stick (`ms0:`). Without it the game is told no memory
-stick is inserted. The file and UMD imports are implemented (sync and async open, read,
+stick is inserted. Save data (`sceUtilitySavedata*`) goes in the folder given with
+`--saves DIR`, default `saves/` (gitignored), one directory per save as on a memory
+stick; `--make-test-save` writes a Battle Data save holding a few of the shipped preset
+OKEs (see "Save data" in `docs/screens.md`). The file and UMD imports are implemented (sync and async open, read,
 write, seek, close, directory listing, stat, mkdir, rename). The tests skip themselves
 (exit 77) when the game files aren't found; they default to `$CHEXA_DISC`, then
 `/mnt/c/psp/chexa`.

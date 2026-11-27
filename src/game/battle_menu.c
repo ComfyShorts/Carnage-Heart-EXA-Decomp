@@ -14,6 +14,7 @@
 #include "gu.h"
 #include "pad.h"
 #include "psp_shim.h"
+#include "savedata.h"
 #include "ui.h"
 
 /* ---- data in the EBOOT (splat addresses) ---- */
@@ -86,28 +87,60 @@ static const char *arena_name(int i)
 }
 
 /* ---- the OKE cards ----
- * CCarnageHeart::Reinitialize (FUN_0889f260) leaves the player's 32 cards
- * (FUN_0889ec18) blank and loads the two simulation OKEs into slots 32 + 6 and
- * 32 + 7. Save data isn't read, so that's what the card list holds. */
+ * The player's 32 cards (FUN_0889ec18) are the save's (g_save, savedata.c): blank
+ * for a new game (CCarnageHeart::Reinitialize, FUN_0889f260), or the ones of the
+ * Battle Data loaded through Continue. After them come the two simulation OKEs the
+ * game loads into slots 32 + 6 and 32 + 7 on every start, which aren't saved. */
 
-#define PLAYER_CARDS 32
+#define PLAYER_CARDS SAVE_CARDS
 #define CARD_COUNT (PLAYER_CARDS + 2)
 
+static bool card_used(int card)
+{
+    return card >= PLAYER_CARDS ? card < CARD_COUNT : savedata_card_used(card);
+}
+
+/* The simulation OKEs' records in the pack; NULL for the player's cards. */
 static const char *card_path(int card)
 {
     if (card == PLAYER_CARDS)
         return "preset/oke_t01_1.bin";
     if (card == PLAYER_CARDS + 1)
         return "preset/oke_t01_2.bin";
-    return NULL; /* blank */
+    return NULL;
 }
 
+/* The card's line: number and name (COkeDataBase + 4). The list layout is the port's
+ * (docs/screens.md); a card without a name shows "No Name". */
 static void card_label(int card, char *out, size_t n)
 {
-    if (card >= PLAYER_CARDS)
+    if (card >= PLAYER_CARDS) {
         snprintf(out, n, "Simulation OKE %d", card - PLAYER_CARDS + 1);
-    else
+    } else if (savedata_card_used(card)) {
+        char name[32];
+        savedata_card_name(card, name, sizeof name);
+        snprintf(out, n, "%02d  %s", card + 1, name[0] ? name : "No Name");
+    } else {
         snprintf(out, n, "%02d  -", card + 1);
+    }
+}
+
+/* Where the card list opens with nothing registered: the first saved card, else the
+ * simulation OKEs. */
+static int first_card(void)
+{
+    for (int i = 0; i < PLAYER_CARDS; i++)
+        if (savedata_card_used(i))
+            return i;
+    return PLAYER_CARDS;
+}
+
+/* Hands a card to the battle: a saved card by index, a simulation OKE by path. */
+static void setup_card(BattleSetup *s, int side, int card)
+{
+    s->oke_card[side] = card < PLAYER_CARDS ? card : -1;
+    snprintf(s->oke_path[side], sizeof s->oke_path[side], "%s", card < PLAYER_CARDS ? "" : card_path(card));
+    card_label(card, s->oke_label[side], sizeof s->oke_label[side]);
 }
 
 /* ---- screens ---- */
@@ -143,7 +176,9 @@ static struct {
     int opponent, opp_scroll;
     int arena_card;         /* the arena team's card, -1 none */
     UiAsk ask;
-    bool ask_arena;
+    int ask_kind;           /* what the question is for */
+    bool saving;            /* the System Menu's save is running */
+    char save_msg[64];
     const char *message;    /* an error in the help window, until the next move */
     char value[4][24];
     BattleSetup setup;
@@ -305,10 +340,8 @@ static void build_test_battle(void)
     static const float k_size[3] = {180.0f, 360.0f, 540.0f};
     BattleSetup *s = &g.setup;
     memset(s, 0, sizeof *s);
-    snprintf(s->oke_path[0], sizeof s->oke_path[0], "%s", card_path(g.team[TEAM_FRIEND]));
-    snprintf(s->oke_path[1], sizeof s->oke_path[1], "%s", card_path(g.team[TEAM_ENEMY]));
-    card_label(g.team[TEAM_FRIEND], s->oke_label[0], sizeof s->oke_label[0]);
-    card_label(g.team[TEAM_ENEMY], s->oke_label[1], sizeof s->oke_label[1]);
+    setup_card(s, 0, g.team[TEAM_FRIEND]);
+    setup_card(s, 1, g.team[TEAM_ENEMY]);
     s->stage = g.stage;
     s->map = resolve_map(g.stage);
     s->time_limit = (float)g.test_time;
@@ -322,8 +355,8 @@ static void build_arena_battle(void)
 {
     BattleSetup *s = &g.setup;
     memset(s, 0, sizeof *s);
-    snprintf(s->oke_path[0], sizeof s->oke_path[0], "%s", card_path(g.arena_card));
-    card_label(g.arena_card, s->oke_label[0], sizeof s->oke_label[0]);
+    setup_card(s, 0, g.arena_card);
+    s->oke_card[1] = -1;
     const char *oke = arena_oke(g.opponent, 0);
     snprintf(s->oke_path[1], sizeof s->oke_path[1], "%s", oke ? oke : "");
     const char *name = arena_name(g.opponent);
@@ -341,6 +374,8 @@ static void build_arena_battle(void)
 
 /* ---- per-screen input ---- */
 
+static void open_save_ask(void);
+
 static int update_mode(void)
 {
     UiMenu *m = &g.mode;
@@ -351,6 +386,8 @@ static int update_mode(void)
         } else if (it->id == 3) { /* eTOP_MENU_TYPE 2: CBattleSelectFlow */
             push(SCR_SELECT);
             ui_menu_open(&g.select);
+        } else if (it->id == 5) {
+            open_save_ask();
         } else {
             SDL_Log("[battle-menu] \"%s\" chosen: that flow isn't ported", it->text ? it->text : "?");
             g.message = it->text;
@@ -388,11 +425,36 @@ static int update_select(void)
     return 1;
 }
 
+enum { ASK_TEST, ASK_ARENA, ASK_SAVE };
+
 static void open_ask(bool arena)
 {
-    g.ask_arena = arena;
+    g.ask_kind = arena ? ASK_ARENA : ASK_TEST;
     ui_ask_open(&g.ask, arena ? s_arena(36) : s_test(33), s_test(31), s_test(32), 0);
     push(SCR_ASK);
+}
+
+/* System Menu (top menu id 5). The game opens CSystemMngr with its own menu (save,
+ * load, settings: FUN_088b6cb0); the port asks string 56, "Save your progress?", and
+ * saves the Battle Data through CSaveMngr's save path: to the file it was loaded from,
+ * else NEWDATA.CHE (the name the game's keyboard starts with, FUN_08a62160). */
+static void open_save_ask(void)
+{
+    g.ask_kind = ASK_SAVE;
+    ui_ask_open(&g.ask, s_mode(56), design_string(5, 1), s_test(32), 0);
+    push(SCR_ASK);
+}
+
+static void update_save(void)
+{
+    if (savedata_io_update())
+        return;
+    g.saving = false;
+    if (savedata_result() == 0)
+        snprintf(g.save_msg, sizeof g.save_msg, "Saved as %s.", g_save.battle_file);
+    else
+        snprintf(g.save_msg, sizeof g.save_msg, "The save failed (0x%08X).", (unsigned)savedata_result());
+    g.message = g.save_msg;
 }
 
 static int update_test(void)
@@ -444,7 +506,7 @@ static int update_test_team(void)
     } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
         g.card_for = SCR_TEST_TEAM;
         int cur = g.team[g.team_side];
-        g.card_cursor = cur >= 0 ? cur : PLAYER_CARDS;
+        g.card_cursor = cur >= 0 ? cur : first_card();
         push(SCR_CARDS);
     } else if (pad_pressed(PSP_CTRL_SQUARE) && g.team[g.team_side] >= 0) {
         g.team[g.team_side] = -1; /* string 48: "Unregister" */
@@ -476,7 +538,7 @@ static int update_cards(void)
     if (g.card_cursor >= g.card_scroll + CARD_ROWS)
         g.card_scroll = g.card_cursor - CARD_ROWS + 1;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
-        if (!card_path(g.card_cursor)) {
+        if (!card_used(g.card_cursor)) {
             g.message = g.card_for == SCR_ARENA ? s_arena(49) : s_test(44);
         } else {
             if (g.card_for == SCR_ARENA)
@@ -559,7 +621,7 @@ static int update_arena(void)
             break;
         case 1: /* the game lists the Team Formation teams; the port takes one card */
             g.card_for = SCR_ARENA;
-            g.card_cursor = g.arena_card >= 0 ? g.arena_card : PLAYER_CARDS;
+            g.card_cursor = g.arena_card >= 0 ? g.arena_card : first_card();
             push(SCR_CARDS);
             break;
         default:
@@ -616,7 +678,14 @@ static int update_ask(float dt)
     pop();
     if (r == 0)
         return 1;
-    if (g.ask_arena)
+    if (g.ask_kind == ASK_SAVE) {
+        savedata_save_start(g_save.battle_file[0] ? g_save.battle_file : "NEWDATA.CHE");
+        g.saving = true;
+        snprintf(g.save_msg, sizeof g.save_msg, "Saving...");
+        g.message = g.save_msg;
+        return 1;
+    }
+    if (g.ask_kind == ASK_ARENA)
         build_arena_battle();
     else
         build_test_battle();
@@ -625,6 +694,10 @@ static int update_ask(float dt)
 
 int battle_menu_update(float dt)
 {
+    if (g.saving) {
+        update_save();
+        return 1;
+    }
     for (int i = 0; i < g.depth; i++) {
         UiMenu *m = menu_of(g.stack[i]);
         if (m)

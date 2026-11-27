@@ -14,8 +14,12 @@ Battle Arena?"). The battle then starts from those choices:
 
 "BATTLE START", then both robots run their own chip programs until one is destroyed
 or time runs out. WINNER, LOSER or DRAW follows, and circle goes back to the screen
-the battle was started from. A new game's cards are what you can field: the two
-simulation OKEs (save data, OKE Configuration and the shop aren't ported).
+the battle was started from. The cards you can field are the save's 32 (blank for a
+new game, or the ones of the Battle Data loaded with Continue, see "Save data" in
+`docs/screens.md`) and the two simulation OKEs. A saved card's record goes to the
+battle as it is in the save. `--make-test-save` writes a save with six preset OKEs to
+try it (OKE Configuration and the shop, which fill the cards in the game, aren't
+ported).
 
 Code: `src/game/battle.c` (screens and drawing), `src/game/battle_sim.c` (the
 simulation), `src/game/gmo.c`, `okemodel.c`, `terrain.c` (models and field),
@@ -54,7 +58,7 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Poses | Partly | the pose each script's pose command names is drawn straight away; the game blends to it over the command's frames. No blending yet |
 | Weapons on the body | Stand-in | the `PARTS2` defaults; the equipment-dependent part choice isn't read |
 | Map choice | **Real** | the stage picked on the Test Program's map screen, or the arena opponent's stage, through `CPresetStage` (`FUN_08a35844`, table at `0x08c21854`). Map size and barricade are chosen but not simulated (the field stays 720×720) |
-| OKE choice | **Real** (partly) | the cards chosen on the Test Program's team screen or the arena's team screen, and the arena opponent's OKE files. One OKE a side: of an arena team, only its leader fights |
+| OKE choice | **Real** (partly) | the cards chosen on the Test Program's team screen or the arena's team screen (the save's `COkeDataBase` records, or the simulation OKEs from the pack), and the arena opponent's OKE files. One OKE a side: of an arena team, only its leader fights |
 | Time limit | **Real** | Test Time (30-300 s, `CBattleParam +8`) or the arena record's `+0x114` (90-120 s); `Battle.time_limit` |
 | Terrain height scale and tiles | Stand-in | height = byte × block-0 height / 255 over the used cells; one tile texture (`mapNN_a00.gim`); vertex shading from the map's light direction instead of GE lighting |
 | Battle camera | Stand-in | a chase camera behind your OKE (`CBattleSceneCamera` isn't read) |
@@ -172,5 +176,5 @@ height map dumped from a running game or emulator.
 - **Behaviour**: `CBattleOke` (hardware stats: legs, weapons, armour, engine, heat,
   ammunition; flying types; collision) isn't ported, so who wins says little about the
   real game.
-- **Flow**: name entry, save data, OKE Configuration, Team Formation, the shop,
+- **Flow**: name entry, OKE Configuration, Team Formation, the shop,
   missions and matchmaking; teams of more than one OKE.

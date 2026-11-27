@@ -17,6 +17,7 @@
  * calls sceKernelExitGame. The screens and the scene code aren't ported, so nothing
  * but the clear is drawn. */
 #include "startup.h"
+#include "savedata.h"
 #include "gamedata.h"
 #include "battle.h"
 #include "entrance.h"
@@ -305,7 +306,8 @@ static int application_init(void)
 
     /* 10. File I/O, then the pack index (retried until it loads, like the game). */
     fileio_init();
-    gamedata_open(g_game_elf_path);
+    if (!gamedata_available())
+        gamedata_open(g_game_elf_path);
     for (int tries = 0; !packindex_read("chexa.idx"); tries++)
         if (tries >= 3) {
             SDL_Log("[startup] PackFile::ReadIndex(\"chexa.idx\") keeps failing");
@@ -382,6 +384,8 @@ static void main_loop(void)
             modelview_update(dt);
         else if (entrance_running == 1 && !entrance_update(dt)) {
             if (entrance_selection() == 1) {
+                if (!entrance_loaded()) /* Start Game: CCarnageHeart::Reinitialize */
+                    savedata_new_game();
                 battle_mode_start();
                 entrance_running = 2;
             } else {

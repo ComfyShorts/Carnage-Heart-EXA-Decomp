@@ -14,10 +14,12 @@ render list, using the game's own images from the "entrance" file set.
 | Top menu: Start Game / Continue / Network Play | Buttons, text, the fade and slide-in from the left, cursor highlight (additive), up/down |
 | Mode menu: Story Mode / Battle Mode | Circle on Start Game slides the top menu out to the right and this one in from the left. Cross goes back |
 
-Battle Mode asks phase 9's question ("There are no tutorials in Battle Mode. Start
-anyway?", design string 0x11) and on Yes opens the Battle Mode screens below. Choosing
-Story Mode, Continue or Network Play only logs a line: the phases after the menus
-(0xC, 6) aren't ported.
+Before the title, the start-up save check runs (see "Save data" below). Battle Mode
+asks phase 9's question ("There are no tutorials in Battle Mode. Start anyway?",
+design string 0x11) unless the system data says Story Mode was completed, then opens
+the Battle Mode screens below with a new game's cards. Continue lists the Battle Data
+saves and opens Battle Mode on the one chosen. Choosing Story Mode or Network Play only
+logs a line: those phases (0xC, 6 with the network screens) aren't ported.
 
 ### Why the logo frame is black
 
@@ -33,8 +35,8 @@ animated somewhere not yet read, this would change.
 | Class | Functions | In the port |
 |---|---|---|
 | Root screen | ctor `FUN_088f1d98`, update `0x088f1f64` | Black clear colour, starts the entrance (in `startup.c`'s main loop). The debug menu it opens afterwards isn't ported |
-| Entrance screen (0x44) | ctor `FUN_088d2d30`, update `FUN_088d36e4`, `FUN_088d3560`, `FUN_088d35a4` | States 0–2: render node at priority 2, "entrance" file set, then `CEntranceMngr`. `CSystemMngr` (mode 0xD, the `CSaveMngr` start-up check) is skipped |
-| `CEntranceMngr` | init `FUN_088d6b40`, update `FUN_088d6360`, phases `FUN_088d4efc`, opens `FUN_088d448c`, draw `FUN_088d63b4`, title `FUN_088d6524` | Phases −1, 3, 4, 0, 5 and 2 |
+| Entrance screen (0x44) | ctor `FUN_088d2d30`, update `FUN_088d36e4`, `FUN_088d3560`, `FUN_088d35a4` | States 0–2: render node at priority 2, "entrance" file set, `CSystemMngr` in mode 0xD (the `CSaveMngr` start-up check, `savedata.c`), then `CEntranceMngr` |
+| `CEntranceMngr` | init `FUN_088d6b40`, update `FUN_088d6360`, phases `FUN_088d4efc`, opens `FUN_088d448c`, draw `FUN_088d63b4`, title `FUN_088d6524` | Phases −1, 3, 4, 0, 5 and 2, and 6 for Continue (a stand-in list, see "Save data") |
 | `CEntranceWnd` (0x104) | create `FUN_088d7104`, update `FUN_088d7778`, input `FUN_088d7ac0`, draw `FUN_088d7efc`, open `FUN_088d7ce0`, close `FUN_088d7330`, done `FUN_088d7cac` | All of it. The cursor pulse (`FUN_0888f3d8` family) is approximated by a sine between 0.3 and 1 |
 | Colour window (0x70) | `FUN_0888eb80`, draw `FUN_0888f264`, colour `FUN_0888ec28` | Filled rectangle |
 | `CWndStack` | push `FUN_08ae6234`, pop `FUN_08ae637c`, draw `FUN_08ae66d4` | Push/pop with active window, draw in order |
@@ -53,12 +55,12 @@ over to the scene `FUN_0882fba4` (mode 4 of `FUN_088d3d80`), which runs
 
 | Screen | Game | Real | Stand-in |
 |---|---|---|---|
-| Phase 9 question | `FUN_088d4c84` / `FUN_088d5eb8` | Text (design string 0x11, "Yes" 5), circle on Yes goes on, No or cross stays | Dialog layout; "No" comes from `CBattleTestString` 32 (the dialog class `FUN_088c0ba0` isn't in the export). The question is always asked (no save data says the tutorials were seen) |
+| Phase 9 question | `FUN_088d4c84` / `FUN_088d5eb8` | Text (design string 0x11, "Yes" 5), circle on Yes goes on, No or cross stays; skipped when the system data's `+0x74` (`FUN_0889c400`, Story Mode completed) is set | Dialog layout; "No" comes from `CBattleTestString` 32 (the dialog class `FUN_088c0ba0` isn't in the export) |
 | Phase 7 player name | `FUN_088d497c` / `FUN_088d5a70` (sceUtility OSK) | | Skipped: no on-screen keyboard; the name isn't taken |
-| Battle Mode top menu | `CBattleModeMngr::Initialize` `FUN_08838aa0`, help `FUN_088387a4` | Items from `0x08c76be0` (1-5), buttons `bf_scmb2-6` / `bf_scml2-6` (parts 0x87 + id, 0x8D + id), text id + 4 and help cursor + 0x10 from the table at `0x08c7a6b0`, menu at (-8, 48), 32 px pitch | Only Battle opens its flow; OKE Configuration, Team Formation, Shop and System Menu log a line. The picture on the right (`bf_ttl(id+1)_pic`) and its place are the port's reading; the 3D scene behind the menus isn't drawn (`bf_back` instead). The game's "back to the title?" question on cross isn't ported |
+| Battle Mode top menu | `CBattleModeMngr::Initialize` `FUN_08838aa0`, help `FUN_088387a4` | Items from `0x08c76be0` (1-5), buttons `bf_scmb2-6` / `bf_scml2-6` (parts 0x87 + id, 0x8D + id), text id + 4 and help cursor + 0x10 from the table at `0x08c7a6b0`, menu at (-8, 48), 32 px pitch | Battle opens its flow. System Menu saves: the game opens `CSystemMngr` with its own menu (save, load, settings; `FUN_088b6cb0`), the port asks string 56 ("Save your progress?") and writes the Battle Data through `CSaveMngr`'s save path, to the file it was loaded from or `NEWDATA.CHE`. OKE Configuration, Team Formation and Shop log a line. The picture on the right (`bf_ttl(id+1)_pic`) and its place are the port's reading; the 3D scene behind the menus isn't drawn (`bf_back` instead). The game's "back to the title?" question on cross isn't ported |
 | Battle (select) | `CBattleSelectMngr::setupTopMenu` `FUN_088838f8`, help `FUN_088832a0` | Test Program, Battle Arena, Matchmaking (Mission is left out in game mode 2), strings from `0x08c79410` | Matchmaking (`CMatchMakeFlow`, network) logs a line |
 | Test Program | `CBattleTestMngr` `FUN_08827c98`, `setupTopMenu` `FUN_08828db8` | Six items, text id + 3 and help id + 0x39 from `CBattleTestString` (`0x08c6ad50`); Start Test checks for an enemy and a friend (strings 84, 85) and asks "Start battle?" (33, Yes 31 / No 32) | Damage Settings and Conditions log a line. Test Time steps by 10 s with left/right (the game takes a typed number) within `CBattleParam`'s 30-300 s; it starts at the param's default of 30 s |
-| Select OKE to Test | team windows `CTeamCardListWnd`, cards `COkeCardSelectMngr` | Enemy / Friend, L/R or left/right changes team, square unregisters, a blank card gives string 44. The cards are what a new game holds (`CCarnageHeart::Reinitialize` `FUN_0889f260`): 32 blank cards and the two simulation OKEs (`preset/oke_t01_1.bin`, `_2.bin`) | One OKE per team (the battle is one against one), so no formation; card labels ("Simulation OKE 1", "01 -") and the windows' layout are the port's |
+| Select OKE to Test | team windows `CTeamCardListWnd`, cards `COkeCardSelectMngr` | Enemy / Friend, L/R or left/right changes team, square unregisters, a blank card gives string 44. The 32 cards are the save's (`CCarnageHeart + 0x3AE80`): blank for a new game (`CCarnageHeart::Reinitialize` `FUN_0889f260`), else the loaded Battle Data's; a card is in use when its first word is set. After them, the two simulation OKEs the game loads on every start (`preset/oke_t01_1.bin`, `_2.bin`, not saved) | One OKE per team (the battle is one against one), so no formation; card labels (number and the card's name at `+4`, "No Name" without one, "Simulation OKE 1"), the list opening on the first used card, and the windows' layout are the port's |
 | Map | `setupFieldMenu` `FUN_088291cc`, `CStageSelectWnd` | Select Map lists stages 0-25 in the game's order (`0x08c3902c`) with their names (`0x08c852f8`) and previews (`0x08c38fc4` → `bf_mpiNN`), "Select Randomly" picks a map at random; Map Size (180/360/540 m) and Barricade (strings 14-19), help 0x44-0x46; the default stage is 2 (`FUN_08824084`), the default size 540 m (`FUN_0887e190`) | One stage instead of the game's several (`+0x6c4` flags); locked stages aren't checked; size and barricade are kept but the simulation doesn't use them |
 | Battle Arena | `CBattleArenaMngr` `FUN_0880a310` / `setupTopMenu` `FUN_0880d424` | Select Opponent, Select Team, Start Battle Arena, strings from `0x08c69338`; the 100 opponents (names `0x08c518f0`, records of 0x3C0 bytes at `0x08c51c10`, read as `FUN_08807dbc` does): stage (`+0`), OKE count (`+4`), OKE files (`+0x14`, 0x40 each), time limit (`+0x114`, → `CBattleParam +8`); "Start Battle Arena?" (36) | Select Team picks one card instead of a Team Formation team (a new game has no teams and the game would refuse, string 26); all 100 opponents are offered (unlocks and Victory Points aren't read); the opponent's leader (its first OKE) fights alone; the rules (banned parts) aren't checked |
 | Battle | `CBattleTestFlow::buildBattle` `FUN_08823774`, `CBattleArenaFlow::CImpl::buildBattle` `FUN_088098e0` | The battle starts with the chosen OKEs on the chosen stage's map (`CPresetStage` entries at `0x08c21854` (0x14 bytes each), field 0 = `land/mapNN`) and time limit. After it, circle returns to the screen it was started from | See `docs/battle.md` |
@@ -72,6 +74,79 @@ the latest name, where the game stacks names with `pushMenuTitle` `FUN_08826ad0`
 help window's place (`FUN_088ffcac` makes a full-screen window; the port puts
 `sd_wind0` at the bottom), the list windows and the Yes/No dialog's layout are the
 port's. The key guide (`FUN_08a60304`) isn't drawn: the font has no button icons yet.
+
+## Save data
+
+`src/game/savedata.c` (the game side) on `src/platform/savedata.c` (the
+`sceUtilitySavedata*` calls). Saves go in the folder given with `--saves DIR`
+(default `saves/`, gitignored), laid out like a memory stick's `PSP/SAVEDATA`: one
+directory per save, named game name + save name.
+
+| Save | Directory / file | Contents | Written with |
+|---|---|---|---|
+| System Data | `ULJM05698/DATA.BIN`, secure | The 0x7C bytes at `CCarnageHeart + 0x3AE00` (`FUN_0889ea98`): volumes (two 1.0 floats), options, `+0x74` Story Mode completed (`FUN_0889c400`), `+0x78` play time in seconds (`FUN_0889c418`). Defaults from `FUN_0889c0c0` | MAKEDATASECURE / WRITESECURE |
+| Battle Data | `ULJM05698B/<NAME>.CHE`, normal | `"0.0.44"` without its NUL (`0x08c8b760`), the shared block (`+0x3AE80`, 0x483A0 bytes: 32 `COkeDataBase` cards of 0x1EC0, 16 team cards of 0x340 at `+0x3D800`, then the rest), the Battle Mode block (`+0x860F0`, 0x431C bytes; the player name first). 0x4C6C2 bytes in all (`FUN_08ab8114`) | MAKEDATA / WRITE |
+
+The other kinds (Story Data `T`/`S`, replays `R`, `TEAM`, `REPLAY`, `MATCH`; names
+from `0x08c858f8`) aren't ported. All share the param setup of `CUtility`
+(`FUN_08b25354`, `FUN_08b24da4`, `FUN_08b25090`): game name `ULJM05698`, key `CHEXA`,
+SFO title "CARNAGE HEART EXA", the save's title and detail from
+`CSystemMngr::GetSaveGameDataName` (`FUN_08ab82f0`: "System Data" with the play time
+and Story Mode line; "Battle Data" with "Player Name:" and the name), the icon
+`parts/icon/icon0_<kind>.png` from the pack (`0x08c858d4`). These are read from your
+EBOOT and the pack at run time.
+
+The sequences are `CSaveMngr`'s (`UpdateUT` `FUN_08a65b54`, result tables at
+`0x08c89d98`), one utility call per frame:
+
+- **Start-up check** (entrance state 0, `CSystemMngr` mode 0x17, `CSaveMngr` type 4
+  exec 3): state 0x16 FILES on `ULJM05698`; found → 0x17 READSECURE `DATA.BIN` into
+  the system block; RW_NO_DATA → 0x18 the space check, then the create path of type 4
+  exec 4 (0x20 FILES, 0x21 GETSIZE, 0x22 MAKEDATASECURE, or WRITESECURE when the file
+  is there). The game's message dialogs on errors (no memory stick, broken data) are
+  logged instead, and it goes on with the defaults. State 0x51 between 0x18 and the
+  create path isn't traced: the port creates without asking.
+- **Battle Data list** (Continue): FILES on `ULJM05698B`, normal files; the ones of
+  five characters or more ending in `.CHE` (`FUN_08a641dc`); a size other than
+  0x4C6C2 marks the entry broken (`FUN_08a672f8`'s `+0x30`).
+- **Load** (state 0x2B): READSECURE of the file, then as the load in `0x088b7590`:
+  skip the version (`FUN_08ab8604` compares it, a mismatch is only logged), copy the
+  shared block and the Battle Mode block.
+- **Save** (`BeginDataSave` `FUN_08a63290`): FILES, GETSIZE, then MAKEDATA when the
+  directory is new (`+0x50` = 0) else WRITE, of the buffer `FUN_08abb680` builds.
+
+Stand-ins: Continue's list (the game first offers the kinds of save, `CSystemMngr`
+mode 4, then `CSaveMngr`'s own file list, `UpdateSelectFileList` `FUN_08a676f0`) is a
+plain menu of the Battle Data files with the port's texts; the keyboard for a new
+file's name isn't there (`NEWDATA.CHE`, the name it starts with in `FUN_08a62160`); a
+new game's shared block has the cards, teams and the words `FUN_0889c92c`,
+`FUN_0889c420` and `FUN_0889c51c` set, but the sub-blocks after the team cards whose
+constructors aren't ported (rankings, shop, matches) start zeroed. Data loaded from
+a save is kept and written back byte for byte.
+
+The platform side follows the system's behaviour for the modes the game uses (FILES,
+READ(SECURE), MAKEDATA(SECURE), WRITE(SECURE), GETSIZE) and the others (AUTOLOAD/SAVE,
+LOAD/SAVE, LISTLOAD/LISTSAVE, LIST, SIZES, ERASE, DELETE, DELETEDATA), with their
+error codes (RW_NO_DATA 0x80110327 for a missing save, RW_FILE_NOT_FOUND 0x80110329
+for a missing file). It writes a PARAM.SFO in the system's format, with
+`SAVEDATA_FILE_LIST` naming the secure files so FILES can tell them apart. Nothing is
+encrypted: a PSP's secure files (`DATA.BIN`) are encrypted with the game key, so
+those don't carry over; Battle Data `.CHE` files are plain on the PSP too.
+
+To try it with robots in the card list, write a test save and load it with Continue:
+
+```sh
+build/pc-m32/chexa-pc --disc DIR --make-test-save           # saves/ULJM05698B/TESTDATA.CHE
+build/pc-m32/chexa-pc --disc DIR --startup --press 70 down --press 90 circle \
+    --press 110 circle --shot 185 orig/sv_mode.png --frames 190   # Continue, load it
+```
+
+`--make-test-save [NAME]` builds a new game's blocks, puts the two simulation OKEs and
+the leaders of the first four arena teams (their records read from the pack, named
+after the team) in cards 1-6, sets the player name "TESTER" and saves it as
+`NAME.CHE` (default `TESTDATA`) through the same save path. Nothing of it is in the
+repository: it's built from your game files when you run it. `tests/savedata_test.c`
+checks the whole path without the game files.
 
 Walk-through (the screenshots were taken this way, into `orig/`):
 
@@ -109,8 +184,9 @@ Q/W = L/R, Space = start, Right Shift = select.
 ## Next
 
 - The opening movie: an MPEG/PMF player (sceMpeg, sceVideocodec) to play `che_op.pmf`.
-- `CSystemMngr` / `CSaveMngr`: the save-data check before the title (sceUtility).
+- `CSystemMngr`'s own menus (the kinds of save, settings) and `CSaveMngr`'s file list
+  and message dialogs; Story Data; the keyboard for save names.
 - The phases after the menus: 0xC (new story game), 7 (the player-name keyboard),
-  6 (load or network), 10 (attract after 65 s idle).
+  6 for network play, 10 (attract after 65 s idle).
 - Shift-JIS text (`gothic16.gim`, the double-byte table) for the Japanese strings.
 - Sound effects for the cursor and buttons (CSound).
