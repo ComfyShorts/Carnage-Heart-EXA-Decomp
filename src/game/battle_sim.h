@@ -74,8 +74,17 @@ typedef struct Oke {
     bool armed;        /* the weapon script pulled the trigger */
     int burst_left;
     float burst_timer;
-    bool aim_at_enemy;
+    /* The fire control's chip state (+0xb470): the readied weapon (+0x10, Start
+     * Reticle), state 3 "aiming" (+0x0) and the mode of the last fire chip (+0xc:
+     * 1 Shoot Reticle, 2 Select and Fire, 3 Firing Direction). */
+    int readied;       /* slot, -1 none */
+    bool aiming;
+    int aim_mode;
+    bool lead_ok;      /* the fire chip's spread setting is 0 (+0xa318 == 0) */
     float aim_angle;   /* Firing Direction: degrees from the heading */
+    float gun_raise, raise_rate; /* +0xb10c, 0..1; per second (2 x body +0x38 / 100) */
+    float sight_hold;  /* +0x18: seconds Move Reticle holds off the tracker */
+    float last_x, last_y, vel_x, vel_y; /* for the target's velocity (FUN_0883f648) */
 } Oke;
 
 typedef struct Shot {
