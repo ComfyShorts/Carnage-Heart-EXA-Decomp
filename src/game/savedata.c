@@ -110,6 +110,42 @@ const OkeDataBase *savedata_card(int card)
     return card >= 0 && card < SAVE_CARDS ? &g_save.db.card[card] : NULL;
 }
 
+int savedata_card_status(int card)
+{
+    return card >= 0 && card < SAVE_CARDS ? (int)get_word(g_save.db.card[card].header) : 0;
+}
+
+OkeDataBase *savedata_card_edit(int card)
+{
+    return card >= 0 && card < SAVE_CARDS ? &g_save.db.card[card] : NULL;
+}
+
+#define CURRENT_CARD 0x40C00 /* in the shared block */
+
+int savedata_current_card(void)
+{
+    int v = (int)get_word((const uint8_t *)&g_save.db + CURRENT_CARD);
+    return v >= 0 && v < SAVE_CARDS ? v : 0;
+}
+
+void savedata_set_current_card(int card)
+{
+    if (card >= 0 && card < SAVE_CARDS)
+        put_word((uint8_t *)&g_save.db + CURRENT_CARD, (uint32_t)card);
+}
+
+void savedata_card_clear(int card)
+{
+    if (card >= 0 && card < SAVE_CARDS)
+        memset(&g_save.db.card[card], 0, sizeof g_save.db.card[card]);
+}
+
+void savedata_card_copy(int from, int to)
+{
+    if (from >= 0 && from < SAVE_CARDS && to >= 0 && to < SAVE_CARDS && from != to)
+        g_save.db.card[to] = g_save.db.card[from];
+}
+
 void savedata_card_name(int card, char *out, size_t n)
 {
     out[0] = 0;

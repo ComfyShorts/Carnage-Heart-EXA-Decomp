@@ -15,6 +15,7 @@
 #include "pad.h"
 #include "psp_shim.h"
 #include "savedata.h"
+#include "oke_menu.h"
 #include "team_menu.h"
 #include "ui.h"
 
@@ -164,6 +165,7 @@ typedef enum {
     SCR_ASK,        /* the Yes/No before the battle */
     SCR_TEAMFORM,   /* Team Formation (team_menu.c) */
     SCR_TEAMS,      /* the arena's Select Team: the team cards */
+    SCR_OKECONFIG,  /* OKE Configuration (oke_menu.c) */
 } ScreenId;
 
 enum { TEAM_ENEMY, TEAM_FRIEND };
@@ -433,6 +435,9 @@ static int update_mode(void)
         } else if (it->id == 2) { /* eTOP_MENU_TYPE 1: CTeamFormationFlow */
             team_menu_open();
             push(SCR_TEAMFORM);
+        } else if (it->id == 1) { /* eTOP_MENU_TYPE 0: CDesignFlow */
+            oke_menu_open();
+            push(SCR_OKECONFIG);
         } else {
             SDL_Log("[battle-menu] \"%s\" chosen: that flow isn't ported", it->text ? it->text : "?");
             g.message = it->text;
@@ -825,6 +830,12 @@ int battle_menu_update(float dt)
             ui_menu_open(&g.mode);
         }
         break;
+    case SCR_OKECONFIG:
+        if (!oke_menu_update(dt)) {
+            pop();
+            ui_menu_open(&g.mode);
+        }
+        break;
     }
     for (int i = 0; i < g.depth - 1; i++) { /* only the top menu takes input */
         UiMenu *under = menu_of(g.stack[i]);
@@ -1038,7 +1049,8 @@ static void draw_screen(ScreenId s, bool is_top)
         draw_list_window(130, 30, 170, TEAM_ROWS, g.team_scroll, SAVE_TEAMS, g.team_cursor, team_label, s_arena(4));
         break;
     case SCR_TEAMFORM:
-        break; /* drawn on its own */
+    case SCR_OKECONFIG:
+        break; /* drawn on their own */
     }
 }
 
@@ -1046,6 +1058,10 @@ void battle_menu_draw(void)
 {
     if (top() == SCR_TEAMFORM) {
         team_menu_draw();
+        return;
+    }
+    if (top() == SCR_OKECONFIG) {
+        oke_menu_draw();
         return;
     }
     sceGuEnable(GU_BLEND);
