@@ -6,14 +6,20 @@
 
 /* ---- sceCtrl (2 imports) ---- */
 
+static int g_sampling_mode; /* 0 digital, 1 analog */
+
+int32_t sceCtrlSetSamplingMode(int mode)
+{
+    int32_t r = mode == 0 || mode == 1 ? g_sampling_mode : (int32_t)0x80000107;
+    if (mode == 0 || mode == 1)
+        g_sampling_mode = mode;
+    PSP_TRACE(r, "%d", mode);
+    return r;
+}
+
 int32_t sceCtrlPeekBufferPositive(void)
 {
     PSP_STUB("sceCtrl", 0x3A622550);
     return 0;
 }
 
-int32_t sceCtrlSetSamplingMode(void)
-{
-    PSP_STUB("sceCtrl", 0x1F4011E6);
-    return 0;
-}

@@ -371,6 +371,7 @@ SceUID sceIoOpen(const char *file, int flags, SceMode mode)
     lock();
     SceUID r = do_open(file, flags, mode, false);
     unlock();
+    PSP_TRACE(r, "\"%s\", 0x%X, 0%o", file ? file : "(null)", flags, (unsigned)mode);
     return r;
 }
 
@@ -383,6 +384,7 @@ SceUID sceIoOpenAsync(const char *file, int flags, SceMode mode)
     if (s)
         s->async_pending = true;
     unlock();
+    PSP_TRACE(r, "\"%s\", 0x%X, 0%o", file ? file : "(null)", flags, (unsigned)mode);
     return r;
 }
 
@@ -396,6 +398,7 @@ int32_t sceIoClose(SceUID fd)
         r = 0;
     }
     unlock();
+    PSP_TRACE(r, "%d", (int)fd);
     return r;
 }
 
@@ -413,6 +416,7 @@ int32_t sceIoCloseAsync(SceUID fd)
         r = 0;
     }
     unlock();
+    PSP_TRACE(r, "%d", (int)fd);
     return r;
 }
 
@@ -422,6 +426,7 @@ int32_t sceIoRead(SceUID fd, void *data, SceSize size)
     FdSlot *s = get_slot(fd);
     int32_t r = s ? do_read(s, data, size) : SCE_KERNEL_ERROR_BADF;
     unlock();
+    PSP_TRACE(r, "%d, %p, %u", (int)fd, data, (unsigned)size);
     return r;
 }
 
@@ -435,6 +440,7 @@ int32_t sceIoReadAsync(SceUID fd, void *data, SceSize size)
         r = 0;
     }
     unlock();
+    PSP_TRACE(r, "%d, %p, %u", (int)fd, data, (unsigned)size);
     return r;
 }
 
@@ -442,12 +448,14 @@ int32_t sceIoWrite(SceUID fd, const void *data, SceSize size)
 {
     if (fd == 1 || fd == 2) { /* PSP stdout / stderr */
         fwrite(data, 1, size, fd == 1 ? stdout : stderr);
+        PSP_TRACE(size, "%d, %p, %u", (int)fd, data, (unsigned)size);
         return (int32_t)size;
     }
     lock();
     FdSlot *s = get_slot(fd);
     int32_t r = s ? do_write(s, data, size) : SCE_KERNEL_ERROR_BADF;
     unlock();
+    PSP_TRACE(r, "%d, %p, %u", (int)fd, data, (unsigned)size);
     return r;
 }
 
@@ -461,6 +469,7 @@ int32_t sceIoWriteAsync(SceUID fd, const void *data, SceSize size)
         r = 0;
     }
     unlock();
+    PSP_TRACE(r, "%d, %p, %u", (int)fd, data, (unsigned)size);
     return r;
 }
 
@@ -470,6 +479,7 @@ SceOff sceIoLseek(SceUID fd, SceOff offset, int whence)
     FdSlot *s = get_slot(fd);
     SceOff r = s ? do_seek(s, offset, whence) : SCE_KERNEL_ERROR_BADF;
     unlock();
+    PSP_TRACE(r, "%d, %lld, %d", (int)fd, (long long)offset, whence);
     return r;
 }
 
@@ -483,6 +493,7 @@ int32_t sceIoLseekAsync(SceUID fd, SceOff offset, int whence)
         r = 0;
     }
     unlock();
+    PSP_TRACE(r, "%d, %lld, %d", (int)fd, (long long)offset, whence);
     return r;
 }
 
@@ -509,13 +520,18 @@ static int32_t collect_async(SceUID fd, SceInt64 *res)
 
 int32_t sceIoWaitAsyncCB(SceUID fd, SceInt64 *res)
 {
-    return collect_async(fd, res);
+    psp_kernel_run_callbacks();
+    int32_t r = collect_async(fd, res);
+    PSP_TRACE(r, "%d, -> %lld", (int)fd, res && r == 0 ? (long long)*res : 0LL);
+    return r;
 }
 
 int32_t sceIoPollAsync(SceUID fd, SceInt64 *res)
 {
     /* Work is never actually in flight, so a poll always finds it done (0). */
-    return collect_async(fd, res);
+    int32_t r = collect_async(fd, res);
+    PSP_TRACE(r, "%d, -> %lld", (int)fd, res && r == 0 ? (long long)*res : 0LL);
+    return r;
 }
 
 SceUID sceIoDopen(const char *dirname)
@@ -546,6 +562,7 @@ SceUID sceIoDopen(const char *dirname)
         }
     }
     unlock();
+    PSP_TRACE(r, "\"%s\"", dirname ? dirname : "(null)");
     return r;
 }
 
@@ -580,6 +597,7 @@ int32_t sceIoDread(SceUID fd, SceIoDirent *dir)
         }
     }
     unlock();
+    PSP_TRACE(r, "%d", (int)fd);
     return r;
 }
 
@@ -593,6 +611,7 @@ int32_t sceIoDclose(SceUID fd)
         r = 0;
     }
     unlock();
+    PSP_TRACE(r, "%d", (int)fd);
     return r;
 }
 
@@ -611,6 +630,7 @@ int32_t sceIoGetstat(const char *file, SceIoStat *stat_out)
     unlock();
     if (r != 0 || log_all())
         SDL_Log("[io] getstat %s -> 0x%08X", file ? file : "(null)", (unsigned)r);
+    PSP_TRACE(r, "\"%s\"", file ? file : "(null)");
     return r;
 }
 
@@ -626,6 +646,7 @@ int32_t sceIoChstat(const char *file, SceIoStat *stat_in, int bits)
               : stat(host, &st) == 0 ? 0 : errno_to_sce(errno);
     unlock();
     SDL_Log("[io] chstat %s (bits 0x%X) -> 0x%08X (ignored)", file ? file : "(null)", bits, (unsigned)r);
+    PSP_TRACE(r, "\"%s\", 0x%X", file ? file : "(null)", bits);
     return r;
 }
 
@@ -639,6 +660,7 @@ int32_t sceIoMkdir(const char *dir, SceMode mode)
               : mkdir(host, mode ? (mode & 0777) : 0777) == 0 ? 0 : errno_to_sce(errno);
     unlock();
     SDL_Log("[io] mkdir %s -> 0x%08X", dir ? dir : "(null)", (unsigned)r);
+    PSP_TRACE(r, "\"%s\"", dir ? dir : "(null)");
     return r;
 }
 
@@ -662,6 +684,7 @@ int32_t sceIoRename(const char *oldname, const char *newname)
               : rename(a, b) == 0 ? 0 : errno_to_sce(errno);
     unlock();
     SDL_Log("[io] rename %s -> %s: 0x%08X", oldname ? oldname : "(null)", newname ? newname : "(null)", (unsigned)r);
+    PSP_TRACE(r, "\"%s\", \"%s\"", oldname ? oldname : "(null)", newname ? newname : "(null)");
     return r;
 }
 
@@ -672,9 +695,11 @@ int32_t sceIoDevctl(const char *dev, unsigned int cmd, void *indata, int inlen, 
     if (dev && !strncasecmp(dev, "fatms0:", 7) && cmd == 0x02425823) {
         if (outdata && outlen >= 4)
             *(int32_t *)outdata = find_mount("ms0", 3) ? 1 : 0;
+        PSP_TRACE(0, "\"%s\", 0x%08X", dev, cmd);
         return 0;
     }
     SDL_Log("[io] devctl %s cmd 0x%08X (in %d, out %d) unsupported", dev ? dev : "(null)", cmd, inlen, outlen);
+    PSP_TRACE(SCE_KERNEL_ERROR_UNSUP, "\"%s\", 0x%08X", dev ? dev : "(null)", cmd);
     return SCE_KERNEL_ERROR_UNSUP;
 }
 
@@ -688,33 +713,43 @@ static int32_t umd_stat(void)
 
 int32_t sceUmdActivate(int mode, const char *drive)
 {
-    SDL_Log("[io] sceUmdActivate(%d, %s)", mode, drive ? drive : "(null)");
+    PSP_TRACE(0, "%d, \"%s\"", mode, drive ? drive : "(null)");
     return 0;
 }
 
 int32_t sceUmdCancelWaitDriveStat(void)
 {
+    PSP_TRACE(0, NULL);
     return 0;
 }
 
 int32_t sceUmdCheckMedium(void)
 {
-    return find_mount("disc0", 5) ? 1 : 0;
+    int32_t r = find_mount("disc0", 5) ? 1 : 0;
+    PSP_TRACE(r, NULL);
+    return r;
 }
 
 int32_t sceUmdGetDriveStat(void)
 {
-    return umd_stat();
+    int32_t r = umd_stat();
+    PSP_TRACE(r, NULL);
+    return r;
 }
 
 int32_t sceUmdWaitDriveStat(int stat)
 {
-    return (umd_stat() & stat) ? 0 : SCE_KERNEL_ERROR_WAIT_TIMEOUT;
+    int32_t r = (umd_stat() & stat) ? 0 : SCE_KERNEL_ERROR_WAIT_TIMEOUT;
+    PSP_TRACE(r, "0x%X", stat);
+    return r;
 }
 
 int32_t sceUmdWaitDriveStatCB(int stat, unsigned int timeout)
 {
-    return sceUmdWaitDriveStat(stat);
+    psp_kernel_run_callbacks();
+    int32_t r = (umd_stat() & stat) ? 0 : SCE_KERNEL_ERROR_WAIT_TIMEOUT;
+    PSP_TRACE(r, "0x%X, %u", stat, timeout);
+    return r;
 }
 
 /* ---- disc root discovery ---- */

@@ -6,6 +6,23 @@
 
 /* ---- sceGe_user (11 imports) ---- */
 
+/* The PSP's 2 MiB of video memory. The game places its frame buffers, depth buffer
+ * and a "fast heap" here; until the GE is emulated it is plain host memory. */
+#define PSP_EDRAM_SIZE 0x200000
+static _Alignas(64) uint8_t g_edram[PSP_EDRAM_SIZE];
+
+void *sceGeEdramGetAddr(void)
+{
+    PSP_TRACE_PTR(g_edram, NULL);
+    return g_edram;
+}
+
+uint32_t sceGeEdramGetSize(void)
+{
+    PSP_TRACE(PSP_EDRAM_SIZE, NULL);
+    return PSP_EDRAM_SIZE;
+}
+
 int32_t sceGeBreak(void)
 {
     PSP_STUB("sceGe_user", 0xB448EC0D);
@@ -21,18 +38,6 @@ int32_t sceGeContinue(void)
 int32_t sceGeDrawSync(void)
 {
     PSP_STUB("sceGe_user", 0xB287BD61);
-    return 0;
-}
-
-int32_t sceGeEdramGetAddr(void)
-{
-    PSP_STUB("sceGe_user", 0xE47E40E4);
-    return 0;
-}
-
-int32_t sceGeEdramGetSize(void)
-{
-    PSP_STUB("sceGe_user", 0x1F6752AD);
     return 0;
 }
 

@@ -6,55 +6,7 @@
 
 /* ---- SysMemUserForUser (6 imports) ---- */
 
-int32_t sceKernelAllocPartitionMemory(void)
-{
-    PSP_STUB("SysMemUserForUser", 0x237DBD4F);
-    return 0;
-}
-
-int32_t sceKernelFreePartitionMemory(void)
-{
-    PSP_STUB("SysMemUserForUser", 0xB6D61D02);
-    return 0;
-}
-
-int32_t sceKernelGetBlockHeadAddr(void)
-{
-    PSP_STUB("SysMemUserForUser", 0x9D9A5BA1);
-    return 0;
-}
-
-int32_t sceKernelPrintf(void)
-{
-    PSP_STUB("SysMemUserForUser", 0x13A5ABEF);
-    return 0;
-}
-
-int32_t sceKernelSetCompiledSdkVersion606(void)
-{
-    PSP_STUB("SysMemUserForUser", 0x358CA1BB);
-    return 0;
-}
-
-int32_t sceKernelSetCompilerVersion(void)
-{
-    PSP_STUB("SysMemUserForUser", 0xF77D77CB);
-    return 0;
-}
-
 /* ---- ModuleMgrForUser (7 imports) ---- */
-
-int32_t sceKernelGetModuleId(void)
-{
-    PSP_STUB("ModuleMgrForUser", 0xF0A26395);
-    return 0;
-}
-
-int32_t sceKernelGetModuleIdByAddress(void)
-{
-    PSP_STUB("ModuleMgrForUser", 0xD8B73127);
-    return 0;
-}
 
 int32_t sceKernelLoadModule(void)
 {
@@ -88,37 +40,7 @@ int32_t sceKernelUnloadModule(void)
 
 /* ---- LoadExecForUser (2 imports) ---- */
 
-int32_t sceKernelExitGame(void)
-{
-    PSP_STUB("LoadExecForUser", 0x05572A5F);
-    return 0;
-}
-
-int32_t sceKernelRegisterExitCallback(void)
-{
-    PSP_STUB("LoadExecForUser", 0x4AC57943);
-    return 0;
-}
-
 /* ---- UtilsForUser (7 imports) ---- */
-
-int32_t sceKernelDcacheWritebackAll(void)
-{
-    PSP_STUB("UtilsForUser", 0x79D1C3FA);
-    return 0;
-}
-
-int32_t sceKernelDcacheWritebackInvalidateAll(void)
-{
-    PSP_STUB("UtilsForUser", 0xB435DEC5);
-    return 0;
-}
-
-int32_t sceKernelDcacheWritebackRange(void)
-{
-    PSP_STUB("UtilsForUser", 0x3EE30821);
-    return 0;
-}
 
 int32_t sceKernelGetGPI(void)
 {
@@ -146,41 +68,11 @@ int32_t sceKernelLibcTime(void)
 
 /* ---- StdioForUser (3 imports) ---- */
 
-int32_t sceKernelStderr(void)
-{
-    PSP_STUB("StdioForUser", 0xF78BA90A);
-    return 0;
-}
-
-int32_t sceKernelStdin(void)
-{
-    PSP_STUB("StdioForUser", 0x172D316E);
-    return 0;
-}
-
-int32_t sceKernelStdout(void)
-{
-    PSP_STUB("StdioForUser", 0xA6BAB2E9);
-    return 0;
-}
-
 /* ---- sceUtility (25 imports) ---- */
-
-int32_t sceUtilityGetSystemParamInt(void)
-{
-    PSP_STUB("sceUtility", 0xA5DA2406);
-    return 0;
-}
 
 int32_t sceUtilityGetSystemParamString(void)
 {
     PSP_STUB("sceUtility", 0x34B78343);
-    return 0;
-}
-
-int32_t sceUtilityLoadModule(void)
-{
-    PSP_STUB("sceUtility", 0x2A2B3DE0);
     return 0;
 }
 
@@ -310,23 +202,11 @@ int32_t sceUtilityScreenshotUpdate(void)
     return 0;
 }
 
-int32_t sceUtilityUnloadModule(void)
-{
-    PSP_STUB("sceUtility", 0xE49BFE92);
-    return 0;
-}
-
 /* ---- sceImpose (2 imports) ---- */
 
 int32_t sceImposeSetBacklightOffTime(void)
 {
     PSP_STUB("sceImpose", 0x967F6D4A);
-    return 0;
-}
-
-int32_t sceImposeSetLanguageMode(void)
-{
-    PSP_STUB("sceImpose", 0x36AA6E91);
     return 0;
 }
 
@@ -338,28 +218,11 @@ int32_t scePowerCheckWlanCoexistenceClock(void)
     return 0;
 }
 
-int32_t scePowerRegisterCallback(void)
-{
-    PSP_STUB("scePower", 0x04B7766E);
-    return 0;
-}
-
 int32_t scePowerSetClockFrequency630(void)
 {
     PSP_STUB("scePower", 0x469989AD);
     return 0;
 }
 
-int32_t scePowerUnregisterCallback(void)
-{
-    PSP_STUB("scePower", 0xDFA8BAF8);
-    return 0;
-}
-
 /* ---- sceRtc (1 imports) ---- */
 
-int32_t sceRtcGetCurrentClock(void)
-{
-    PSP_STUB("sceRtc", 0x4CFA57B0);
-    return 0;
-}

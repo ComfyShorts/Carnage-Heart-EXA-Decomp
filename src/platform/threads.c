@@ -12,33 +12,9 @@ int32_t sceKernelAllocateVpl(void)
     return 0;
 }
 
-int32_t sceKernelChangeCurrentThreadAttr(void)
-{
-    PSP_STUB("ThreadManForUser", 0xEA748E31);
-    return 0;
-}
-
-int32_t sceKernelChangeThreadPriority(void)
-{
-    PSP_STUB("ThreadManForUser", 0x71BC9871);
-    return 0;
-}
-
-int32_t sceKernelCheckCallback(void)
-{
-    PSP_STUB("ThreadManForUser", 0x349D6D6C);
-    return 0;
-}
-
 int32_t sceKernelClearEventFlag(void)
 {
     PSP_STUB("ThreadManForUser", 0x812346E4);
-    return 0;
-}
-
-int32_t sceKernelCreateCallback(void)
-{
-    PSP_STUB("ThreadManForUser", 0xE81CAF8F);
     return 0;
 }
 
@@ -60,45 +36,15 @@ int32_t sceKernelCreateMbx(void)
     return 0;
 }
 
-int32_t sceKernelCreateMutex(void)
-{
-    PSP_STUB("ThreadManForUser", 0xB7D098C6);
-    return 0;
-}
-
 int32_t sceKernelCreateSema(void)
 {
     PSP_STUB("ThreadManForUser", 0xD6DA4BA1);
     return 0;
 }
 
-int32_t sceKernelCreateThread(void)
-{
-    PSP_STUB("ThreadManForUser", 0x446D8DE6);
-    return 0;
-}
-
 int32_t sceKernelCreateVpl(void)
 {
     PSP_STUB("ThreadManForUser", 0x56C039B5);
-    return 0;
-}
-
-int32_t sceKernelDelayThread(void)
-{
-    PSP_STUB("ThreadManForUser", 0xCEADEB47);
-    return 0;
-}
-
-int32_t sceKernelDelayThreadCB(void)
-{
-    PSP_STUB("ThreadManForUser", 0x68DA9E36);
-    return 0;
-}
-
-int32_t sceKernelDeleteCallback(void)
-{
-    PSP_STUB("ThreadManForUser", 0xEDBA5844);
     return 0;
 }
 
@@ -120,21 +66,9 @@ int32_t sceKernelDeleteMbx(void)
     return 0;
 }
 
-int32_t sceKernelDeleteMutex(void)
-{
-    PSP_STUB("ThreadManForUser", 0xF8170FBE);
-    return 0;
-}
-
 int32_t sceKernelDeleteSema(void)
 {
     PSP_STUB("ThreadManForUser", 0x28B6489C);
-    return 0;
-}
-
-int32_t sceKernelDeleteThread(void)
-{
-    PSP_STUB("ThreadManForUser", 0x9FA03CD3);
     return 0;
 }
 
@@ -144,57 +78,15 @@ int32_t sceKernelDeleteVpl(void)
     return 0;
 }
 
-int32_t sceKernelExitDeleteThread(void)
-{
-    PSP_STUB("ThreadManForUser", 0x809CE29B);
-    return 0;
-}
-
-int32_t sceKernelExitThread(void)
-{
-    PSP_STUB("ThreadManForUser", 0xAA73C935);
-    return 0;
-}
-
 int32_t sceKernelFreeVpl(void)
 {
     PSP_STUB("ThreadManForUser", 0xB736E9FF);
     return 0;
 }
 
-int32_t sceKernelGetSystemTimeLow(void)
-{
-    PSP_STUB("ThreadManForUser", 0x369ED59D);
-    return 0;
-}
-
-int32_t sceKernelGetSystemTimeWide(void)
-{
-    PSP_STUB("ThreadManForUser", 0x82BC5777);
-    return 0;
-}
-
-int32_t sceKernelGetThreadCurrentPriority(void)
-{
-    PSP_STUB("ThreadManForUser", 0x94AA61EE);
-    return 0;
-}
-
-int32_t sceKernelGetThreadExitStatus(void)
-{
-    PSP_STUB("ThreadManForUser", 0x3B183E26);
-    return 0;
-}
-
 int32_t sceKernelGetThreadStackFreeSize(void)
 {
     PSP_STUB("ThreadManForUser", 0x52089CA1);
-    return 0;
-}
-
-int32_t sceKernelLockMutexCB(void)
-{
-    PSP_STUB("ThreadManForUser", 0x5BF4DD27);
     return 0;
 }
 
@@ -240,18 +132,6 @@ int32_t sceKernelSignalSema(void)
     return 0;
 }
 
-int32_t sceKernelStartThread(void)
-{
-    PSP_STUB("ThreadManForUser", 0xF475845D);
-    return 0;
-}
-
-int32_t sceKernelUnlockMutex(void)
-{
-    PSP_STUB("ThreadManForUser", 0x6B30100F);
-    return 0;
-}
-
 int32_t sceKernelWaitEventFlag(void)
 {
     PSP_STUB("ThreadManForUser", 0x402FCF22);
@@ -276,37 +156,7 @@ int32_t sceKernelWaitSemaCB(void)
     return 0;
 }
 
-int32_t sceKernelWaitThreadEnd(void)
-{
-    PSP_STUB("ThreadManForUser", 0x278C0DF5);
-    return 0;
-}
-
 /* ---- Kernel_Library (9 imports) ---- */
-
-int32_t sceKernelCpuResumeIntr(void)
-{
-    PSP_STUB("Kernel_Library", 0x5F10D406);
-    return 0;
-}
-
-int32_t sceKernelCpuResumeIntrWithSync(void)
-{
-    PSP_STUB("Kernel_Library", 0x3B84732D);
-    return 0;
-}
-
-int32_t sceKernelCpuSuspendIntr(void)
-{
-    PSP_STUB("Kernel_Library", 0x092968F4);
-    return 0;
-}
-
-int32_t sceKernelGetThreadId(void)
-{
-    PSP_STUB("Kernel_Library", 0x293B45B8);
-    return 0;
-}
 
 int32_t sceKernelIsCpuIntrEnable(void)
 {

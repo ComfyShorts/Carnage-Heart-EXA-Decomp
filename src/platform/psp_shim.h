@@ -3,6 +3,7 @@
 #define PSP_SHIM_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Per-stub call record. Each PSP_STUB site owns one, registered on its first call. */
@@ -23,14 +24,31 @@ void psp_stub_hit(PspStubSite *site);
         psp_stub_hit(&psp_site_);                                             \
     } while (0)
 
-/* Prints how often each stub was called. */
-void psp_stub_report(void);
+/* Log a call to an implemented import: its arguments (printf-style) and result.
+ * The first call of each import is always logged; every call when tracing is on. */
+void psp_trace(const char *name, int64_t result, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+#define PSP_TRACE(result, ...) psp_trace(__func__, (int64_t)(result), __VA_ARGS__)
+/* The same for imports that return a pointer. */
+void psp_trace_ptr(const char *name, const void *result, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+#define PSP_TRACE_PTR(result, ...) psp_trace_ptr(__func__, (result), __VA_ARGS__)
+void psp_trace_enable(bool on);
+
+/* Prints every import called so far (implemented and stubs), in first-call order. */
+void psp_import_report(void);
 
 /* File system (files.c): serve PSP device `device` (without the colon, e.g. "disc0")
  * from a host directory. disc0: is the disc root, the folder that holds PSP_GAME/. */
 bool psp_io_mount(const char *device, const char *host_dir, bool writable);
 /* Mount disc0: from either the disc root or its PSP_GAME/USRDIR folder. */
 bool psp_io_mount_disc(const char *dir);
+
+/* Kernel (kernel.c). */
+int psp_kernel_threads_alive(void);  /* PSP threads currently running */
+void psp_kernel_request_exit(void);  /* the user quit: notify the game's exit callback */
+bool psp_kernel_exit_called(void);   /* the game called sceKernelExitGame */
+int psp_kernel_run_callbacks(void);  /* run the calling thread's notified callbacks (*CB waits) */
 
 /* Platform layer (sdl_platform.c). The PSP screen is 480x272. */
 #define PSP_SCREEN_W 480

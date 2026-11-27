@@ -75,6 +75,7 @@ _Static_assert(sizeof(SceIoDirent) == 0x160, "SceIoDirent layout");
 #define SCE_ERROR_ERRNO_EINVAL  ((int32_t)0x80010016)
 #define SCE_ERROR_ERRNO_EMFILE  ((int32_t)0x80010018)
 #define SCE_ERROR_ERRNO_EROFS   ((int32_t)0x8001001E)
+#define SCE_ERROR_ERRNO_ENAMETOOLONG ((int32_t)0x8001005B)
 #define SCE_KERNEL_ERROR_WAIT_TIMEOUT ((int32_t)0x800201A8)
 #define SCE_KERNEL_ERROR_BADF   ((int32_t)0x80020323)
 #define SCE_KERNEL_ERROR_UNSUP  ((int32_t)0x80020325)

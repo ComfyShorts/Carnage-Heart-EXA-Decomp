@@ -37,14 +37,16 @@ make check   # assemble + link + objcopy, compare SHA1 against orig/EBOOT.elf
 ## PC port (work in progress)
 
 A native build that runs decompiled game code against a PSP shim on SDL3. Nothing from the
-game is included. It reads the game's files from your own dump at runtime. For now it
-opens a window and runs an empty frame loop; the chip interpreter and pack reader in
-`src/game/` are exercised by the tests.
+game is included. It reads the game's files from your own dump at runtime. With
+`--startup` it runs the game's own start-up code (entry point, C runtime start-up, `main`,
+`CApplication::Init`) as far as the first graphics call; see `docs/startup.md`. Without
+it, it opens a window and runs an empty frame loop. The chip interpreter and pack reader
+in `src/game/` are exercised by the tests.
 
 | Path | Contents |
 |---|---|
-| `src/game/` | hand-written game C: chip program interpreter (`pgchip.c`), robot record layout (`okedb.h`), pack index and ARZ reader (`packfile.c`, `lz.c`) |
-| `src/platform/` | PSP shim: one file per subsystem (`files`, `input`, `threads`, `graphics`, `audio`, `video`, `net`, `system`) with a stub for each of the 299 imports in `docs/imports.md`, plus the SDL3 window layer |
+| `src/game/` | hand-written game C: start-up path (`startup.c`), the game's file layer and file sets (`fileio.c`), heap allocator stand-in (`heap.c`), chip program interpreter (`pgchip.c`), robot record layout (`okedb.h`), pack index and ARZ reader (`packfile.c`, `lz.c`) |
+| `src/platform/` | PSP shim: one file per subsystem (`files`, `input`, `threads`, `graphics`, `audio`, `video`, `net`, `system`) with a stub for each of the 299 imports in `docs/imports.md`, the implemented kernel imports (`kernel.c`), plus the SDL3 window layer |
 | `src/pc/` | entry point |
 | `tests/` | `chexa-io-test` (file shim) and `chexa-pgchip-test` (loads robot records from the pack and steps them) |
 
@@ -55,6 +57,7 @@ structs keep their PSP layout.
 tools/setup_pc_deps.sh                         # no root: multilib sysroot + 32-bit SDL3 in .deps/
 cmake --preset m32 && cmake --build --preset m32
 build/pc-m32/chexa-pc --disc /path/to/disc     # also --ms DIR, --frames N, --scale N
+build/pc-m32/chexa-pc --disc /path/to/disc --startup   # run the game's start-up path (--trace: log every import call)
 CHEXA_DISC=/path/to/disc ctest --test-dir build/pc-m32
 ```
 
@@ -75,6 +78,8 @@ multilib and 32-bit X11 packages with `apt-get download` and unpacks them into `
 `libgl1:i386 libpulse0:i386` and rebuild SDL3 with PulseAudio enabled. Without them SDL
 uses its software renderer and dummy audio.
 
-The remaining stubs log their first call (set `PSP_SHIM_LOG=all` to log every call), and a call summary
-prints at exit. They're declared `int32_t name(void)` until each import gets its real
-signature. `tools/gen_shim_stubs.py` generated them once; edit the files directly from now on.
+Every import logs its first call, implemented or not, with arguments and result for the
+implemented ones (`--trace` or `PSP_SHIM_LOG=all` logs every call). At exit a summary
+lists every import called, in first-call order, marking the ones that are still stubs.
+Stubs are declared `int32_t name(void)` until each import gets its real signature.
+`tools/gen_shim_stubs.py` generated them once; edit the files directly from now on.

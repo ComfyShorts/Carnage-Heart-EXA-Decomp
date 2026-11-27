@@ -5,6 +5,12 @@ PSP imports declared in `src/platform/psp_imports.h`, which the shim in `src/pla
 implements on SDL3.
 
 So far:
+- `startup.c`: the start-up path: `module_start`, the crt0 `user_main` thread, `sbrk`,
+  `main`, and `CApplication::Init` up to the first graphics call. See `docs/startup.md`.
+- `fileio.c`: the game's synchronous file layer, `PackFile::ReadIndex`, file sets
+  (`OpenFileSet`, `ReadFile` from a set).
+- `heap.c`: a stand-in for the game's block allocator (default and fast heaps,
+  `operator new`), with the game's interface but not its block format.
 - `pgchip.c`/`pgchip.h`: the battle-time chip program interpreter (`CBattleOkePgChip`) and
   the `CPgChipTarget` robot interface.
 - `okedb.h`: the 0x1EC0-byte robot design record (`COkeDataBase`) as a C struct.
