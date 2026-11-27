@@ -18,6 +18,7 @@
  * but the clear is drawn. */
 #include "startup.h"
 #include "gamedata.h"
+#include "battle.h"
 #include "entrance.h"
 #include "pad.h"
 
@@ -370,9 +371,19 @@ static void main_loop(void)
          * ported. */
         int step = render_interval(gfx);
         pad_update(step);
-        if (entrance_running && !entrance_update((float)step * (1.0f / 60.0f))) {
-            entrance_running = 0;
-            SDL_Log("[startup] the entrance ended: the next screens aren't ported");
+        float dt = (float)step * (1.0f / 60.0f);
+        if (entrance_running == 1 && !entrance_update(dt)) {
+            if (entrance_selection() == 1) {
+                battle_mode_start();
+                entrance_running = 2;
+            } else {
+                entrance_running = 0;
+                SDL_Log("[startup] the entrance ended: the next screens aren't ported");
+            }
+        } else if (entrance_running == 2 && !battle_mode_update(dt)) {
+            SDL_Log("[startup] back to the title");
+            entrance_start();
+            entrance_running = 1;
         }
         render_end_frame(gfx);
         if (frame + 1 == (uint32_t)g_startup_gu_trace_frames)

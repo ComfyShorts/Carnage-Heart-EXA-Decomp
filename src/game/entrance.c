@@ -490,6 +490,15 @@ static void phase_mode_menu(EntranceMngr *m)
     }
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         m->selection = m->mode_menu.cursor;
+        if (m->selection == 1) {
+            /* The game asks "no tutorials, start anyway?" (phase 9), takes a player
+             * name on the on-screen keyboard (phase 7), fades out (phase 0xB) and opens
+             * the briefing scene. The port goes straight to its battle setup. */
+            SDL_Log("[entrance] Battle Mode chosen: tutorial dialog, name entry and briefing "
+                    "skipped; starting the port's battle setup");
+            m->done = true;
+            return;
+        }
         if (!m->stop_warned) {
             SDL_Log("[entrance] %s chosen: phase %s isn't ported",
                     m->selection == 0 ? "Story Mode" : "Battle Mode", m->selection == 0 ? "0xC" : "7/9");
@@ -579,25 +588,33 @@ static void mngr_draw(void *ctx)
 static struct {
     int state;
     int fileset;
+    bool fileset_open;
 } g_entrance;
 
 void entrance_start(void)
 {
     g_entrance.state = 0;
-    g_entrance.fileset = -1;
     SDL_Log("[entrance] screen created (root screen state 3)");
 }
 
 /* FUN_088d36e4 */
+int entrance_selection(void)
+{
+    return g_mngr.selection;
+}
+
 int entrance_update(float dt)
 {
     switch (g_entrance.state) {
     case 0:
         /* FUN_088d3560: becomes a CRender node at priority 2. */
         render_add_node(render_instance(), 2, mngr_draw, &g_mngr);
-        g_entrance.fileset = fileset_open("entrance", &g_default_heap, 0, 0);
-        if (g_entrance.fileset < 0)
-            SDL_Log("[entrance] OpenFileSet(\"entrance\") failed");
+        if (!g_entrance.fileset_open) { /* kept open: the battle setup uses its art too */
+            g_entrance.fileset = fileset_open("entrance", &g_default_heap, 0, 0);
+            g_entrance.fileset_open = g_entrance.fileset >= 0;
+            if (!g_entrance.fileset_open)
+                SDL_Log("[entrance] OpenFileSet(\"entrance\") failed");
+        }
         if (!font_init())
             SDL_Log("[entrance] fonts unavailable: menu text won't be drawn");
         /* FUN_088d30d8: CSystemMngr in mode 0xD (CSaveMngr's start-up check), then
@@ -612,8 +629,10 @@ int entrance_update(float dt)
         break;
     case 2:
         mngr_update(&g_mngr, dt);
-        if (g_mngr.done) /* FUN_088d3674 -> FUN_088d317c: the next screens */
+        if (g_mngr.done) { /* FUN_088d3674 -> FUN_088d317c: the next screens */
+            render_remove_node(render_instance(), &g_mngr);
             return 0;
+        }
         break;
     }
     return 1;

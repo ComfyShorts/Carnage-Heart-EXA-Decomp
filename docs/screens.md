@@ -14,8 +14,9 @@ render list, using the game's own images from the "entrance" file set.
 | Top menu: Start Game / Continue / Network Play | Buttons, text, the fade and slide-in from the left, cursor highlight (additive), up/down |
 | Mode menu: Story Mode / Battle Mode | Circle on Start Game slides the top menu out to the right and this one in from the left. Cross goes back |
 
-Choosing Story Mode, Battle Mode, Continue or Network Play only logs a line: the
-phases after the menus (0xC, 7/9, 6) aren't ported.
+Battle Mode goes to the port's battle setup (see `docs/battle.md`). Choosing Story
+Mode, Continue or Network Play only logs a line: the phases after the menus (0xC, 6)
+aren't ported.
 
 ### Why the logo frame is black
 

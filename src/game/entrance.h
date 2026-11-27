@@ -23,4 +23,8 @@ void entrance_start(void);
 /* One main-loop step; dt in seconds. Returns 0 once the entrance has ended. */
 int entrance_update(float dt);
 
+/* What the player chose in the mode menu once the entrance has ended (0 Story Mode,
+ * 1 Battle Mode). */
+int entrance_selection(void);
+
 #endif
