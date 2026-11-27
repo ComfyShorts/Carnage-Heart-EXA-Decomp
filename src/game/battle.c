@@ -1,6 +1,7 @@
 /* See battle.h and docs/battle.md. */
 #include "battle.h"
 #include "battle_sim.h"
+#include "battle_menu.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -28,32 +29,12 @@
 
 #define DEG (3.14159265f / 180.0f)
 
-/* ---- the preset designs ---- */
+/* ---- the records ---- */
 
-typedef struct Preset {
-    char path[48];
-    char label[32];
-} Preset;
-
-#define MAX_PRESETS 128
-static Preset g_mine[MAX_PRESETS], g_theirs[MAX_PRESETS];
-static int g_mine_count, g_theirs_count;
 static Pack g_pack;
 static bool g_pack_open;
 
-static void add_if_present(Preset *list, int *count, const char *path, const char *label)
-{
-    if (*count >= MAX_PRESETS || !pack_find(&g_pack, path))
-        return;
-    snprintf(list[*count].path, sizeof list[0].path, "%s", path);
-    snprintf(list[*count].label, sizeof list[0].label, "%s", label);
-    (*count)++;
-}
-
-/* The records' name fields are mostly empty, so they're labelled by file. Your side
- * offers the arena designs (complete fighting programs), the two test designs and
- * the tutorial model answers (lesson drills); the opponents are the arena's. */
-static bool find_presets(void)
+static bool open_pack(void)
 {
     if (!g_pack_open) {
         if (pack_open(&g_pack, "disc0:/PSP_GAME/USRDIR") < 0) {
@@ -62,27 +43,7 @@ static bool find_presets(void)
         }
         g_pack_open = true;
     }
-    char path[48], label[32];
-    g_mine_count = g_theirs_count = 0;
-    for (int i = 1; i <= 60; i++) {
-        snprintf(path, sizeof path, "preset/arena/oke_b%02d_1.bin", i);
-        snprintf(label, sizeof label, "Arena OKE %02d", i);
-        add_if_present(g_mine, &g_mine_count, path, label);
-    }
-    add_if_present(g_mine, &g_mine_count, "preset/oke_t01_1.bin", "Test OKE 1");
-    add_if_present(g_mine, &g_mine_count, "preset/oke_t01_2.bin", "Test OKE 2");
-    for (int i = 0; i < 40; i++) {
-        snprintf(path, sizeof path, "preset/lecture/oke_l%02d_a.bin", i);
-        snprintf(label, sizeof label, "Lesson %02d answer", i);
-        add_if_present(g_mine, &g_mine_count, path, label);
-    }
-    for (int i = 1; i <= 60; i++) {
-        snprintf(path, sizeof path, "preset/arena/oke_b%02d_1.bin", i);
-        snprintf(label, sizeof label, "Arena OKE %02d", i);
-        add_if_present(g_theirs, &g_theirs_count, path, label);
-    }
-    SDL_Log("[battle] %d designs for you, %d arena opponents", g_mine_count, g_theirs_count);
-    return g_mine_count > 0 && g_theirs_count > 0;
+    return true;
 }
 
 static bool load_record(const char *path, OkeDataBase *out)
@@ -98,10 +59,10 @@ static bool load_record(const char *path, OkeDataBase *out)
 static Battle g_b;
 
 /* The 3D scene: the field and the two bodies (see docs/battle.md). */
-#define BATTLE_MAP 1        /* stand-in: the arena's map choice isn't read yet */
 #define OKE_HW_BODY 0x240   /* s32 in the hardware block: body type (COkeFile id) */
 #define OKE_HW_PAINT 0x244  /* s32: paint scheme 0-3 (assumed from the presets) */
 static struct {
+    int map;    /* the loaded land/mapNN, -1 none */
     Terrain *land;
     Gmo *sky;
     OkeModel *body[2];
@@ -118,11 +79,15 @@ static int hw_word(const OkeDataBase *rec, int off)
 
 static void scene_load(void)
 {
-    if (!g_scene.land) {
-        g_scene.land = terrain_load(BATTLE_MAP);
+    int map = battle_menu_setup()->map;
+    if (!g_scene.land || g_scene.map != map) {
+        terrain_free(g_scene.land);
+        gmo_free(g_scene.sky);
+        g_scene.land = terrain_load(map);
         char path[48];
-        snprintf(path, sizeof path, "land/map%02d/map%02d_sky.gmo", BATTLE_MAP, BATTLE_MAP);
+        snprintf(path, sizeof path, "land/map%02d/map%02d_sky.gmo", map, map);
         g_scene.sky = gmo_load(path);
+        g_scene.map = map;
     }
     for (int i = 0; i < 2; i++) {
         okemodel_free(g_scene.body[i]);
@@ -134,11 +99,10 @@ static void scene_load(void)
 
 /* ---- screens ---- */
 
-typedef enum { SCR_PICK_MINE, SCR_PICK_THEIRS, SCR_BATTLE, SCR_RESULT } Screen;
+typedef enum { SCR_MENU, SCR_BATTLE, SCR_RESULT } Screen;
 
 static struct {
     Screen screen;
-    int pick[2], scroll[2];
     float t;          /* seconds in this screen */
     int fileset;
     bool node_added;
@@ -153,15 +117,22 @@ static void enter(Screen s)
     g.t = 0.0f;
 }
 
+/* From the choices made on the Battle Mode screens (battle_menu.c). */
 static bool start_battle(void)
 {
+    const BattleSetup *set = battle_menu_setup();
     memset(&g_b, 0, sizeof g_b);
-    if (!load_record(g_mine[g.pick[0]].path, &g_b.oke[0].rec) ||
-        !load_record(g_theirs[g.pick[1]].path, &g_b.oke[1].rec))
+    if (!open_pack() || !load_record(set->oke_path[0], &g_b.oke[0].rec) ||
+        !load_record(set->oke_path[1], &g_b.oke[1].rec))
         return false;
-    battle_sim_start(&g_b, 0x12345678u ^ (uint32_t)(g.pick[0] * 131 + g.pick[1]));
+    g_b.time_limit = set->time_limit;
+    uint32_t seed = 0x12345678u;
+    for (const char *c = set->oke_path[1]; *c; c++)
+        seed = seed * 31u + (uint8_t)*c;
+    battle_sim_start(&g_b, seed ^ (uint32_t)set->map);
     scene_load();
-    SDL_Log("[battle] %s vs %s", g_mine[g.pick[0]].label, g_theirs[g.pick[1]].label);
+    SDL_Log("[battle] %s vs %s on map %02d, %.0f s", set->oke_label[0], set->oke_label[1], set->map,
+            set->time_limit);
     return true;
 }
 
@@ -208,46 +179,6 @@ static void text_centered(const char *s, int cx, int y, uint32_t color)
 static Picture *pic(const char *name)
 {
     return picture_load(name); /* cached after the first load */
-}
-
-/* ---- the selection screens (stand-ins, drawn with the title's art) ---- */
-
-#define LIST_ROWS 7
-
-static void draw_list(const char *title, const Preset *list, int count, int pick, int scroll)
-{
-    Picture *back = pic("title/ti_back.gim"), *button = pic("title/ti_menb0.gim"),
-            *cursor = pic("title/ti_menl0.gim");
-    picture_draw(back, 0, 0, 0, BLEND_ALPHA, 0xFFFFFFFF, 0, 0);
-    fill_rect(0, 0, 480, 272, 0x60000000);
-    text_centered(title, 240, 14, 0xFFFFFFFF);
-    int x = 160, y0 = 44;
-    for (int r = 0; r < LIST_ROWS && scroll + r < count; r++) {
-        int i = scroll + r, y = y0 + r * 26;
-        picture_draw(button, x, y, 0, BLEND_ALPHA, 0xFFFFFFFF, 0, 0);
-        if (i == pick) {
-            float pulse = 0.65f + 0.35f * sinf(g.t * 5.0f);
-            picture_draw(cursor, x, y, 0, BLEND_ADD, (uint32_t)(pulse * 255) << 24 | 0xFFFFFF, 0, 0);
-        }
-        text_centered(list[i].label, x + 80 - 4, y + 2, 0xFFFFFFFF);
-    }
-    char info[48];
-    snprintf(info, sizeof info, "%d / %d", pick + 1, count);
-    text_centered(info, 240, y0 + LIST_ROWS * 26 + 4, 0xFFC0C0C0);
-    text_centered("O select   X back", 240, 248, 0xFFC0C0C0);
-}
-
-static void list_input(int side, int count)
-{
-    int *pick = &g.pick[side], *scroll = &g.scroll[side];
-    if (pad_repeat(PSP_CTRL_UP))
-        *pick = *pick > 0 ? *pick - 1 : count - 1;
-    else if (pad_repeat(PSP_CTRL_DOWN))
-        *pick = *pick < count - 1 ? *pick + 1 : 0;
-    if (*pick < *scroll)
-        *scroll = *pick;
-    if (*pick >= *scroll + LIST_ROWS)
-        *scroll = *pick - LIST_ROWS + 1;
 }
 
 /* ---- the battle screen ---- */
@@ -512,8 +443,8 @@ static void draw_hud(void)
         picture_draw(sight, (int)sx - picture_width(sight) / 2, (int)sy - picture_height(sight) / 2, 0, BLEND_ALPHA,
                      0xFFFFFFFF, 0, 0);
     /* Names: plain text until the game's top windows are read. */
-    text(g_mine[g.pick[0]].label, 6, 6, 0xFFFFC080);
-    text_right(g_theirs[g.pick[1]].label, 474, 6, 0xFF8080FF);
+    text(battle_menu_setup()->oke_label[0], 6, 6, 0xFFFFC080);
+    text_right(battle_menu_setup()->oke_label[1], 474, 6, 0xFF8080FF);
     char line[24];
     snprintf(line, sizeof line, "%d%%", oke_hp_percent(foe));
     text_right(line, 474, 22, 0xFFFFFFFF);
@@ -525,7 +456,7 @@ static void draw_battle(void)
     draw_scene3d();
     draw_hud();
     char t[16];
-    float left = TIME_LIMIT - g_b.time;
+    float left = battle_time_limit(&g_b) - g_b.time;
     snprintf(t, sizeof t, "%3d", left > 0 ? (int)ceilf(left) : 0);
     text_centered(t, 240, 8, 0xFFFFFFFF);
 
@@ -548,11 +479,8 @@ static void battle_draw(void *ctx)
     (void)ctx;
     sceGuEnable(GU_BLEND);
     switch (g.screen) {
-    case SCR_PICK_MINE:
-        draw_list("Choose your OKE", g_mine, g_mine_count, g.pick[0], g.scroll[0]);
-        break;
-    case SCR_PICK_THEIRS:
-        draw_list("Choose your opponent", g_theirs, g_theirs_count, g.pick[1], g.scroll[1]);
+    case SCR_MENU:
+        battle_menu_draw();
         break;
     case SCR_BATTLE:
     case SCR_RESULT:
@@ -565,19 +493,16 @@ static void battle_draw(void *ctx)
 void battle_mode_start(void)
 {
     memset(&g, 0, sizeof g);
+    g_scene.map = -1;
     if (!font_init())
         SDL_Log("[battle] fonts unavailable");
     g.fileset = fileset_open("battlescene", &g_default_heap, 0, 0);
     if (g.fileset < 0)
         SDL_Log("[battle] OpenFileSet(\"battlescene\") failed: no HUD art");
-    if (!find_presets()) {
-        g.exit_request = true;
-        return;
-    }
     render_add_node(render_instance(), 2, battle_draw, &g);
     g.node_added = true;
-    enter(SCR_PICK_MINE);
-    SDL_Log("[battle] Battle Mode: choose your OKE");
+    battle_menu_start();
+    enter(SCR_MENU);
 }
 
 int battle_mode_update(float dt)
@@ -590,25 +515,14 @@ int battle_mode_update(float dt)
     }
     g.t += dt;
     switch (g.screen) {
-    case SCR_PICK_MINE:
-        list_input(0, g_mine_count);
-        if (pad_pressed(PSP_CTRL_CIRCLE)) {
-            SDL_Log("[battle] your OKE: %s", g_mine[g.pick[0]].label);
-            enter(SCR_PICK_THEIRS);
-        } else if (pad_pressed(PSP_CTRL_CROSS)) {
+    case SCR_MENU: {
+        int r = battle_menu_update(dt);
+        if (r == 0)
             g.exit_request = true;
-        }
+        else if (r == 2 && start_battle())
+            enter(SCR_BATTLE);
         break;
-    case SCR_PICK_THEIRS:
-        list_input(1, g_theirs_count);
-        if (pad_pressed(PSP_CTRL_CIRCLE)) {
-            SDL_Log("[battle] opponent: %s", g_theirs[g.pick[1]].label);
-            if (start_battle())
-                enter(SCR_BATTLE);
-        } else if (pad_pressed(PSP_CTRL_CROSS)) {
-            enter(SCR_PICK_MINE);
-        }
-        break;
+    }
     case SCR_BATTLE:
         if (g.t >= START_BANNER) {
             battle_sim_step(&g_b, dt);
@@ -621,8 +535,10 @@ int battle_mode_update(float dt)
         }
         break;
     case SCR_RESULT:
-        if (g.t > 1.0f && pad_pressed(PSP_CTRL_CIRCLE))
-            enter(SCR_PICK_THEIRS);
+        if (g.t > 1.0f && pad_pressed(PSP_CTRL_CIRCLE)) {
+            battle_menu_resume();
+            enter(SCR_MENU);
+        }
         break;
     }
     return 1;

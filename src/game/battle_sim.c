@@ -1332,8 +1332,13 @@ void battle_sim_step(Battle *b, float dt)
             o->heat = 0;
     }
     int pa = oke_hp_percent(a), pc = oke_hp_percent(c);
-    if (a->hp <= 0 || c->hp <= 0 || b->time >= TIME_LIMIT)
+    if (a->hp <= 0 || c->hp <= 0 || b->time >= battle_time_limit(b))
         b->result = pa > pc ? 0 : pa < pc ? 1 : 2;
+}
+
+float battle_time_limit(const Battle *b)
+{
+    return b->time_limit > 0.0f ? b->time_limit : TIME_LIMIT;
 }
 
 void battle_sim_start(Battle *b, uint32_t seed)

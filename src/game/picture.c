@@ -40,7 +40,7 @@ struct Picture {
     int frame;
 };
 
-#define MAX_PICTURES 64
+#define MAX_PICTURES 256
 static Picture *g_pictures[MAX_PICTURES];
 
 static uint16_t rd16(const uint8_t *p)

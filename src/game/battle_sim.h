@@ -104,6 +104,7 @@ typedef struct Battle {
     Oke oke[2];
     Shot shots[MAX_SHOTS];
     float time;
+    float time_limit; /* seconds; 0 means TIME_LIMIT */
     int tick;
     uint32_t rng;
     int result; /* -1 running, 0 you win, 1 you lose, 2 draw */
@@ -118,6 +119,9 @@ int oke_hp_percent(const Oke *o);
 int oke_heat_percent(const Oke *o);
 
 void battle_sim_start(Battle *b, uint32_t seed);
+
+/* The battle's length: b->time_limit, or TIME_LIMIT when that's unset. */
+float battle_time_limit(const Battle *b);
 
 /* One step of dt seconds. Sets b->result once the battle is over. */
 void battle_sim_step(Battle *b, float dt);
