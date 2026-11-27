@@ -139,7 +139,7 @@ static void reset_state(void)
     sceGuMaterial(2, 0xFFFFFFFF);
     sceGuMaterial(4, 0xFFFFFFFF);
     sceGuSpecular(1.0f);
-    sceGuUnknown3727EC(16, 16, 32, 32);
+    sceGuSpriteSize(16, 16, 32, 32);
     sceGuColor(0xFFFFFFFF);
     sceGuPatchDivision(1, 1);
     for (int mode = GU_MODEL; mode >= GU_PROJECTION; mode--) {

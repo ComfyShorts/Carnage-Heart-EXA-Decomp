@@ -85,17 +85,35 @@ void psp_display_request_screenshot(const char *path)
     g_shot_done = false;
 }
 
-static void save_screenshot(void *top, int bufw, int psm)
+#define MAX_SHOTS 8
+static struct { uint32_t frame; char path[512]; } g_shots[MAX_SHOTS];
+static int g_shot_count;
+
+void psp_display_request_screenshot_at(uint32_t frame, const char *path)
+{
+    if (g_shot_count < MAX_SHOTS) {
+        g_shots[g_shot_count].frame = frame;
+        snprintf(g_shots[g_shot_count].path, sizeof g_shots[0].path, "%s", path);
+        g_shot_count++;
+    }
+}
+
+static void save_png(void *top, int bufw, int psm, const char *path, const char *what)
 {
     SDL_Surface *s = SDL_CreateSurface(PSP_SCREEN_W, PSP_SCREEN_H, SDL_PIXELFORMAT_ABGR8888);
     if (!s)
         return;
     convert(s->pixels, top, bufw, psm);
-    if (SDL_SavePNG(s, g_shot_path))
-        SDL_Log("[display] first drawn frame (#%u) saved to %s", (unsigned)g_frames, g_shot_path);
+    if (SDL_SavePNG(s, path))
+        SDL_Log("[display] %s (#%u) saved to %s", what, (unsigned)g_frames, path);
     else
-        SDL_Log("[display] can't save %s: %s", g_shot_path, SDL_GetError());
+        SDL_Log("[display] can't save %s: %s", path, SDL_GetError());
     SDL_DestroySurface(s);
+}
+
+static void save_screenshot(void *top, int bufw, int psm)
+{
+    save_png(top, bufw, psm, g_shot_path, "first drawn frame");
 }
 
 /* ---- imports ---- */
@@ -124,6 +142,9 @@ int32_t sceDisplaySetFrameBuf(void *top, int bufw, int psm, int sync)
             save_screenshot(top, bufw, psm & 3);
         }
     }
+    for (int i = 0; top && i < g_shot_count; i++)
+        if (g_shots[i].frame == g_frames)
+            save_png(top, bufw, psm & 3, g_shots[i].path, "frame");
     return 0;
 }
 

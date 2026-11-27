@@ -66,7 +66,7 @@ sceGuDisable: SCISSOR_TEST, FOG, LIGHTING, LIGHT0-3, TEXTURE_2D
 sceGuTexMode(1, 0, 0, 0); sceGuTexFilter(7, 1); sceGuTexFunc(0, 1); sceGuTexWrap(0, 0)
 sceGuFog(FLT_MIN, FLT_MAX, 0xFFFFFFFF); sceGuLightMode(0)
 sceGuAmbient(-1); sceGuAmbientColor(-1); sceGuMaterial(1/2/4, -1); sceGuSpecular(1)
-0x08b767ec(16, 16, 32, 32)                   stores four values, emits nothing; unknown
+sceGuSpriteSize(16, 16, 32, 32)              0x08b767ec: stored sprite size, emits nothing
 sceGuColor(-1); sceGuPatchDivision(1, 1)
 sceGumMatrixMode(2/1/0); sceGumLoadIdentity(); sceGumUpdateMatrix()
 sceGuClearColor(0); sceGuClearDepth(0); sceGuClearStencil(0); sceGuClear(0x16)

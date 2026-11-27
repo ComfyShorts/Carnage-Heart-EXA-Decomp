@@ -40,7 +40,8 @@ int32_t sceUmdWaitDriveStat(int stat);
 int32_t sceUmdWaitDriveStatCB(int stat, unsigned int timeout);
 
 /* input.c: Controller input */
-int32_t sceCtrlPeekBufferPositive(void);
+struct SceCtrlData;
+int32_t sceCtrlPeekBufferPositive(struct SceCtrlData *data, int count);
 int32_t sceCtrlSetSamplingMode(int mode);
 
 /* threads.c: Kernel threads, sync, timing, interrupts (the real ones are in kernel.c) */
@@ -108,6 +109,7 @@ int32_t sceKernelPowerUnlock(void);
 
 /* GE (ge.c), display (display.c), DMA (graphics.c) */
 struct PspGeCallbackData;
+struct SceCtrlData;
 int32_t sceGeBreak(int mode, void *param);
 int32_t sceGeContinue(void);
 int32_t sceGeDrawSync(int sync_type);

@@ -573,6 +573,16 @@ static int32_t read_from_set(const char *name, void *buf, uint32_t cap)
     return (int32_t)n;
 }
 
+int32_t fileio_file_size(const char *name)
+{
+    char norm[1024];
+    if (check_name(norm, name, "GetFileSize") < 0)
+        return -1;
+    const FileSetSlot *s;
+    const FstsMember *m = find_member(norm, &s);
+    return m ? (int32_t)m->size : -1;
+}
+
 int32_t fileio_read_file(const char *name, void *buf, uint32_t cap)
 {
     char norm[1024];

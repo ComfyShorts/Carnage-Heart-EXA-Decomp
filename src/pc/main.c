@@ -14,6 +14,11 @@
  *   --ge-trace        log every GE command executed (very verbose)
  *   --screenshot [FILE]  save the first frame the game draws as a PNG
  *                     (default orig/first_frame.png)
+ *   --shot N FILE     save displayed frame N as a PNG (repeatable, up to 8)
+ *   --press N BUTTON  press a PSP button for 4 frames from displayed frame N
+ *                     (circle, cross, square, triangle, up, down, left, right,
+ *                     start, select, l, r; repeatable)
+ *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)
  *   --scale N         window scale (default 2, i.e. 960x544)
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
  *                     check the logging (debug only)
@@ -74,6 +79,20 @@ static int is_implemented(const PspImport *imp)
     return 0;
 }
 
+static uint32_t button_by_name(const char *n)
+{
+    static const struct { const char *name; uint32_t bit; } k[] = {
+        {"circle", PSP_CTRL_CIRCLE}, {"cross", PSP_CTRL_CROSS}, {"square", PSP_CTRL_SQUARE},
+        {"triangle", PSP_CTRL_TRIANGLE}, {"up", PSP_CTRL_UP}, {"down", PSP_CTRL_DOWN},
+        {"left", PSP_CTRL_LEFT}, {"right", PSP_CTRL_RIGHT}, {"start", PSP_CTRL_START},
+        {"select", PSP_CTRL_SELECT}, {"l", PSP_CTRL_LTRIGGER}, {"r", PSP_CTRL_RTRIGGER},
+    };
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
+        if (!SDL_strcasecmp(n, k[i].name))
+            return k[i].bit;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     long frames = -1;
@@ -89,6 +108,20 @@ int main(int argc, char **argv)
             ms = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             frames = strtol(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--shot") && i + 2 < argc) {
+            uint32_t n = (uint32_t)strtoul(argv[i + 1], NULL, 0);
+            psp_display_request_screenshot_at(n, argv[i + 2]);
+            i += 2;
+        } else if (!strcmp(argv[i], "--press") && i + 2 < argc) {
+            uint32_t b = button_by_name(argv[i + 2]);
+            if (!b) {
+                fprintf(stderr, "unknown button %s\n", argv[i + 2]);
+                return 2;
+            }
+            psp_ctrl_script_press((uint32_t)strtoul(argv[i + 1], NULL, 0), b);
+            i += 2;
+        } else if (!strcmp(argv[i], "--elf") && i + 1 < argc)
+            g_game_elf_path = argv[++i];
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc)
             scale = (int)strtol(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--call-all-stubs"))
@@ -107,7 +140,8 @@ int main(int argc, char **argv)
         else {
             fprintf(stderr,
                     "usage: %s [--disc DIR] [--ms DIR] [--startup] [--trace] [--frames N] [--scale N] "
-                    "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--call-all-stubs]\n",
+                    "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
+                    "[--elf FILE] [--call-all-stubs]\n",
                     argv[0]);
             return 2;
         }

@@ -41,5 +41,7 @@ bool psp_display_snapshot(uint32_t *rgba, uint32_t *frame_number);
 uint32_t psp_display_frame_count(void);
 /* Save the first frame the GE drew into, once it is shown, as PNG. */
 void psp_display_request_screenshot(const char *path);
+/* Save the frame shown as display frame number `frame` (counted from 1). */
+void psp_display_request_screenshot_at(uint32_t frame, const char *path);
 
 #endif

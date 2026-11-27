@@ -51,6 +51,22 @@ bool psp_kernel_exit_called(void);   /* the game called sceKernelExitGame */
 int psp_kernel_run_callbacks(void);  /* run the calling thread's notified callbacks (*CB waits) */
 
 /* Platform layer (sdl_platform.c). The PSP screen is 480x272. */
+/* Controller (input.c). Button bits as in sceCtrl. */
+enum {
+    PSP_CTRL_SELECT = 0x1, PSP_CTRL_START = 0x8, PSP_CTRL_UP = 0x10, PSP_CTRL_RIGHT = 0x20,
+    PSP_CTRL_DOWN = 0x40, PSP_CTRL_LEFT = 0x80, PSP_CTRL_LTRIGGER = 0x100, PSP_CTRL_RTRIGGER = 0x200,
+    PSP_CTRL_TRIANGLE = 0x1000, PSP_CTRL_CIRCLE = 0x2000, PSP_CTRL_CROSS = 0x4000, PSP_CTRL_SQUARE = 0x8000,
+};
+typedef struct SceCtrlData {
+    uint32_t timestamp;
+    uint32_t buttons;
+    uint8_t lx, ly;
+    uint8_t reserved[6];
+} SceCtrlData;
+void psp_ctrl_key_event(int keycode, bool down);         /* from the SDL event pump */
+void psp_ctrl_script_press(uint32_t frame, uint32_t buttons); /* press on a displayed frame */
+uint32_t psp_display_frame_count(void);
+
 #define PSP_SCREEN_W 480
 #define PSP_SCREEN_H 272
 

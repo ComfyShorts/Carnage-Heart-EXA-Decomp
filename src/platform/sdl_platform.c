@@ -41,6 +41,8 @@ bool psp_platform_pump(void)
             return false;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE)
             return false;
+        if ((ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) && !ev.key.repeat)
+            psp_ctrl_key_event((int)ev.key.key, ev.type == SDL_EVENT_KEY_DOWN);
     }
     return true;
 }

@@ -130,9 +130,13 @@ void sceGuClear(int flags);
 void sceGuDrawArray(int prim, int vtype, int count, const void *indices, const void *vertices);
 void sceGuSetMatrix(int type, const ScePspFMatrix4 *m);
 
-/* 0x003727EC in the game: stores four values in the list context and emits nothing.
- * The game calls it once per frame with (16, 16, 32, 32); its purpose is unknown. */
-void sceGuUnknown3727EC(int a, int b, int c, int d);
+/* Two calls in the game's libgu that aren't in the public SDK: a textured sprite with
+ * a stored size. 0x003727EC sets the source (texel) and destination (pixel) sizes;
+ * 0x00372808 draws a through-mode sprite with its top-left at (x, y) and its first
+ * texel at (u, v). flip bit 0 mirrors u, bit 1 mirrors v; corner 1-3 picks which
+ * corner the first texel goes to (swapping y, both, or x). */
+void sceGuSpriteSize(int srcw, int srch, int dstw, int dsth);
+void sceGuSprite(int x, int y, int z, int u, int v, int flip, int corner);
 
 /* libgum: a matrix stack in caller-provided memory, uploaded by sceGumUpdateMatrix. */
 void sceGumSetMatrixStack(ScePspFMatrix4 *mem, int proj_depth, int view_depth, int model_depth,

@@ -44,7 +44,7 @@ typedef struct GuState {
     /* clear */
     uint32_t clear_color;
     unsigned clear_depth, clear_stencil;
-    int unknown[4];
+    int sprite_srcw, sprite_srch, sprite_dstw, sprite_dsth;
 } GuState;
 
 static GuState g;
@@ -817,13 +817,53 @@ void sceGuSetMatrix(int type, const ScePspFMatrix4 *m)
             emit(start[type] + 1, f24(f[col * 4 + row]));
 }
 
-void sceGuUnknown3727EC(int a, int b, int c, int d)
+void sceGuSpriteSize(int srcw, int srch, int dstw, int dsth)
 {
-    trace("sceGuUnknown3727EC(%d, %d, %d, %d)", a, b, c, d);
-    g.unknown[0] = a;
-    g.unknown[1] = b;
-    g.unknown[2] = c;
-    g.unknown[3] = d;
+    trace("sceGuSpriteSize(%d, %d, %d, %d)", srcw, srch, dstw, dsth);
+    g.sprite_srcw = srcw;
+    g.sprite_srch = srch;
+    g.sprite_dstw = dstw;
+    g.sprite_dsth = dsth;
+}
+
+typedef struct SpriteVertex {
+    int16_t u, v, x, y, z;
+} SpriteVertex;
+
+void sceGuSprite(int x, int y, int z, int u, int v, int flip, int corner)
+{
+    trace("sceGuSprite(%d, %d, %d, %d, %d, %d, %d)", x, y, z, u, v, flip, corner);
+    SpriteVertex *p = sceGuGetMemory(2 * (int)sizeof *p);
+    if (!p)
+        return;
+    p[0] = (SpriteVertex){(int16_t)u, (int16_t)v, (int16_t)x, (int16_t)y, (int16_t)z};
+    p[1] = (SpriteVertex){(int16_t)(u + g.sprite_srcw), (int16_t)(v + g.sprite_srch),
+                          (int16_t)(x + g.sprite_dstw), (int16_t)(y + g.sprite_dsth), (int16_t)z};
+    int16_t t;
+    if (flip & 1) { /* mirror horizontally: swap the u coordinates */
+        t = p[0].u; p[0].u = p[1].u; p[1].u = t;
+    }
+    if (flip & 2) { /* mirror vertically */
+        t = p[0].v; p[0].v = p[1].v; p[1].v = t;
+    }
+    switch (corner) { /* which screen corner the first texel lands on */
+    case 1:
+        t = p[0].y; p[0].y = p[1].y; p[1].y = t;
+        break;
+    case 2:
+        t = p[0].x; p[0].x = p[1].x; p[1].x = t;
+        t = p[0].y; p[0].y = p[1].y; p[1].y = t;
+        break;
+    case 3:
+        t = p[0].x; p[0].x = p[1].x; p[1].x = t;
+        break;
+    default:
+        break;
+    }
+    emit(0x12, GU_TRANSFORM_2D | GU_VERTEX_16BIT | GU_TEXTURE_16BIT);
+    emit_addr(0x01, p);
+    emit(0x04, (uint32_t)(GU_SPRITES << 16 | 2));
+    update_stall();
 }
 
 /* ---- libgum ---- */

@@ -17,6 +17,7 @@
  * calls sceKernelExitGame. The screens and the scene code aren't ported, so nothing
  * but the clear is drawn. */
 #include "startup.h"
+#include "gamedata.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -32,6 +33,7 @@
 const char *g_startup_stop_reason = "user_main has not run";
 int g_startup_status = -1;
 int g_startup_gu_trace_frames;
+const char *g_game_elf_path = "orig/EBOOT.elf";
 
 /* ---- newlib heap: sbrk and memalign ---- */
 
@@ -299,6 +301,7 @@ static int application_init(void)
 
     /* 10. File I/O, then the pack index (retried until it loads, like the game). */
     fileio_init();
+    gamedata_open(g_game_elf_path);
     for (int tries = 0; !packindex_read("chexa.idx"); tries++)
         if (tries >= 3) {
             SDL_Log("[startup] PackFile::ReadIndex(\"chexa.idx\") keeps failing");

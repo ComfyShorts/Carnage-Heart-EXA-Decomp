@@ -49,6 +49,10 @@ const char *packindex_string(uint32_t offset);
  * default heap. Only the synchronous form (async = 0) is implemented. */
 int fileset_open(const char *name, GameHeap *heap, int from_top, int async);
 
+/* GetFileSize for a member of an open file set (the set branch of FUN_08b12a60):
+ * the unpacked size, or -1. */
+int32_t fileio_file_size(const char *name);
+
 /* ReadFile (FUN_08b1385c): from the open file sets first. Returns the unpacked size
  * or -1. The fall-back to loose pack entries isn't written yet (startup doesn't use it). */
 int32_t fileio_read_file(const char *name, void *buf, uint32_t cap);

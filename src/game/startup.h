@@ -18,4 +18,7 @@ extern int g_startup_status;
 /* Log the sceGu calls of the first N frames (0: none). Set before game_module_start. */
 extern int g_startup_gu_trace_frames;
 
+/* The decrypted EBOOT the interface text is read from (gamedata.h). */
+extern const char *g_game_elf_path;
+
 #endif
