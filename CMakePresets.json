@@ -1,0 +1,24 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "m32",
+      "displayName": "32-bit (PSP struct layout)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/pc-m32",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-m32.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "x64",
+      "displayName": "64-bit host build (needs a system SDL3)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/pc-x64",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "m32", "configurePreset": "m32" },
+    { "name": "x64", "configurePreset": "x64" }
+  ]
+}

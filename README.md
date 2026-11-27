@@ -33,3 +33,35 @@ make check   # assemble + link + objcopy, compare SHA1 against orig/EBOOT.elf
   as-is: VFPU instructions (emitted as `.word`), little-endian NaN doubles, and
   Shift-JIS strings (emitted as raw bytes).
 - `config/symbol_addrs.txt` names the 299 import stubs. See `docs/imports.md`.
+
+## PC port (work in progress)
+
+A native build that runs decompiled game code against a PSP shim on SDL3. Nothing from the
+game is included or needed yet: for now it opens a window and runs an empty frame loop.
+
+| Path | Contents |
+|---|---|
+| `src/game/` | decompiled game C (empty so far) |
+| `src/platform/` | PSP shim: one file per subsystem (`files`, `input`, `threads`, `graphics`, `audio`, `video`, `net`, `system`) with a stub for each of the 299 imports in `docs/imports.md`, plus the SDL3 window layer |
+| `src/pc/` | entry point |
+
+The default build is 32-bit (`-m32`) so pointers and `long` are 4 bytes and decompiled
+structs keep their PSP layout.
+
+```sh
+tools/setup_pc_deps.sh                         # no root: multilib sysroot + 32-bit SDL3 in .deps/
+cmake --preset m32 && cmake --build --preset m32
+build/pc-m32/chexa-pc                          # --frames N, --scale N, --call-all-stubs
+```
+
+Needs `cmake`, `ninja-build` and `build-essential`. `setup_pc_deps.sh` fetches Ubuntu's
+multilib and 32-bit X11 packages with `apt-get download` and unpacks them into `.deps/`, so
+`gcc-multilib` isn't required. Installing these system-wide works too:
+`gcc-multilib libx11-6:i386 libxext6:i386 libxrandr2:i386 libxcursor1:i386 libxi6:i386`
+(after `dpkg --add-architecture i386`). For OpenGL rendering and sound, add
+`libgl1:i386 libpulse0:i386` and rebuild SDL3 with PulseAudio enabled. Without them SDL
+uses its software renderer and dummy audio.
+
+Stubs log their first call (set `PSP_SHIM_LOG=all` to log every call), and a call summary
+prints at exit. They're declared `int32_t name(void)` until each import gets its real
+signature. `tools/gen_shim_stubs.py` generated them once; edit the files directly from now on.
