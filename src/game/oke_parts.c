@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "gamedata.h"
+#include "savedata.h"
 
 /* splat addresses (Ghidra - 0x08804000) */
 #define T_BODY_NAME 0x00480DACu  /* COkeName, two pointers a body, the name first */
@@ -213,11 +214,11 @@ int cpu_program_width(int cpu, int program)
 
 /* ---- the parts lists ---- */
 
-/* The parts stock in Battle Mode (FUN_08918d5c on entry): everything 2, in stock,
- * except bodies 14 and 33 (the 0x38 and 0x84 words set to 1). */
-static bool in_stock_body(int body)
+/* The lists offer only the parts the player owns: stock 2 in the save (savedata.h;
+ * a new Battle Mode game owns all but bodies 14 and 33, the Shop sells the rest). */
+static bool owned(int group, int id)
 {
-    return body != 14 && body != 33;
+    return savedata_stock(group, id) == 2;
 }
 
 bool hw_item_shown(const OkeDataBase *card, int item)
@@ -255,21 +256,24 @@ int part_list(const OkeDataBase *card, int item, int *ids)
     case HWI_BODY: /* FUN_088d95f8 */
         for (int i = 0; i < OKE_BODIES; i++) {
             int b = (int)gamedata_word(T_BODY_ORDER + 4u * (uint32_t)i, (uint32_t)i);
-            if (b >= 0 && b < OKE_BODIES && in_stock_body(b))
+            if (b >= 0 && b < OKE_BODIES && owned(STOCK_BODY, b))
                 ids[n++] = b;
         }
         return n;
     case HWI_CPU: /* FUN_088d976c */
         for (int i = 0; i < OKE_CPUS; i++)
-            ids[n++] = i;
+            if (owned(STOCK_CPU, i))
+                ids[n++] = i;
         return n;
     case HWI_ARMOR: /* FUN_088d98cc */
         for (int i = 0; i < OKE_ARMORS; i++)
-            ids[n++] = i;
+            if (owned(STOCK_ARMOR, i))
+                ids[n++] = i;
         return n;
     case HWI_ADD_ARMOR: /* FUN_088d9a2c */
         for (int i = 0; i < OKE_ADD_ARMORS; i++)
-            ids[n++] = i;
+            if (owned(STOCK_ADD_ARMOR, i))
+                ids[n++] = i;
         return n;
     default:
         break;
@@ -280,13 +284,15 @@ int part_list(const OkeDataBase *card, int item, int *ids)
             ids[n++] = 0; /* "No Weapon" */
         for (int cat = 0; cat < OKE_CATEGORIES; cat++)
             for (int w = 0; w < OKE_WEAPONS && n < PART_LIST_MAX; w++)
-                if (weapon_category(w) == cat && slot_capacity(card, slot, weapon_type(w)) > 0)
+                if (weapon_category(w) == cat && owned(STOCK_WEAPON, w) &&
+                    slot_capacity(card, slot, weapon_type(w)) > 0)
                     ids[n++] = w;
         return n;
     }
     if (item >= HWI_OPTION1 && item < HWI_OPTION1 + OKE_OPTION_SLOTS) { /* FUN_088d9df0 */
         for (int i = 0; i < OKE_OPTIONS; i++)
-            ids[n++] = i;
+            if (owned(STOCK_OPTION, i))
+                ids[n++] = i;
         return n;
     }
     return 0;

@@ -384,8 +384,15 @@ static void main_loop(void)
             modelview_update(dt);
         else if (entrance_running == 1 && !entrance_update(dt)) {
             if (entrance_selection() == 1) {
-                if (!entrance_loaded()) /* Start Game: CCarnageHeart::Reinitialize */
+                if (!entrance_loaded()) { /* Start Game: CCarnageHeart::Reinitialize */
                     savedata_new_game();
+                    savedata_battle_mode_new(); /* FUN_088d3d80 mode 1 */
+                } else if (savedata_stock(STOCK_WEAPON, 0) == 0) {
+                    /* A Battle Data file written before the port kept the stock (the
+                     * game keeps "No Weapon" owned): give it a new game's. */
+                    SDL_Log("[startup] the save has no parts stock: a new Battle Mode game's");
+                    savedata_battle_mode_new();
+                }
                 battle_mode_start();
                 entrance_running = 2;
             } else {

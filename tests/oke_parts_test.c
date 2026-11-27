@@ -1,5 +1,6 @@
 /* Checks the OKE Configuration hardware rules (src/game/oke_parts.c) against the
  * shipped preset designs:
+ * on a new Battle Mode game's parts stock (savedata_battle_mode_new):
  *   - every preset's weapons and options are in the part lists the Hardware screen
  *     offers for their slots;
  *   - no preset is too heavy by the weight formula (FUN_089edebc / FUN_089edf40:
@@ -19,6 +20,7 @@
 #include "oke_parts.h"
 #include "packfile.h"
 #include "psp_shim.h"
+#include "savedata.h"
 
 static Pack g_pack;
 static int g_verbose;
@@ -84,6 +86,7 @@ int main(int argc, char **argv)
         printf("FAIL: can't open the pack index\n");
         return 1;
     }
+    savedata_battle_mode_new(); /* a new Battle Mode game's stock: the lists show owned parts */
     int checked = 0, failures = 0;
     for (int i = 1; i <= 100; i++) {
         char path[48];
