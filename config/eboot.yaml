@@ -1,0 +1,83 @@
+# splat config for Carnage Heart EXA (NPUH10188), decrypted EBOOT -> orig/EBOOT.elf
+# The input is a relocatable PSP PRX (e_type 0xFFA0, linked at base 0).
+# Segments cover the *whole file*, so the rebuilt output can be compared byte-for-byte
+# against orig/EBOOT.elf.
+#
+# File layout (from readelf; section names are zeroed in the decrypted ELF):
+#   0x000000  ELF header + 3 program headers
+#   0x0000C0  LOAD0  vaddr 0x000000  filesz 0x49BDF8  (text, stubs, lib tables, rodata, data)
+#   0x49BEB8  8 bytes alignment padding
+#   0x49BEC0  LOAD1  vaddr 0x49BDF8  filesz 0x0033E8  memsz 0x34048 (data + bss)
+#   0x49F2A8  shstrtab, section headers, 0x700000A0 PSP relocation sections, symtab
+name: Carnage Heart EXA (EBOOT)
+sha1: 8c0eeaf5ce4fe43bbfd8ee7ef1a6bf47ac5fda38
+options:
+  basename: eboot
+  target_path: orig/EBOOT.elf
+  elf_path: build/eboot.elf
+  base_path: ..
+  platform: psp
+  compiler: GCC          # real compiler looks like SNC (see docs/imports.md); GCC is the non-matching target
+
+  asm_path: asm
+  src_path: src
+  build_path: build
+  ld_script_path: eboot.ld
+  symbol_addrs_path: [config/symbol_addrs.txt, config/reloc_addrs_auto_ignore.txt]
+  reloc_addrs_path: [config/reloc_addrs.txt, config/reloc_addrs_auto.txt]  # auto = tools/gen_reloc_overrides.py
+  undefined_funcs_auto_path: config/undefined_funcs_auto.txt
+  undefined_syms_auto_path: config/undefined_syms_auto.txt
+
+  find_file_boundaries: False
+  subalign: 4            # .text (0x3BEC28) and stubs are only 4-aligned
+  ld_align_section_vram_end: False  # no ALIGN(16) padding after sections
+  gp_value: 0x0          # module info gp is 0 pre-relocation; revisit once relocations are applied
+  section_order: [".text", ".rodata", ".data", ".bss"]
+  o_as_suffix: True
+  use_legacy_include_asm: False
+  mips_abi_float_regs: o32
+  add_set_gp_64: False   # Allegrex is 32-bit; GNU as rejects .set gp=64
+  asm_function_macro: glabel
+  asm_jtbl_label_macro: jlabel
+  asm_data_macro: dlabel
+  disasm_unknown: True
+  string_encoding: CP932       # Shift-JIS (MS); must match STRING_ENCODING in Makefile
+  data_string_encoding: CP932
+
+segments:
+  - name: elf_header
+    type: bin
+    start: 0x0
+
+  - name: main
+    type: code
+    start: 0xC0
+    vram: 0x0
+    align: 4   # segment-end ALIGN; the real padding is the pad0 segment
+    bss_size: 0x0
+    subsegments:
+      - [0xC0, asm]                 # .text           vaddr 0x000000
+      - [0x3BECE8, asm, stubs]      # 29 import stub sections (one per library)  vaddr 0x3BEC28
+      - [0x3BF640, rodata, lib_tables] # .lib.ent/.lib.stub tables, sceModuleInfo, sceResident, sceNid  vaddr 0x3BF580
+      - [0x3BFFC0, rodata]          # .rodata          vaddr 0x3BFF00
+      - [0x44D2C0, data]            # .data            vaddr 0x44D200
+
+  - name: pad0
+    type: bin
+    start: 0x49BEB8
+
+  - name: data2
+    type: code
+    start: 0x49BEC0
+    vram: 0x49BDF8
+    align: 4
+    bss_size: 0x30C40
+    subsegments:
+      - [0x49BEC0, data]            # small data/ctors/dtors  vaddr 0x49BDF8
+      - { start: 0x49F2A8, type: bss, vram: 0x49F200 }
+
+  - name: elf_trailer
+    type: bin
+    start: 0x49F2A8
+
+  - [0x5FF565]

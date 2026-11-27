@@ -3,3 +3,13 @@ build/
 *.iso
 *.elf
 *.bin
+orig/
+.venv/
+asm/
+assets/
+__pycache__/
+eboot.ld
+config/undefined_funcs_auto.txt
+config/undefined_syms_auto.txt
+config/reloc_addrs_auto.txt
+config/reloc_addrs_auto_ignore.txt
