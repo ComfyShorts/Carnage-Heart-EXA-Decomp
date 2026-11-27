@@ -21,24 +21,52 @@ find_package(SDL3 3.2 REQUIRED CONFIG)
 file(GLOB GAME_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/game/*.c")
 file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/platform/*.c")
 
-add_executable(chexa-pc src/pc/main.c ${PLATFORM_SOURCES} ${GAME_SOURCES})
-target_include_directories(chexa-pc PRIVATE src/platform src/game)
-target_compile_options(chexa-pc PRIVATE -Wall -Wextra -Wno-unused-parameter)
+function(chexa_target_setup target)
+  target_include_directories(${target} PRIVATE src/platform src/game)
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    target_compile_definitions(${target} PRIVATE PCPORT_M32=1)
+  endif()
+  # 64-bit off_t/ino_t/time_t even in the 32-bit build: without them stat() fails with
+  # EOVERFLOW on file systems with large inode numbers (e.g. WSL's /mnt/c).
+  target_compile_definitions(${target} PRIVATE _FILE_OFFSET_BITS=64 _TIME_BITS=64)
+endfunction()
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 4)
-  target_compile_definitions(chexa-pc PRIVATE PCPORT_M32=1)
-endif()
-
+# PSP shim + decompiled game code, shared by the game and the tests.
+add_library(chexa_core STATIC ${PLATFORM_SOURCES} ${GAME_SOURCES})
+chexa_target_setup(chexa_core)
 if(TARGET SDL3::SDL3-static)
-  target_link_libraries(chexa-pc PRIVATE SDL3::SDL3-static)
+  target_link_libraries(chexa_core PUBLIC SDL3::SDL3-static)
 else()
-  target_link_libraries(chexa-pc PRIVATE SDL3::SDL3)
+  target_link_libraries(chexa_core PUBLIC SDL3::SDL3)
 endif()
+
+add_executable(chexa-pc src/pc/main.c)
+chexa_target_setup(chexa-pc)
+target_link_libraries(chexa-pc PRIVATE chexa_core)
+
+add_executable(chexa-pgchip-test tests/pgchip_test.c)
+chexa_target_setup(chexa-pgchip-test)
+target_link_libraries(chexa-pgchip-test PRIVATE chexa_core)
+
+add_executable(chexa-io-test tests/io_test.c)
+chexa_target_setup(chexa-io-test)
+target_link_libraries(chexa-io-test PRIVATE chexa_core)
+
+# Tests that need the game's files are skipped (exit 77) when they aren't found.
+# Point them at your dump with CHEXA_DISC=/path/to/disc-root.
+enable_testing()
+add_test(NAME io_disc COMMAND chexa-io-test)
+add_test(NAME pgchip_one_record COMMAND chexa-pgchip-test --ticks 20 -q)
+add_test(NAME pgchip_all_records COMMAND chexa-pgchip-test --all --ticks 600)
+set_tests_properties(io_disc pgchip_one_record pgchip_all_records PROPERTIES SKIP_RETURN_CODE 77)
 
 # SDL loads libX11 and friends at runtime with dlopen. With the user-local sysroot those
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not
 # RUNPATH) also covers their own dependencies, such as libxcb.
 if(PCPORT_I386_LIBDIR)
-  set_target_properties(chexa-pc PROPERTIES BUILD_RPATH "${PCPORT_I386_LIBDIR}")
-  target_link_options(chexa-pc PRIVATE "-Wl,--disable-new-dtags")
+  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test)
+    set_target_properties(${exe} PROPERTIES BUILD_RPATH "${PCPORT_I386_LIBDIR}")
+    target_link_options(${exe} PRIVATE "-Wl,--disable-new-dtags")
+  endforeach()
 endif()

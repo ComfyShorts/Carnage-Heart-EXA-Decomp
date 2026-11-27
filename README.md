@@ -37,13 +37,16 @@ make check   # assemble + link + objcopy, compare SHA1 against orig/EBOOT.elf
 ## PC port (work in progress)
 
 A native build that runs decompiled game code against a PSP shim on SDL3. Nothing from the
-game is included or needed yet: for now it opens a window and runs an empty frame loop.
+game is included. It reads the game's files from your own dump at runtime. For now it
+opens a window and runs an empty frame loop; the chip interpreter and pack reader in
+`src/game/` are exercised by the tests.
 
 | Path | Contents |
 |---|---|
-| `src/game/` | decompiled game C (empty so far) |
+| `src/game/` | hand-written game C: chip program interpreter (`pgchip.c`), robot record layout (`okedb.h`), pack index and ARZ reader (`packfile.c`, `lz.c`) |
 | `src/platform/` | PSP shim: one file per subsystem (`files`, `input`, `threads`, `graphics`, `audio`, `video`, `net`, `system`) with a stub for each of the 299 imports in `docs/imports.md`, plus the SDL3 window layer |
 | `src/pc/` | entry point |
+| `tests/` | `chexa-io-test` (file shim) and `chexa-pgchip-test` (loads robot records from the pack and steps them) |
 
 The default build is 32-bit (`-m32`) so pointers and `long` are 4 bytes and decompiled
 structs keep their PSP layout.
@@ -51,8 +54,18 @@ structs keep their PSP layout.
 ```sh
 tools/setup_pc_deps.sh                         # no root: multilib sysroot + 32-bit SDL3 in .deps/
 cmake --preset m32 && cmake --build --preset m32
-build/pc-m32/chexa-pc                          # --frames N, --scale N, --call-all-stubs
+build/pc-m32/chexa-pc --disc /path/to/disc     # also --ms DIR, --frames N, --scale N
+CHEXA_DISC=/path/to/disc ctest --test-dir build/pc-m32
 ```
+
+`--disc` takes the extracted disc root (the folder holding `PSP_GAME/`) or its
+`PSP_GAME/USRDIR` folder, and serves it read-only as `disc0:`, where the game looks for
+`disc0:/PSP_GAME/USRDIR/...`. Lookups are case-insensitive like the UMD. `--ms` serves a
+writable folder as the memory stick (`ms0:`). Without it the game is told no memory
+stick is inserted. The file and UMD imports are implemented (sync and async open, read,
+write, seek, close, directory listing, stat, mkdir, rename). The tests skip themselves
+(exit 77) when the game files aren't found; they default to `$CHEXA_DISC`, then
+`/mnt/c/psp/chexa`.
 
 Needs `cmake`, `ninja-build` and `build-essential`. `setup_pc_deps.sh` fetches Ubuntu's
 multilib and 32-bit X11 packages with `apt-get download` and unpacks them into `.deps/`, so
@@ -62,6 +75,6 @@ multilib and 32-bit X11 packages with `apt-get download` and unpacks them into `
 `libgl1:i386 libpulse0:i386` and rebuild SDL3 with PulseAudio enabled. Without them SDL
 uses its software renderer and dummy audio.
 
-Stubs log their first call (set `PSP_SHIM_LOG=all` to log every call), and a call summary
+The remaining stubs log their first call (set `PSP_SHIM_LOG=all` to log every call), and a call summary
 prints at exit. They're declared `int32_t name(void)` until each import gets its real
 signature. `tools/gen_shim_stubs.py` generated them once; edit the files directly from now on.

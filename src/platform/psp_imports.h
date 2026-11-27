@@ -6,33 +6,35 @@
 
 #include <stdint.h>
 
-/* files.c: File I/O and UMD */
-int32_t sceIoChstat(void);
-int32_t sceIoClose(void);
-int32_t sceIoCloseAsync(void);
-int32_t sceIoDclose(void);
-int32_t sceIoDevctl(void);
-int32_t sceIoDopen(void);
-int32_t sceIoDread(void);
-int32_t sceIoGetstat(void);
-int32_t sceIoLseek(void);
-int32_t sceIoLseekAsync(void);
-int32_t sceIoMkdir(void);
-int32_t sceIoOpen(void);
-int32_t sceIoOpenAsync(void);
-int32_t sceIoPollAsync(void);
-int32_t sceIoRead(void);
-int32_t sceIoReadAsync(void);
-int32_t sceIoRename(void);
-int32_t sceIoWaitAsyncCB(void);
-int32_t sceIoWrite(void);
-int32_t sceIoWriteAsync(void);
-int32_t sceUmdActivate(void);
+#include "psp_types.h"
+
+/* files.c: File I/O and UMD (implemented: host folders mounted as PSP devices) */
+SceUID sceIoOpen(const char *file, int flags, SceMode mode);
+SceUID sceIoOpenAsync(const char *file, int flags, SceMode mode);
+int32_t sceIoClose(SceUID fd);
+int32_t sceIoCloseAsync(SceUID fd);
+int32_t sceIoRead(SceUID fd, void *data, SceSize size);
+int32_t sceIoReadAsync(SceUID fd, void *data, SceSize size);
+int32_t sceIoWrite(SceUID fd, const void *data, SceSize size);
+int32_t sceIoWriteAsync(SceUID fd, const void *data, SceSize size);
+SceOff sceIoLseek(SceUID fd, SceOff offset, int whence);
+int32_t sceIoLseekAsync(SceUID fd, SceOff offset, int whence);
+int32_t sceIoWaitAsyncCB(SceUID fd, SceInt64 *res);
+int32_t sceIoPollAsync(SceUID fd, SceInt64 *res);
+SceUID sceIoDopen(const char *dirname);
+int32_t sceIoDread(SceUID fd, SceIoDirent *dir);
+int32_t sceIoDclose(SceUID fd);
+int32_t sceIoGetstat(const char *file, SceIoStat *stat);
+int32_t sceIoChstat(const char *file, SceIoStat *stat, int bits);
+int32_t sceIoMkdir(const char *dir, SceMode mode);
+int32_t sceIoRename(const char *oldname, const char *newname);
+int32_t sceIoDevctl(const char *dev, unsigned int cmd, void *indata, int inlen, void *outdata, int outlen);
+int32_t sceUmdActivate(int mode, const char *drive);
 int32_t sceUmdCancelWaitDriveStat(void);
 int32_t sceUmdCheckMedium(void);
 int32_t sceUmdGetDriveStat(void);
-int32_t sceUmdWaitDriveStat(void);
-int32_t sceUmdWaitDriveStatCB(void);
+int32_t sceUmdWaitDriveStat(int stat);
+int32_t sceUmdWaitDriveStatCB(int stat, unsigned int timeout);
 
 /* input.c: Controller input */
 int32_t sceCtrlPeekBufferPositive(void);

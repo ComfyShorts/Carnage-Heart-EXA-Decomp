@@ -256,6 +256,42 @@ It lives inside `CBattleOke` at byte offset `+0x1EF0` (built in what looks like 
    caller back and advances it along the call chip's default direction. Sub-programs can
    therefore call each other recursively up to depth 10.
 
+### Details settled while writing the C version
+
+`src/game/pgchip.c` reimplements the interpreter by hand. `tests/pgchip_test.c` runs all
+205 shipped records through it for 600 ticks each against a scripted robot: no program
+counter ever lands on an empty cell or leaves its grid. These points come from reading
+the code closely (**confirmed**):
+
+- **Accumulator.** The step accumulator at +0x04 is a float and the speed at +0x00 an
+  int. The fraction carries over between ticks.
+- **History and last result.** History is a fixed array of 256 entries of 16 bytes, with
+  the count at +0x1000. Entries past 256 are dropped, not wrapped. A chip that was already
+  busy when entered records nothing. The **last-result field is only written when a
+  history buffer is passed in**, but the last position is always written.
+- **Poll timing.** Halt, Wait, Halt Action and the movement chips 0x1E-0x25 poll on the
+  same visit that issues the order, so a short action can finish within the step that
+  started it. Select and Fire, Firing Direction and Shoot Reticle only poll from the next
+  visit.
+- **Categories and interrupts.** The movement chips poll "is action of category *k*
+  finished" with *k* = 1 Move, 2 Rotate, 4 Jump, 3 Firing Direction, 0 for the rest. Each
+  poll first asks Action Assessment (+0xE8) with value 8, and a 1 there also ends the wait.
+- **Halt Action** turns busy only when the target call returns non-zero, then polls
+  category 0.
+- **Button Input** with b2 = 0 passes "wait" to the target and stays busy until the
+  target reports a press through an out-parameter.
+- **Signedness.** Parameter bytes are loaded unsigned, except b3 of Assess Analog and
+  Firing Direction (signed). The 16-bit halves at b2 are unsigned; those at b4 and b6
+  are signed in the target's parameter list. For a few whole-byte b6/b7 arguments
+  (e.g. Scan for Obstacles) the signedness wasn't pinned down. Every shipped value is
+  below 0x80, so it doesn't matter for real data.
+- **Bad directions.** An exit direction above 7 would index past the direction table in
+  the game. The C version treats it as leaving the grid; no reachable chip in the data
+  has one.
+- **Speed table.** The per-CPU speed comes from a table at `0x08BD5F88 / 0x3D1F88`,
+  indexed by CPU part id. It isn't copied into the repo, so `pgchip_setup` takes the
+  speed as an argument.
+
 ## The robot interface: `CPgChipTarget`
 
 The interpreter never touches the robot directly. It calls virtuals on a

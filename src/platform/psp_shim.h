@@ -26,6 +26,12 @@ void psp_stub_hit(PspStubSite *site);
 /* Prints how often each stub was called. */
 void psp_stub_report(void);
 
+/* File system (files.c): serve PSP device `device` (without the colon, e.g. "disc0")
+ * from a host directory. disc0: is the disc root, the folder that holds PSP_GAME/. */
+bool psp_io_mount(const char *device, const char *host_dir, bool writable);
+/* Mount disc0: from either the disc root or its PSP_GAME/USRDIR folder. */
+bool psp_io_mount_disc(const char *dir);
+
 /* Platform layer (sdl_platform.c). The PSP screen is 480x272. */
 #define PSP_SCREEN_W 480
 #define PSP_SCREEN_H 272
