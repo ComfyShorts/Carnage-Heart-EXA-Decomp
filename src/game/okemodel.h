@@ -11,6 +11,7 @@
 #define GAME_OKEMODEL_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #define OKE_ID_MAX 0x24
 #define OKE_MAX_BONES 24
@@ -26,6 +27,10 @@ int okemodel_pose_count(const OkeModel *m);
 /* Draws the body in a pose with the current libgum model matrix as its ground
  * point (feet on y = 0, facing +z). */
 void okemodel_draw(const OkeModel *m, int pose);
+
+/* The same, leaving out the bones set in `hidden` (bit per PARTS2 bone) and
+ * everything attached below them: parts that have broken off. */
+void okemodel_draw_hiding(const OkeModel *m, int pose, uint32_t hidden);
 
 /* The body type's directory name ("tri", "neg", ...), or "" */
 const char *okemodel_type_name(int oke_id);

@@ -24,6 +24,7 @@
 #define BURST_GAP 0.1f      /* stand-in: seconds between the shots of a burst */
 #define MELEE_RANGE 36.0f
 #define MELEE_DAMAGE 10     /* stand-in: % of max HP */
+#define DOWN_TIME 2.5f      /* stand-in: seconds a knocked-down OKE stays down */
 #define COOLING 0.08f       /* stand-in: share of max heat shed per second */
 #define TIME_LIMIT 120.0f   /* seconds */
 #define MAX_SHOTS 160
@@ -41,6 +42,11 @@ typedef struct Oke {
     int heat, heat_max;/* +4; max FUN_089ed718 */
     int armour_type;   /* hardware +0x284 (FUN_089ed424) */
     int armour;        /* armour value of the part at hardware +0x280 (FUN_088568c4) */
+    int stagger;       /* body table +0x30 (FUN_089ed8a8): the hit size that staggers */
+    int part_hp[OKE_BONES]; /* per-bone armour, +0xa010; 0 = broken off */
+    float react_left;  /* a flinch (scripts 0x57-0x5a) is playing */
+    float down_left;   /* knocked down (state +0xb6ac = 2) */
+    float push_x, push_y, push_spin; /* this frame's knock-back (+0xb040 / +0xb050) */
     ActKind act;
     float act_left;    /* seconds */
     float vx, vy, turn_rate;

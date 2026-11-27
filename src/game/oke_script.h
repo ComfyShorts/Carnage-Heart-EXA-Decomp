@@ -32,11 +32,38 @@ typedef struct OkeScriptCmd {
     uint16_t value, frames;
 } OkeScriptCmd;
 
+#define OKE_BONES 24
+#define OKE_BOXES 32 /* CBattleOke's part box slots at +0x98b0 */
+#define OKE_MOUNTS 6 /* weapon mounts at +0x9790 */
+
+/* A BBOX2 line: a box on a bone, in the bone's frame. Class picks the damage
+ * factor (0x08bd1814: 1.0, 0.7, 0.1) and the armour share weight (1.5, 3, 5). */
+typedef struct OkeBox {
+    int bone, cls;
+    float c[3], s[3]; /* centre, full size */
+} OkeBox;
+
 typedef struct OkeScripts {
     int body;
     OkeScriptCmd *cmds;   /* all scripts back to back */
     int first[OKE_SCRIPTS], count[OKE_SCRIPTS];
+    /* The !BODY geometry: PARTS2 bone tree, BBOX2 boxes, WEAPON2 mount bones. */
+    int n_bones, parent[OKE_BONES];
+    float pivot[OKE_BONES][3];
+    int n_boxes;
+    OkeBox box[OKE_BOXES];
+    int mount_bone[OKE_MOUNTS];
+    float ground; /* lowest EARTH point */
+    int n_poses;
+    float (*pose_root)[3];
+    float (*pose_rot)[OKE_BONES][3];
 } OkeScripts;
+
+/* Which box (if any) contains a point given in the body's frame (x left, z
+ * forward, feet at y = 0), the body standing in `pose`. Each box is tested at its
+ * own height, so this is a test against the box's column. Returns the box index
+ * or -1; `centre` gets that box's centre in the body frame. */
+int oke_body_box_at(const OkeScripts *s, int pose, float x, float z, float centre[3]);
 
 /* Loaded once per body type (hardware +0x240) from the disc and kept. NULL if the
  * file or the EBOOT's file table isn't available (the battle then falls back to the

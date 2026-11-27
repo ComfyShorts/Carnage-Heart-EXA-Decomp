@@ -50,6 +50,17 @@ int battle_range_distance(int step)
 #define O(t) ((Oke *)(t))
 #define ENEMY(o) (&(o)->battle->oke[(o)->side ^ 1])
 
+static void setup_parts(Oke *o);
+static bool weapon_lost(const Oke *o, int slot);
+static bool reacting(const Oke *o);
+
+/* FUN_08843b74 refuses new orders while a hit reaction plays. */
+#define REFUSE_IF_REACTING(t) \
+    do { \
+        if (reacting(O(t))) \
+            return 0x10; \
+    } while (0)
+
 static uint32_t rnd(Battle *b)
 {
     b->rng = b->rng * 1103515245u + 12345u;
@@ -179,6 +190,7 @@ static void observe(Oke *o, ActKind k, int amount, float fallback)
 
 static int t_move(PgChipTarget *t, int dir, int amount)
 {
+    REFUSE_IF_REACTING(t);
     Oke *o = O(t);
     if (o->motion.s) {
         oke_motion_start(&o->motion, k_move_script[dir & 7]);
@@ -193,6 +205,7 @@ static int t_move(PgChipTarget *t, int dir, int amount)
 
 static int t_rotate(PgChipTarget *t, int dir, int amount)
 {
+    REFUSE_IF_REACTING(t);
     Oke *o = O(t);
     if (o->motion.s) {
         oke_motion_start(&o->motion, dir ? 5 : 6); /* 0 clockwise: script 6 (0x204) */
@@ -207,6 +220,7 @@ static int t_rotate(PgChipTarget *t, int dir, int amount)
 
 static int t_jump(PgChipTarget *t, int dir)
 {
+    REFUSE_IF_REACTING(t);
     Oke *o = O(t);
     if (dir >= 8)
         o->vx = o->vy = 0.0f;
@@ -230,6 +244,7 @@ static bool start_quick(Oke *o, int script, ActKind k)
 
 static int t_quick_move(PgChipTarget *t, int dir)
 {
+    REFUSE_IF_REACTING(t);
     if (start_quick(O(t), k_quick_script[dir & 7], ACT_MOVE))
         return 0;
     set_velocity(O(t), dir, QUICK_SPEED);
@@ -239,6 +254,7 @@ static int t_quick_move(PgChipTarget *t, int dir)
 
 static int t_quick_rotate(PgChipTarget *t, int dir)
 {
+    REFUSE_IF_REACTING(t);
     if (start_quick(O(t), dir ? 0x20 : 0x21, ACT_TURN))
         return 0;
     O(t)->turn_rate = dir ? -TURN_SPEED * 2.0f : TURN_SPEED * 2.0f;
@@ -248,6 +264,7 @@ static int t_quick_rotate(PgChipTarget *t, int dir)
 
 static int t_attack(PgChipTarget *t, int kind)
 {
+    REFUSE_IF_REACTING(t);
     (void)kind;
     Oke *o = O(t), *e = ENEMY(o);
     o->vx = o->vy = o->turn_rate = 0.0f;
@@ -262,6 +279,7 @@ static int t_attack(PgChipTarget *t, int kind)
 
 static int t_defense(PgChipTarget *t, int kind, int b3)
 {
+    REFUSE_IF_REACTING(t);
     (void)kind;
     O(t)->defend_left = (b3 > 0 ? b3 : 15) / 30.0f;
     O(t)->vx = O(t)->vy = O(t)->turn_rate = 0.0f;
@@ -366,6 +384,12 @@ static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float s
             float ux = (tx - o->x) / d, uy = (ty - o->y) / d;
             float c = cosf(spread), s = sinf(spread);
             int bullet = word_at(0x003D157Cu + (uint32_t)weapon * 20, NO_BULLET);
+            /* FUN_08811940: speed + rand x the bullet's +0x10 (-20 to -40 for some). */
+            if (bullet >= 0 && bullet < NO_BULLET) {
+                float jitter = float_at(0x00465C84u + (uint32_t)bullet * 0x34, 0.0f);
+                if (jitter < 0.0f && jitter > -1000.0f)
+                    speed += (float)(rnd(b) % 10000) / 10000.0f * jitter;
+            }
             float falloff = bullet >= 0 && bullet < NO_BULLET
                                 ? float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f) /* +0x2c */
                                 : 3.4e38f;
@@ -392,7 +416,7 @@ static int pick_weapon(const Oke *o, int slot)
     if (slot > 0)
         return slot <= 5 ? slot - 1 : -1;
     for (int i = 0; i < 5; i++) /* stand-in for the selected weapon (FUN_0883fbb0) */
-        if (o->weapon[i] > 0 && o->ammo[i] > 0)
+        if (o->weapon[i] > 0 && o->ammo[i] > 0 && !weapon_lost(o, i))
             return i;
     return -1;
 }
@@ -402,8 +426,10 @@ static int start_fire(Oke *o, int slot, int count)
     int w = pick_weapon(o, slot);
     if (w < 0)
         return 0x11; /* no weapon */
-    if (o->weapon[w] <= 0 || o->ammo[w] <= 0)
-        return 0x12; /* empty */
+    if (reacting(o))
+        return 0x10;
+    if (o->weapon[w] <= 0 || o->ammo[w] <= 0 || weapon_lost(o, w))
+        return 0x12; /* empty or broken off */
     if (o->scripted) {
         o->scripted = false;
         o->act = ACT_NONE;
@@ -474,7 +500,7 @@ static void fire_step(Oke *o, float dt)
             ty = o->y - cosf(h) * 100.0f;
         }
         for (int p = 0; p < pellets; p++)
-            fire_at(o, tx, ty, speed, id, pellets > 1 ? 0.15f : 0.06f);
+            fire_at(o, tx, ty, speed, id, pellets > 1 ? 0.08f : 0.0f); /* pellet spread: stand-in */
         /* GetWeaponShotCalorie (0x08bd5a30) heats the shooter (FUN_0883d960). */
         add_heat(o, word_at(0x003D1A30u + (uint32_t)id * 20, 0));
         o->ammo[w]--;
@@ -689,6 +715,9 @@ static void oke_init(Oke *o, Battle *b, int side, float x, float y, float headin
     if (o->heat_max <= 0)
         o->heat_max = 1000;
     o->armour = armour_part >= 0 && armour_part < 12 ? word_at(0x003D1EDCu + (uint32_t)armour_part * 12, 0) : 0;
+    o->stagger = word_at(bt + 0x30, 40);
+    o->react_left = o->down_left = 0.0f;
+    o->push_x = o->push_y = o->push_spin = 0.0f;
     oke_motion_reset(&o->motion, oke_scripts_get(body));
     o->scripted = false;
     for (int i = 0; i < 5; i++) {
@@ -698,6 +727,7 @@ static void oke_init(Oke *o, Battle *b, int side, float x, float y, float headin
             o->weapon[i] = 0;
     }
     o->firing = -1;
+    setup_parts(o);
     int cpu = oke_cpu_part(&o->rec);
     pgchip_setup(&o->vm, &o->rec, battle_chip_speed(cpu));
     SDL_Log("[battle] side %d: CPU part %d, %d chips/s, main program %dx%d", side, cpu, o->vm.speed,
@@ -712,6 +742,16 @@ static void oke_step(Oke *o, float dt)
         o->fire_left -= dt;
     if (o->defend_left > 0.0f)
         o->defend_left -= dt;
+    if (o->react_left > 0.0f)
+        o->react_left -= dt;
+    if (o->down_left > 0.0f)
+        o->down_left -= dt;
+    /* Knock-back acts for one 30 Hz physics step (FUN_0884df08 adds +0xb040 /
+     * +0xb050 to the accelerations, then they're cleared). */
+    o->motion.vx += o->push_x / 30.0f;
+    o->motion.vy += o->push_y / 30.0f;
+    o->motion.omega += o->push_spin / 30.0f / DEG;
+    o->push_x = o->push_y = o->push_spin = 0.0f;
     fire_step(o, dt);
     if (o->motion.s && (o->act == ACT_NONE || o->scripted)) {
         oke_motion_step(&o->motion, dt, &o->x, &o->y, &o->heading);
@@ -755,10 +795,76 @@ static int percent(int v, int max) /* FUN_0883fc04 */
 int oke_hp_percent(const Oke *o) { return percent(o->hp, o->hp_max); }
 int oke_heat_percent(const Oke *o) { return percent(o->heat, o->heat_max); }
 
-/* CBattleOke's hit receiver (FUN_0884d284), for a hit on an armoured part of
- * class 0 (factor 1.0 in the table at 0x08bd1814): the collision parts aren't
- * modelled, so every hit lands on the body. */
-static void receive_hit(Oke *e, const Shot *s)
+static const float k_class_factor[3] = {1.0f, 0.7f, 0.1f}; /* 0x08bd1814 */
+static const float k_class_weight[3] = {1.5f, 3.0f, 5.0f}; /* 0x08bd1820 */
+
+static int box_class(int cls) { return cls < 0 || cls > 2 ? 0 : cls; }
+
+/* Part armour at battle start (the loop after FUN_0883d4bc's weapon setup): each
+ * bone's share of the class-weighted box volume, times twice the HP, plus 180 per
+ * weapon mount on it, plus 5x the armour value once non-zero. */
+static void setup_parts(Oke *o)
+{
+    memset(o->part_hp, 0, sizeof o->part_hp);
+    const OkeScripts *s = o->motion.s;
+    if (!s)
+        return;
+    float share[OKE_BONES] = {0}, total = 0.0f;
+    for (int i = 0; i < s->n_boxes; i++) {
+        const OkeBox *b = &s->box[i];
+        if (b->bone < 0 || b->bone >= OKE_BONES)
+            continue;
+        float v = b->s[0] * b->s[1] * b->s[2] * k_class_weight[box_class(b->cls)];
+        share[b->bone] += v;
+        total += v;
+    }
+    for (int bone = 0; bone < OKE_BONES; bone++) {
+        float sh = total > 0.0f ? share[bone] / total : 0.0f;
+        int hp = (int)(o->hp * sh) * 2;
+        if (sh > 0.0f && hp == 0)
+            hp = 1;
+        for (int m = 0; m < OKE_MOUNTS; m++)
+            if (s->mount_bone[m] == bone)
+                hp += 180;
+        o->part_hp[bone] = hp > 0 ? hp + o->armour * 5 : hp;
+    }
+}
+
+/* FUN_0883dd78: a weapon whose mount bone has broken off can't be used. */
+static bool weapon_lost(const Oke *o, int slot)
+{
+    const OkeScripts *s = o->motion.s;
+    if (!s || slot < 0 || slot >= OKE_MOUNTS)
+        return false;
+    int bone = s->mount_bone[slot];
+    return bone >= 0 && bone < OKE_BONES && o->part_hp[bone] < 1;
+}
+
+static bool reacting(const Oke *o) { return o->down_left > 0.0f || o->react_left > 0.0f; }
+
+/* FUN_08843c90 / FUN_08843ce8: flinch scripts by side, knock-down script 0x5b. */
+static void react(Oke *o, int script, float fallback)
+{
+    o->firing = -1;
+    o->scripted = false;
+    o->act = ACT_NONE;
+    float t = fallback;
+    if (o->motion.s && o->motion.s->count[script] > 0) {
+        o->motion.script = -1; /* restart even if it's already playing */
+        oke_motion_start(&o->motion, script);
+        t = 0.0f;
+        const OkeScripts *s = o->motion.s;
+        for (int i = 0; i < s->count[script]; i++)
+            t += s->cmds[s->first[script] + i].frames / 30.0f;
+        if (t < fallback)
+            t = fallback;
+    }
+    o->react_left = t;
+}
+
+/* CBattleOke's hit receiver (FUN_0884d284). `bone`/`cls` is the box that was hit
+ * (-1: no geometry, treated as an armoured class-0 part); hx, hy the hit point. */
+static void receive_hit(Oke *e, const Shot *s, int bone, int cls, float hx, float hy)
 {
     int attack = s->attack, heat = s->heat;
     /* CBattleBulletManager::ResolveCollisionRecords: old shots weaken. */
@@ -768,22 +874,112 @@ static void receive_hit(Oke *e, const Shot *s)
         attack = a < (int)(attack * 0.2f) ? (int)(attack * 0.2f) : a;
         heat = h < (int)(heat * 0.2f) ? (int)(heat * 0.2f) : h;
     }
+    float k = k_class_factor[box_class(cls)];
+    bool armoured = bone < 0 || e->part_hp[bone] > 0; /* +0xa010 */
     float hf = (float)heat;
-    if (e->armour_type == 4)
-        hf *= 0.7f;
+    if (armoured) {
+        if (e->armour_type == 4)
+            hf *= 0.7f;
+        hf *= k;
+    }
     add_heat(e, hf > 0.0f ? (int)hf : 0);
     float d = (float)attack;
-    if (((s->flags & 1) && e->armour_type == 1) || ((s->flags & 2) && e->armour_type == 3) ||
-        ((s->flags & 0x10) && e->armour_type == 2))
+    if (armoured && (((s->flags & 1) && e->armour_type == 1) || ((s->flags & 2) && e->armour_type == 3) ||
+                     ((s->flags & 0x10) && e->armour_type == 2)))
         d *= 0.7f;
-    if (e->defend_left > 0.0f) /* defending (script 0x25) */
+    bool defending = e->defend_left > 0.0f;
+    if (defending) /* script 0x25 */
         d *= 0.7f;
-    d = d - d * (e->armour / 100.0f) - e->armour * 0.5f;
+    if (armoured)
+        d = d * k - d * k * (e->armour / 100.0f) - e->armour * 0.5f;
     if (d <= 1.0f)
         d = 1.0f;
-    e->hp -= (int)d; /* FUN_0883d7f4 */
+    int dmg = (int)d;
+    e->hp -= dmg; /* FUN_0883d7f4 */
     if (e->hp < 0)
         e->hp = 0;
+    if (bone >= 0 && e->part_hp[bone] > 0) { /* FUN_088412b0 */
+        e->part_hp[bone] -= dmg;
+        if (e->part_hp[bone] <= 0) {
+            e->part_hp[bone] = 0;
+            for (int w = 0; w < 5; w++)
+                if (e->firing == w && weapon_lost(e, w))
+                    e->firing = -1;
+        }
+    }
+    if (e->hp <= 0)
+        return;
+
+    /* Reactions. */
+    int t = e->stagger > 0 ? e->stagger : 40;
+    if (defending)
+        t *= 2;
+    bool big = dmg > t, huge = dmg > 3 * t;
+    Battle *b = e->battle;
+    bool knock = big && ((rnd(b) & 7) == 0 || huge);
+    bool flinch = big || rnd(b) % 20 == 0;
+    float len = hypotf(s->vx, s->vy);
+    float ux = len > 0.0f ? s->vx / len : 0.0f, uy = len > 0.0f ? s->vy / len : 0.0f;
+    if (knock) {
+        react(e, 0x5b, DOWN_TIME);
+        e->down_left = DOWN_TIME;
+        /* The ragdoll starts with the shot's velocity; the body slides with it. */
+        e->motion.vx += s->vx * 0.1f;
+        e->motion.vy += s->vy * 0.1f;
+        return;
+    }
+    if (flinch && e->react_left <= 0.0f) {
+        /* Shot direction against facing: from the front 0x57, from behind 0x58, the
+         * sides 0x59 / 0x5a (mirror unchecked). */
+        float a = wrap180(atan2f(ux, -uy) / DEG - e->heading);
+        int dir = fabsf(a) > 135.0f ? 0 : fabsf(a) < 45.0f ? 1 : a <= 45.0f ? 3 : 2;
+        react(e, 0x57 + dir, 0.3f);
+    }
+    /* Knock-back (FUN_08842a94): along the shot, turned up to 30 degrees towards the
+     * side that was hit, d / 3t x 2500 for one physics step; plus a spin from the
+     * hit point's lever arm, capped at 100. */
+    float ox = e->x - hx, oy = e->y - hy, ol = hypotf(ox, oy);
+    float px = ux, py = uy;
+    if (ol > 1e-4f) {
+        ox /= ol;
+        oy /= ol;
+        if (ux * ox + uy * oy < 0.866025f) {
+            float side = ux * oy - uy * ox > 0.0f ? 0.5f : -0.5f;
+            px = ux * 0.866025f + uy * side;
+            py = uy * 0.866025f - ux * side;
+        } else {
+            px = ox;
+            py = oy;
+        }
+    }
+    float f = (float)dmg / (float)(3 * t);
+    e->push_x += px * f * 2500.0f;
+    e->push_y += py * f * 2500.0f;
+    float lever = ((hx - e->x) * uy - (hy - e->y) * ux) / 3.0f * f;
+    float spin = lever * 100.0f;
+    if (spin > 100.0f) spin = 100.0f;
+    if (spin < -100.0f) spin = -100.0f;
+    e->push_spin += spin;
+}
+
+/* Where a shot at (x, y) meets the target's boxes, in the body frame (x left, z
+ * forward); -1 when it misses. Without geometry, a 12-unit circle stands in. */
+static int hit_box(const Oke *e, float x, float y, int *cls)
+{
+    *cls = 0;
+    if (!e->motion.s || e->motion.s->n_boxes == 0)
+        return hypotf(x - e->x, y - e->y) < OKE_RADIUS ? OKE_BONES : -1;
+    float dx = x - e->x, dy = y - e->y;
+    if (dx * dx + dy * dy > 40.0f * 40.0f)
+        return -1;
+    float h = e->heading * DEG;
+    float fz = dx * sinf(h) - dy * cosf(h);   /* forward */
+    float rx = dx * cosf(h) + dy * sinf(h);   /* right */
+    int i = oke_body_box_at(e->motion.s, e->motion.pose, -rx, fz, NULL);
+    if (i < 0)
+        return -1;
+    *cls = e->motion.s->box[i].cls;
+    return e->motion.s->box[i].bone;
 }
 
 void battle_sim_step(Battle *b, float dt)
@@ -807,13 +1003,23 @@ void battle_sim_step(Battle *b, float dt)
         Shot *s = &b->shots[i];
         if (!s->live)
             continue;
+        Oke *e = &b->oke[s->owner ^ 1];
+        /* Sweep the step in half-unit samples so fast shots can't skip a box. */
+        float step = hypotf(s->vx, s->vy) * dt;
+        int n = (int)(step / 0.5f) + 1, bone = -1, cls = 0;
+        float hx = s->x, hy = s->y;
+        for (int k = 1; k <= n && e->hp > 0; k++) {
+            hx = s->x + s->vx * dt * k / n;
+            hy = s->y + s->vy * dt * k / n;
+            if ((bone = hit_box(e, hx, hy, &cls)) >= 0)
+                break;
+        }
         s->x += s->vx * dt;
         s->y += s->vy * dt;
         s->life -= dt;
         s->age += dt;
-        Oke *e = &b->oke[s->owner ^ 1];
-        if (e->hp > 0 && hypotf(s->x - e->x, s->y - e->y) < OKE_RADIUS) {
-            receive_hit(e, s);
+        if (bone >= 0) {
+            receive_hit(e, s, bone < OKE_BONES ? bone : -1, cls, hx, hy);
             b->oke[s->owner].hits++;
             s->live = false;
         } else if (s->life <= 0.0f || outside_field(s->x, s->y)) {

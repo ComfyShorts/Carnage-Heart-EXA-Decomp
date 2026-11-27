@@ -264,6 +264,19 @@ static void world_pos(float sx, float sy, float out[3])
     out[1] = g_scene.land ? terrain_height(g_scene.land, out[0], out[2]) : 0.0f;
 }
 
+/* A bone with boxes or a weapon mount has armour at the start; at 0 it's off. */
+static bool part_had_armour(const Oke *o, int bone)
+{
+    const OkeScripts *s = o->motion.s;
+    for (int i = 0; i < s->n_boxes; i++)
+        if (s->box[i].bone == bone)
+            return true;
+    for (int i = 0; i < OKE_MOUNTS; i++)
+        if (s->mount_bone[i] == bone)
+            return true;
+    return false;
+}
+
 static void draw_oke3d(int side)
 {
     const Oke *o = &g_b.oke[side];
@@ -276,7 +289,13 @@ static void draw_oke3d(int side)
     sceGumRotateY(3.14159265f - o->heading * DEG);
     if (o->hp <= 0) /* stand-in for the wreck: knocked over */
         sceGumRotateZ(1.4f);
-    okemodel_draw(g_scene.body[side], o->motion.pose);
+    else if (o->down_left > 0.0f) /* stand-in for the knock-down ragdoll */
+        sceGumRotateX(-1.2f);
+    uint32_t broken = 0;
+    for (int b = 0; b < OKE_BONES && b < 32; b++)
+        if (o->motion.s && b < o->motion.s->n_bones && o->part_hp[b] <= 0 && part_had_armour(o, b))
+            broken |= 1u << b;
+    okemodel_draw_hiding(g_scene.body[side], o->motion.pose, broken);
 }
 
 /* Stand-in for CBattleSceneCamera: follows your OKE from behind and above, eased. */

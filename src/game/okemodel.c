@@ -204,8 +204,10 @@ int okemodel_pose_count(const OkeModel *m)
     return m ? m->n_poses : 0;
 }
 
-static void draw_bone(const OkeModel *m, const OkePose *p, int bone, int depth)
+static void draw_bone(const OkeModel *m, const OkePose *p, int bone, int depth, uint32_t hidden)
 {
+    if (bone < 32 && (hidden >> bone) & 1)
+        return;
     const OkeBone *b = &m->bones[bone];
     sceGumPushMatrix();
     ScePspFVector3 t = {b->pivot[0], b->pivot[1], b->pivot[2]};
@@ -219,11 +221,16 @@ static void draw_bone(const OkeModel *m, const OkePose *p, int bone, int depth)
         gmo_draw_part(m->parts, m->part_of[b->part]);
     for (int i = 0; i < m->n_bones && depth < OKE_MAX_BONES; i++)
         if (m->bones[i].parent == bone && i != bone)
-            draw_bone(m, p, i, depth + 1);
+            draw_bone(m, p, i, depth + 1, hidden);
     sceGumPopMatrix();
 }
 
 void okemodel_draw(const OkeModel *m, int pose)
+{
+    okemodel_draw_hiding(m, pose, 0);
+}
+
+void okemodel_draw_hiding(const OkeModel *m, int pose, uint32_t hidden)
 {
     if (!m)
         return;
@@ -233,6 +240,6 @@ void okemodel_draw(const OkeModel *m, int pose)
     sceGumTranslate(&root);
     for (int i = 0; i < m->n_bones; i++)
         if (m->bones[i].parent < 0)
-            draw_bone(m, p, i, 0);
+            draw_bone(m, p, i, 0, hidden);
     sceGumPopMatrix();
 }
