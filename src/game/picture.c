@@ -129,6 +129,18 @@ static Picture *picture_from_file(const char *name, uint8_t *file, int32_t size)
     return p;
 }
 
+Picture *picture_from_memory(const char *name, const void *data, int32_t size)
+{
+    uint8_t *file = heap_alloc(&g_default_heap, (uint32_t)size, 16, "texture", 0);
+    if (!file)
+        return NULL;
+    memcpy(file, data, (size_t)size);
+    Picture *p = picture_from_file(name, file, size);
+    if (!p)
+        heap_free(&g_default_heap, file);
+    return p; /* not in the by-name cache: the owner releases it */
+}
+
 Picture *picture_load(const char *name)
 {
     for (int i = 0; i < MAX_PICTURES; i++)

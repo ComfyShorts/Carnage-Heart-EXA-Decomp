@@ -18,6 +18,10 @@
  *   --press N BUTTON  press a PSP button for 4 frames from displayed frame N
  *                     (circle, cross, square, triangle, up, down, left, right,
  *                     start, select, l, r; repeatable)
+ *   --gmo FILE        with --startup: show a GMO model from the pack instead of the
+ *                     title (--gmo-tex FILE: take its textures from another model,
+ *                     --gmo-angle DEG: starting turn)
+ *   --oke ID          with --startup: show an assembled OKE body (--oke-pose N)
  *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)
  *   --scale N         window scale (default 2, i.e. 960x544)
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
@@ -34,6 +38,7 @@
 #include "psp_shim.h"
 #include "ge.h"
 #include "startup.h"
+#include "modelview.h"
 
 #ifdef PCPORT_M32
 /* The decompiled structs assume the PSP's ILP32 layout. */
@@ -120,7 +125,17 @@ int main(int argc, char **argv)
             }
             psp_ctrl_script_press((uint32_t)strtoul(argv[i + 1], NULL, 0), b);
             i += 2;
-        } else if (!strcmp(argv[i], "--elf") && i + 1 < argc)
+        } else if (!strcmp(argv[i], "--gmo") && i + 1 < argc)
+            g_modelview_path = argv[++i];
+        else if (!strcmp(argv[i], "--gmo-tex") && i + 1 < argc)
+            g_modelview_textures = argv[++i];
+        else if (!strcmp(argv[i], "--oke") && i + 1 < argc)
+            g_modelview_oke = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--oke-pose") && i + 1 < argc)
+            g_modelview_pose = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--gmo-angle") && i + 1 < argc)
+            g_modelview_angle = strtof(argv[++i], NULL);
+        else if (!strcmp(argv[i], "--elf") && i + 1 < argc)
             g_game_elf_path = argv[++i];
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc)
             scale = (int)strtol(argv[++i], NULL, 0);
@@ -141,7 +156,7 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "usage: %s [--disc DIR] [--ms DIR] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
-                    "[--elf FILE] [--call-all-stubs]\n",
+                    "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
                     argv[0]);
             return 2;
         }

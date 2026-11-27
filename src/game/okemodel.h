@@ -1,0 +1,33 @@
+/* An OKE's body as the battle draws it (CBattleOkeSetupBody, FUN_0885a470): the
+ * body type's parts model battle/TYPE/part.gmo, one of its paint files for the
+ * textures, and the assembly description okeedit/TYPE.txt (COkeFile, the table at
+ * 0x0041666C) that places the parts on a bone tree and holds the poses.
+ *
+ * Read from okeedit/TYPE.txt: the !BODY section's PARTS2 lines (parent bone, part,
+ * pivot, rotation limits) and the !POSE sections (root translation plus one
+ * rotation per bone). Weapons use the parts PARTS2 names; the equipment-dependent
+ * choice isn't read yet. */
+#ifndef GAME_OKEMODEL_H
+#define GAME_OKEMODEL_H
+
+#include <stdbool.h>
+
+#define OKE_ID_MAX 0x24
+#define OKE_MAX_BONES 24
+
+typedef struct OkeModel OkeModel;
+
+/* Loads body type id (hardware block +0x240) with paint scheme (0-3). */
+OkeModel *okemodel_load(int oke_id, int paint);
+void okemodel_free(OkeModel *m);
+
+int okemodel_pose_count(const OkeModel *m);
+
+/* Draws the body in a pose with the current libgum model matrix as its ground
+ * point (feet on y = 0, facing +z). */
+void okemodel_draw(const OkeModel *m, int pose);
+
+/* The body type's directory name ("tri", "neg", ...), or "" */
+const char *okemodel_type_name(int oke_id);
+
+#endif
