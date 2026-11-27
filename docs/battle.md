@@ -37,12 +37,14 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Terrain | **Real** (mostly) | `terrain.c`: `CStageGenerator` (`FUN_08aa610c`) and its LANDGEN passes from `land/param/mapNN_a.mpp`, see "Terrain" below |
 | Sky | **Real** | `land/mapNN/mapNN_sky.gmo`, drawn around the camera |
 | Paint scheme | Assumed | hardware `+0x244` (0-3 in all presets); not traced to its reader yet |
-| Poses | Partly | pose 0 of `okeedit/TYPE.txt` only. The `!SCRIPT` motions (walking, firing) aren't played |
+| Walking and turning | **Real** (mostly) | `oke_script.c`. Move, Rotate, Quick Movement and Quick Rotate start the body's `!SCRIPT` motions as `CBattleOke` does (`FUN_08844450` / `FUN_088445b0` / `FUN_08844940` / `FUN_08844a00`, script tables at `0x08bd2414` and `0x08bd2568`). `CBattleOkeScript::Update` (`FUN_088597e8`) runs the commands: 0x200-0x203 pushes of value × 67.5 (`0x08bd6930`) for frames / 30 s, 0x204/0x205 turns of value × 2.618 rad/s² (`0x08cce2d0`, set to `0x40278d36` by a static initializer), 0x209 loops (`FUN_08858fd8`), poses. The physics step follows `FUN_0884df08`: the pushes add up into an acceleration, a 12/s brake works while no push is active, velocity is damped by exp(-0.3 t) (`+0xb6f4`) and turning by exp(-1.0 t) (`+0xb714`). Move and Rotate end when the observer's distance or angle is covered (amount - 0.5, `FUN_0883aaec`) |
+| Movement modifiers | Stand-in | `FUN_08858c8c` / `FUN_08858d44` scale each command by the OKE's performance (legs, weight); taken as 100%, so every body of a type moves alike. Commands 0x206-0x208 and 0x20a-0x210 (pose speed, waits, altitude, loop mode) are skipped |
+| Poses | Partly | the pose each script's pose command names is drawn straight away; the game blends to it over the command's frames. No blending yet |
 | Weapons on the body | Stand-in | the `PARTS2` defaults; the equipment-dependent part choice isn't read |
 | Map choice | Stand-in | always map 01 (`BATTLE_MAP`); the arena's own stage pick isn't traced |
 | Terrain height scale and tiles | Stand-in | height = byte × block-0 height / 255 over the used cells; one tile texture (`mapNN_a00.gim`); vertex shading from the map's light direction instead of GE lighting |
 | Battle camera | Stand-in | a chase camera behind your OKE (`CBattleSceneCamera` isn't read) |
-| What the robot does with a chip order (`CBattleOke`) | Stand-in | a 2D simulation with guessed units: an 800×800 field mapped onto the terrain, 50 units/s walking, 180°/s turning, shots at 320 units/s that take 4% each, melee 10% within 36 units, a 120 s limit. Heights don't affect it |
+| What the robot does with the other chip orders (`CBattleOke`) | Stand-in | a 2D simulation with guessed units on a 720×720 field (the terrain's size): jumps, the special moves and the bodies without scripts move at 50 units/s and turn at 180°/s; shots at 320 units/s that take 4% each, melee 10% within 36 units, a 120 s limit. Heights don't affect it |
 | HUD windows and gauges | **Real** (partly) | the `CIndicatorBase` window table at `0x003ed78c` (`FUN_089011d8` / `FUN_0890126c`), each window cut from the `bs_wind0` atlas; the status window's HP, heat and energy gauges as `FUN_089104fc` / `FUN_089106ac` / `FUN_08910860` draw them (130 px per 1000, positions at `0x003f0514`, heights at `0x003f0508`). Only windows 2 (status) and 3 (radar) are drawn. Heat and energy aren't simulated: heat shows empty, energy full |
 | Radar contents | Stand-in | `bs_radm2` dots placed by hand inside window 3, centred on your OKE; `CBattleRadarMngr` isn't read |
 | Lock-on | Stand-in | the game's `gunsite` / `gundot` marks drawn on the opponent while the simulation says you're locked on; `CBattleOkeGunSightCon` isn't read |
@@ -138,7 +140,8 @@ height map dumped from a running game or emulator.
 
 - **The battle field**: scenery models (`mapNN_nature*.gmo`, `piece_*`, `distant*`),
   obstacles, the `.bbx` collision boxes, the stage choice and CLandTexture's tiles.
-- **The robots**: motions (`!SCRIPT` in `okeedit/TYPE.txt`), weapon parts by
+- **The robots**: pose blending, the movement modifiers from the hardware stats,
+  jumps, flight and altitude, ground height and slopes in the physics, weapon parts by
   equipment, wreck parts, flying types. The renderer still lacks GE lighting and
   skinning.
 - **Effects**: shots are dots. There are no explosions, muzzle flashes or damage

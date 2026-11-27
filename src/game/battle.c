@@ -276,7 +276,7 @@ static void draw_oke3d(int side)
     sceGumRotateY(3.14159265f - o->heading * DEG);
     if (o->hp <= 0) /* stand-in for the wreck: knocked over */
         sceGumRotateZ(1.4f);
-    okemodel_draw(g_scene.body[side], 0);
+    okemodel_draw(g_scene.body[side], o->motion.pose);
 }
 
 /* Stand-in for CBattleSceneCamera: follows your OKE from behind and above, eased. */

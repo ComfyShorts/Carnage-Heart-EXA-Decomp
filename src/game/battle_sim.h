@@ -1,19 +1,21 @@
 /* The battle simulation behind battle.c: two OKEs running their chip programs.
  *
  * The chip interpreter (pgchip.c) and the numbers it depends on (the per-CPU chip
- * speed, the PGCHIP::CRange distance scale) are the game's. Everything a robot does
- * in response (moving, turning, firing, sensing, damage) is a stand-in for
- * CBattleOke, with guessed units; see docs/battle.md. */
+ * speed, the PGCHIP::CRange distance scale) are the game's, and so are walking and
+ * turning: Move and Rotate run the body's motion scripts through the game's physics
+ * (oke_script.c). Firing, sensing, damage and the other actions are still stand-ins
+ * for CBattleOke; see docs/battle.md. */
 #ifndef GAME_BATTLE_SIM_H
 #define GAME_BATTLE_SIM_H
 
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "oke_script.h"
 #include "okedb.h"
 #include "pgchip.h"
 
-#define FIELD 800.0f        /* square arena, in range units */
+#define FIELD 720.0f        /* square arena = the terrain's 720 x 720 world units */
 #define OKE_RADIUS 12.0f
 #define MOVE_SPEED 50.0f    /* units per second */
 #define QUICK_SPEED 160.0f
@@ -42,6 +44,11 @@ typedef struct Oke {
     bool locked;
     int counters[8];
     int shots_fired, hits;
+    /* Real movement (NULL scripts: the stand-in kinematics instead). */
+    OkeMotion motion;
+    bool scripted;     /* the current ACT_MOVE / ACT_TURN runs a motion script */
+    float obs_amount;  /* CBattleOkeObserver: distance or angle to cover */
+    float obs_x, obs_y, obs_turned, obs_last_heading;
 } Oke;
 
 typedef struct Shot {

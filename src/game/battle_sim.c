@@ -119,6 +119,9 @@ static bool wall_in_range(const Oke *o, PgChipRange r)
 
 static void start_action(Oke *o, ActKind k, float seconds)
 {
+    if (o->scripted)
+        oke_motion_stop(&o->motion);
+    o->scripted = false;
     o->act = k;
     o->act_left = seconds;
 }
@@ -134,6 +137,8 @@ static int t_halt_action(PgChipTarget *t, int category)
 {
     (void)category;
     O(t)->act = ACT_NONE;
+    O(t)->scripted = false;
+    oke_motion_stop(&O(t)->motion);
     O(t)->vx = O(t)->vy = O(t)->turn_rate = 0.0f;
     return 0;
 }
@@ -150,9 +155,30 @@ static void set_velocity(Oke *o, int dir, float speed)
     o->vy = -cosf(h) * speed;
 }
 
+/* CBattleOke's Move / Rotate (FUN_08844450 / FUN_088445b0): start the motion
+ * script; the observer (FUN_0883aaec, at +0xb430) watches for `amount - 0.5`. */
+static const int k_move_script[8] = {4, 3, 1, 2, 8, 7, 10, 9}; /* 0x08bd2414 */
+
+static void observe(Oke *o, ActKind k, int amount, float fallback)
+{
+    o->scripted = true;
+    o->act = k;
+    o->act_left = 1e9f;
+    o->obs_amount = (amount > 0 ? (float)amount : fallback) - 0.5f;
+    o->obs_x = o->x;
+    o->obs_y = o->y;
+    o->obs_turned = 0.0f;
+    o->obs_last_heading = o->heading;
+}
+
 static int t_move(PgChipTarget *t, int dir, int amount)
 {
     Oke *o = O(t);
+    if (o->motion.s) {
+        oke_motion_start(&o->motion, k_move_script[dir & 7]);
+        observe(o, ACT_MOVE, amount, 40.0f);
+        return 0;
+    }
     float dist = amount > 0 ? (float)amount : 40.0f;
     set_velocity(o, dir, MOVE_SPEED);
     start_action(o, ACT_MOVE, dist / MOVE_SPEED);
@@ -162,6 +188,11 @@ static int t_move(PgChipTarget *t, int dir, int amount)
 static int t_rotate(PgChipTarget *t, int dir, int amount)
 {
     Oke *o = O(t);
+    if (o->motion.s) {
+        oke_motion_start(&o->motion, dir ? 5 : 6); /* 0 clockwise: script 6 (0x204) */
+        observe(o, ACT_TURN, amount, 45.0f);
+        return 0;
+    }
     float deg = amount > 0 ? (float)amount : 45.0f;
     o->turn_rate = dir ? -TURN_SPEED : TURN_SPEED; /* 0 clockwise, 1 counter-clockwise */
     start_action(o, ACT_TURN, deg / TURN_SPEED);
@@ -179,8 +210,22 @@ static int t_jump(PgChipTarget *t, int dir)
     return 0;
 }
 
+/* FUN_08844940 / FUN_08844a00: one pass of a script, no observer. */
+static const int k_quick_script[8] = {31, 30, 28, 29, 25, 24, 27, 26}; /* 0x08bd2568 */
+
+static bool start_quick(Oke *o, int script, ActKind k)
+{
+    if (!o->motion.s || o->motion.s->count[script] == 0)
+        return false;
+    oke_motion_start(&o->motion, script);
+    observe(o, k, 0, 1e9f);
+    return true;
+}
+
 static int t_quick_move(PgChipTarget *t, int dir)
 {
+    if (start_quick(O(t), k_quick_script[dir & 7], ACT_MOVE))
+        return 0;
     set_velocity(O(t), dir, QUICK_SPEED);
     start_action(O(t), ACT_MOVE, 0.35f);
     return 0;
@@ -188,6 +233,8 @@ static int t_quick_move(PgChipTarget *t, int dir)
 
 static int t_quick_rotate(PgChipTarget *t, int dir)
 {
+    if (start_quick(O(t), dir ? 0x20 : 0x21, ACT_TURN))
+        return 0;
     O(t)->turn_rate = dir ? -TURN_SPEED * 2.0f : TURN_SPEED * 2.0f;
     start_action(O(t), ACT_TURN, 0.25f);
     return 0;
@@ -299,6 +346,8 @@ static int t_judge_action(PgChipTarget *t, int b2)
     const Oke *o = O(t);
     if (b2 == 0)
         return o->act == ACT_NONE;
+    if (o->motion.s && b2 <= 10) /* the action numbers are the motion script ids */
+        return o->scripted && o->motion.script == b2;
     if (b2 == 5 || b2 == 6)
         return o->act == ACT_TURN && (b2 == 5) == (o->turn_rate > 0);
     if (b2 == 8 || o->act != ACT_MOVE)
@@ -442,6 +491,10 @@ static void oke_init(Oke *o, Battle *b, int side, float x, float y, float headin
     o->y = y;
     o->heading = heading;
     o->hp = 100;
+    int32_t body;
+    memcpy(&body, o->rec.hardware + 0x240, sizeof body); /* FUN_089ed210 */
+    oke_motion_reset(&o->motion, oke_scripts_get(body));
+    o->scripted = false;
     int cpu = oke_cpu_part(&o->rec);
     pgchip_setup(&o->vm, &o->rec, battle_chip_speed(cpu));
     SDL_Log("[battle] side %d: CPU part %d, %d chips/s, main program %dx%d", side, cpu, o->vm.speed,
@@ -456,7 +509,19 @@ static void oke_step(Oke *o, float dt)
         o->fire_left -= dt;
     if (o->defend_left > 0.0f)
         o->defend_left -= dt;
-    if (o->act != ACT_NONE) {
+    if (o->motion.s && (o->act == ACT_NONE || o->scripted)) {
+        oke_motion_step(&o->motion, dt, &o->x, &o->y, &o->heading);
+        if (o->scripted) {
+            o->obs_turned += fabsf(wrap180(o->heading - o->obs_last_heading));
+            o->obs_last_heading = o->heading;
+            float done = o->act == ACT_MOVE ? hypotf(o->x - o->obs_x, o->y - o->obs_y) : o->obs_turned;
+            if (done >= o->obs_amount || !oke_motion_busy(&o->motion)) {
+                oke_motion_stop(&o->motion);
+                o->scripted = false;
+                o->act = ACT_NONE;
+            }
+        }
+    } else if (o->act != ACT_NONE) {
         o->x += o->vx * dt;
         o->y += o->vy * dt;
         o->heading = wrap180(o->heading + o->turn_rate * dt);
