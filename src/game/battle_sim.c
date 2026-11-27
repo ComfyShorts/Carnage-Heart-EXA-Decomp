@@ -440,6 +440,45 @@ static void add_heat(Oke *o, int amount)
 
 /* A mine's volley (FUN_08811940 from CBattleDispenser::Update): `count` of the
  * child bullet from (x, y) at the target. */
+/* ---- sounds (the sim reports them; battle.c places them for the listener) ---- */
+
+static void emit(Battle *b, int se, float x, float y)
+{
+    if (b->sound && se >= 0)
+        b->sound(b->sound_user, se, x, y);
+}
+
+/* FUN_0884cc40 (from the trigger, FUN_08851d30, with the weapon id): a gun's report
+ * by weapon - 1, in groups; it also starts the muzzle flash. 20-25 have none. */
+static int shot_se(int weapon)
+{
+    int n = weapon - 1;
+    static const struct { int8_t first, last, se; } k[] = {
+        {0, 2, 0x1B},   {3, 5, 0x1C},   {6, 7, 0x1D},   {8, 9, 0x1E},   {10, 12, 0x1F},
+        {13, 15, 0x20}, {16, 17, 0x21}, {18, 19, 0x22}, {26, 28, 0x23}, {35, 37, 0x23},
+        {44, 44, 0x23}, {29, 31, 0x24}, {38, 40, 0x24}, {45, 47, 0x24}, {32, 34, 0x25},
+        {41, 43, 0x25}, {48, 58, 0x26},
+    };
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
+        if (n >= k[i].first && n <= k[i].last)
+            return k[i].se;
+    return -1;
+}
+
+/* The launch sound of a guided shot (FUN_08811580): word 0 of the sub-bullet rows
+ * at 0x08c6940c (0x1c each), -1 for none. */
+static int launch_se(int bullet)
+{
+    return bullet >= 0 && bullet < NO_BULLET ? word_at(0x0046540Cu + (uint32_t)bullet * 0x1c, -1) : -1;
+}
+
+/* The impact sound (FUN_0881062c, from the shot's hit in FUN_08813fa4): the bullet's
+ * row of 0x08bca5a8 (0x28 each), its +8. */
+static int impact_se(int bullet)
+{
+    return bullet >= 0 && bullet < NO_BULLET ? word_at(0x003C65B0u + (uint32_t)bullet * 0x28, -1) : -1;
+}
+
 static void fire_child(Battle *b, int from, float x, float y, float tx, float ty, int bullet)
 {
     if (bullet < 0 || bullet >= NO_BULLET)
@@ -453,7 +492,7 @@ static void fire_child(Battle *b, int from, float x, float y, float tx, float ty
             b->shots[i] = (Shot){true, b->oke[from].side, x, y, (tx - x) / d * speed, (ty - y) / d * speed,
                                  0.0f, 0.0f, 0.0f, float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f),
                                  bullet_stat(bullet, 0), bullet_stat(bullet, 1), bullet_stat(bullet, 2),
-                                 -1, 0, 0.0f, 0.0f, false, from};
+                                 -1, 0, 0.0f, 0.0f, false, from, bullet};
             return;
         }
 }
@@ -501,7 +540,7 @@ static void mine_tick(Battle *b, Shot *s)
     s->vy *= 0.95f;
 }
 
-static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float spread_max)
+static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float spread_max, bool report)
 {
     Battle *b = o->battle;
     for (int i = 0; i < MAX_SHOTS; i++)
@@ -537,7 +576,8 @@ static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float s
             b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * speed,
                                  (ux * s + uy * c) * speed, drag, min_speed, 0.0f, falloff,
                                  weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2),
-                                 -1, 0, 0.0f, 0.0f, false, o->index};
+                                 -1, 0, 0.0f, 0.0f, false, o->index,
+                                 bullet >= 0 && bullet < NO_BULLET ? bullet : -1};
             int disp = word_at(0x003D1580u + (uint32_t)weapon * 20, NO_DISPENSER);
             if (disp != NO_DISPENSER && disp >= 0 && disp < 32) {
                 /* CBattleDispenser's launch (FUN_08815948): a velocity of +0x2c x
@@ -552,6 +592,10 @@ static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float s
                 m->mine = disp;
                 m->rounds = word_at(e + 0x14, 0);
                 m->hover = word_at(e + 0x18, 13) == 14;
+            }
+            if (report) {
+                emit(b, shot_se(weapon), o->x, o->y);
+                emit(b, launch_se(bullet), o->x, o->y);
             }
             o->shots_fired++;
             return;
@@ -827,7 +871,7 @@ static void fire_step(Oke *o, float dt)
             ty = o->y - cosf(h) * 100.0f;
         }
         for (int p = 0; p < pellets; p++)
-            fire_at(o, tx, ty, speed, id, pellets > 1 ? 0.08f : 0.0f); /* pellet spread: stand-in */
+            fire_at(o, tx, ty, speed, id, pellets > 1 ? 0.08f : 0.0f, p == 0); /* pellet spread: stand-in */
         /* GetWeaponShotCalorie (0x08bd5a30) heats the shooter (FUN_0883d960). */
         add_heat(o, word_at(0x003D1A30u + (uint32_t)id * 20, 0));
         o->ammo[w]--;
@@ -1383,6 +1427,7 @@ void battle_sim_step(Battle *b, float dt)
         }
         if (bone >= 0) {
             receive_hit(e, s, bone < OKE_BONES ? bone : -1, cls, hx, hy);
+            emit(b, impact_se(s->bullet), hx, hy);
             if (s->from >= 0 && s->from < b->count)
                 b->oke[s->from].hits++;
             s->live = false;

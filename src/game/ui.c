@@ -10,6 +10,7 @@
 #include "gamedata.h"
 #include "gu.h"
 #include "pad.h"
+#include "sound.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 
@@ -251,8 +252,10 @@ bool ui_menu_input(UiMenu *m)
         else if (pad_trigger(PSP_CTRL_DOWN))
             m->cursor = 0;
     }
-    if (m->cursor != old)
+    if (m->cursor != old) {
         m->pulse_t = 0.0f;
+        sound_se(SE_CURSOR, 1.0f); /* CTopMenuWnd's move: sound 9 */
+    }
     return m->cursor != old;
 }
 
@@ -352,13 +355,17 @@ int ui_ask_update(UiAsk *a, float dt)
     if (pad_repeat(PSP_CTRL_LEFT | PSP_CTRL_RIGHT | PSP_CTRL_UP | PSP_CTRL_DOWN)) {
         a->cursor ^= 1;
         a->pulse_t = 0.0f;
+        sound_se(SE_CURSOR, 1.0f);
     }
+    /* FUN_088d5eb8 and the other questions: yes plays 0xD, no and cross 0xB */
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         a->open = false;
+        sound_se(a->cursor == 0 ? SE_OK : SE_CANCEL, 1.0f);
         return a->cursor == 0;
     }
     if (pad_pressed(PSP_CTRL_CROSS)) {
         a->open = false;
+        sound_se(SE_CANCEL, 1.0f);
         return 0;
     }
     return -1;

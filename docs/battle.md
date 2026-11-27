@@ -181,6 +181,33 @@ by weight (`FUN_0891d988`), smoothing (`FUN_0892347c`), hydraulic erosion
 Nothing is checked against the game's output yet: the next step is comparing a
 height map dumped from a running game or emulator.
 
+## Battle sounds
+
+The battle bank (`sound/se/seset_01bat`, effects `SE_BTL_020`..`099`) is loaded when a
+battle starts, as the game does (FUN_08b26998 with slot 1), and freed when the result
+screen is left. The simulation reports sound events through `Battle.sound`
+(`battle_sim.c`), and `battle.c` places them for the camera, using the game's 3D volume
+(`CSound::seCalc3DVolume`, FUN_08b37174): full volume within the row's +0x2C units of
+the camera, then less by +0x28 per unit; the pan is the direction across the view.
+
+| Effect | Numbers | From |
+|---|---|---|
+| gun report | 0x1B..0x26 by weapon (FUN_0884cc40, called with the weapon id from the trigger FUN_08851d30): weapons 1-3 → 0x1B, 4-6 → 0x1C, 7-8 → 0x1D, 9-10 → 0x1E, 11-13 → 0x1F, 14-16 → 0x20, 17-18 → 0x21, 19-20 → 0x22, then the missile and rocket groups 0x23..0x25 and 0x26 for 49-59 | once per trigger pull (not per pellet) |
+| launch | word 0 of the sub-bullet rows at `0x08c6940c` (0x1C each) by bullet: 54 or 55, -1 for most | the shot's start (FUN_08811580) |
+| impact | +8 of the bullet's row at `0x08bca5a8` (0x28 each): 30, 40-45, 48 | a shot hitting an OKE (FUN_08813fa4 → FUN_0881062c) |
+
+Not played yet:
+
+- shots hitting the ground or obstacles (FUN_0881074c / FUN_0881086c, the other column
+  of the impact table) and scenery destroyed (0x34): the port has no ground hits or
+  obstacles;
+- mines and dispensers (`0x08bcb8e4` + row × 0x34, FUN_08816014), their child shots;
+- the body's movement sounds (walking, jumps, landing, turning: FUN_089f224c ..
+  FUN_089f293c, tables at `0x08c83f2c` / `0x08c83f30` by body), explosions and
+  wrecks (0x2E, FUN_08842fa4), the system effects used in battle (`SE_BTL_080`,
+  `092`..`096`), and the HUD and alert sounds;
+- the battle music (ATRAC3plus, see "Sound" in `docs/screens.md`).
+
 ## Missing
 
 - **The battle field**: scenery models (`mapNN_nature*.gmo`, `piece_*`, `distant*`),
@@ -196,7 +223,8 @@ height map dumped from a running game or emulator.
   `bs_tnum0` timer digits, alerts), the radar's own layout and the gun sight's
   movement. The parts table is at `0x00476398` (64 names, `CBsPicture`,
   `FUN_08895e2c` / `FUN_08895f64`).
-- **Sound**: none. No CSound, and no `battle_se` set.
+- **Sound**: the gun reports, launches and hits play ("Battle sounds"); the movement,
+  explosion, ground-hit and HUD sounds and the music don't.
 - **Behaviour**: `CBattleOke` (hardware stats: legs, weapons, armour, engine, heat,
   ammunition; flying types; collision) isn't ported, so who wins says little about the
   real game.

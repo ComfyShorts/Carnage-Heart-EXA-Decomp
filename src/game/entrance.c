@@ -16,6 +16,7 @@
 #include "gu.h"
 #include "heap.h"
 #include "pad.h"
+#include "sound.h"
 #include "picture.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
@@ -135,7 +136,7 @@ static void menu_input(Wnd *w)
             w->cursor = 0;
     }
     if (w->cursor != old)
-        SDL_Log("[entrance] menu cursor -> %d (sound 9 not played)", w->cursor);
+        sound_se(SE_CURSOR, 1.0f);
 }
 
 /* FUN_0888f870, simplified: the cursor highlight breathes between 0.3 and 1. */
@@ -376,6 +377,7 @@ static void mngr_open(EntranceMngr *m, int phase, int arg)
 static void phase_top_menu(EntranceMngr *m)
 {
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         m->idle_vcount = sceDisplayGetVcount();
         if (m->top_menu.cursor == 0) {
             SDL_Log("[entrance] Start Game chosen: opening the mode menu");
@@ -441,10 +443,12 @@ static void phase_load(EntranceMngr *m, float dt)
         if (m->load_menu.count)
             ui_menu_input(&m->load_menu);
         if (pad_pressed(PSP_CTRL_CROSS)) {
+            sound_se(SE_CANCEL, 1.0f);
             ui_menu_close(&m->load_menu);
             mngr_pop_phase(m);
             m->top_menu.active = true;
         } else if (pad_pressed(PSP_CTRL_CIRCLE) && m->load_menu.count) {
+            sound_se(SE_DECIDE, 1.0f);
             const SaveListEntry *list;
             savedata_list(&list);
             const SaveListEntry *e = &list[m->load_menu.cursor];
@@ -506,6 +510,7 @@ static void phase_mode_menu(EntranceMngr *m)
     }
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         m->selection = m->mode_menu.cursor;
+        sound_se(m->selection == 1 ? SE_START : SE_DECIDE, 1.0f);
         if (m->selection == 1 && savedata_story_completed()) {
             /* FUN_0889c400: the system data's +0x74, Story Mode completed. Then
              * there's no question: straight to phase 7. */
@@ -525,6 +530,7 @@ static void phase_mode_menu(EntranceMngr *m)
             m->stop_warned = true;
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         menu_close(&m->mode_menu, 0);
         mngr_open(m, PHASE_TOP_MENU, 1);
         m->closing_mode = true;

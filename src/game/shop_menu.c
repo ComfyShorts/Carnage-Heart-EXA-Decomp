@@ -28,6 +28,7 @@
 #include "gu.h"
 #include "oke_parts.h"
 #include "pad.h"
+#include "sound.h"
 #include "psp_shim.h"
 #include "savedata.h"
 #include "ui.h"
@@ -235,6 +236,7 @@ static void buy(void)
     if (savedata_money() < cost) {
         snprintf(g.message, sizeof g.message, "%s", nz(gamedata_string(S_NO_MONEY)));
         g.bought = false;
+        sound_se(SE_ERROR, 1.0f); /* not enough Victory Points: 0xF */
         SDL_Log("[shop] %s: %d needed, %d held", nz(item_name(g.cat, id)), cost, savedata_money());
     } else {
         savedata_spend_money(cost);
@@ -248,6 +250,7 @@ static void buy(void)
         else
             snprintf(g.message, sizeof g.message, "%s", nz(item_name(g.cat, id)));
         g.bought = true;
+        sound_se(SE_OK, 1.0f); /* purchased: 0xD */
         SDL_Log("[shop] bought %s for %d, %d left", nz(item_name(g.cat, id)), cost, savedata_money());
     }
     g.mode = MODE_MESSAGE;
@@ -260,18 +263,23 @@ static void update_list(void)
         return;
     }
     /* FUN_08a75ca4: up and down with repeat, wrapping on a fresh press. */
+    int old_cursor = g.cursor;
     if (pad_repeat(PSP_CTRL_UP))
         g.cursor = g.cursor > 0 ? g.cursor - 1 : pad_trigger(PSP_CTRL_UP) ? g.count - 1 : 0;
     else if (pad_repeat(PSP_CTRL_DOWN))
         g.cursor = g.cursor < g.count - 1 ? g.cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.cursor;
+    if (g.cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.cursor < g.scroll)
         g.scroll = g.cursor;
     if (g.cursor >= g.scroll + ROWS)
         g.scroll = g.cursor - ROWS + 1;
-    if (pad_pressed(PSP_CTRL_CIRCLE))
+    if (pad_pressed(PSP_CTRL_CIRCLE)) {
         buy();
-    else if (pad_pressed(PSP_CTRL_CROSS))
+    } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         back_to_top();
+    }
 }
 
 /* FUN_08a7287c: circle or cross closes the message; after a purchase the list is
@@ -280,6 +288,7 @@ static void update_message(void)
 {
     if (!pad_pressed(PSP_CTRL_CIRCLE) && !pad_pressed(PSP_CTRL_CROSS))
         return;
+    sound_se(SE_CANCEL, 1.0f);
     g.mode = MODE_LIST;
     if (!g.bought)
         return;
@@ -299,10 +308,13 @@ static void update_top(void)
     if (!g.top.count)
         return;
     ui_menu_input(&g.top);
-    if (pad_pressed(PSP_CTRL_CIRCLE))
+    if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         open_list(ui_menu_id(&g.top) - 1);
-    else if (pad_pressed(PSP_CTRL_CROSS))
+    } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         g.done = true;
+    }
 }
 
 int shop_menu_update(float dt)

@@ -13,6 +13,7 @@
 #include "gamedata.h"
 #include "gu.h"
 #include "pad.h"
+#include "sound.h"
 #include "psp_shim.h"
 #include "savedata.h"
 #include "oke_menu.h"
@@ -431,6 +432,7 @@ static int update_mode(void)
 {
     UiMenu *m = &g.mode;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         UiMenuItem *it = &m->item[m->cursor];
         if (it->disabled) {
             g.message = s_mode(0x16);
@@ -453,6 +455,7 @@ static int update_mode(void)
             g.message = it->text;
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         /* The game asks whether to go back to the title (CSystemMngr); the port
          * goes back at once. */
         pop();
@@ -464,6 +467,7 @@ static int update_select(void)
 {
     UiMenu *m = &g.select;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         switch (ui_menu_id(m)) {
         case 0: /* CBattleTestFlow */
             push(SCR_TEST);
@@ -479,6 +483,7 @@ static int update_select(void)
             break;
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
         ui_menu_open(&g.mode);
     }
@@ -521,6 +526,7 @@ static int update_test(void)
 {
     UiMenu *m = &g.test;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         switch (ui_menu_id(m)) {
         case 0:
             push(SCR_TEST_TEAM);
@@ -552,6 +558,7 @@ static int update_test(void)
         g.test_time = SDL_clamp(g.test_time, 30, 300);
         refresh_values();
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
         ui_menu_open(&g.select);
     }
@@ -573,8 +580,10 @@ static int update_test_team(void)
 {
     int *team = g.team[g.team_side];
     int last = SDL_min(team_count(g.team_side), SETUP_TEAM_MAX - 1);
+    int old_cursor = g.team_slot;
     if (pad_pressed(PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) {
         g.team_side ^= 1; /* string 47: "Change Team" */
+        sound_se(SE_CURSOR, 1.0f);
         g.team_slot = SDL_min(g.team_slot, SDL_min(team_count(g.team_side), SETUP_TEAM_MAX - 1));
         g.message = NULL;
     } else if (pad_repeat(PSP_CTRL_UP)) {
@@ -583,7 +592,10 @@ static int update_test_team(void)
     } else if (pad_repeat(PSP_CTRL_DOWN)) {
         g.team_slot = g.team_slot < last ? g.team_slot + 1 : 0;
         g.message = NULL;
+    if (g.team_slot != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         int cur = team[g.team_slot];
         g.card_cursor = cur >= 0 ? cur : first_card();
         push(SCR_CARDS);
@@ -594,6 +606,7 @@ static int update_test_team(void)
         team[SETUP_TEAM_MAX - 1] = -1;
         g.team_slot = SDL_min(g.team_slot, SDL_min(team_count(g.team_side), SETUP_TEAM_MAX - 1));
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
     }
     return 1;
@@ -603,6 +616,7 @@ static int update_test_team(void)
 
 static int update_cards(void)
 {
+    int old_cursor = g.card_cursor;
     if (pad_repeat(PSP_CTRL_UP)) {
         if (g.card_cursor > 0)
             g.card_cursor--;
@@ -616,11 +630,14 @@ static int update_cards(void)
             g.card_cursor = 0;
         g.message = NULL;
     }
+    if (g.card_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.card_cursor < g.card_scroll)
         g.card_scroll = g.card_cursor;
     if (g.card_cursor >= g.card_scroll + CARD_ROWS)
         g.card_scroll = g.card_cursor - CARD_ROWS + 1;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         if (!card_used(g.card_cursor)) {
             g.message = s_test(44);
         } else {
@@ -629,6 +646,7 @@ static int update_cards(void)
             pop();
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
     }
     return 1;
@@ -639,6 +657,7 @@ static int update_field(void)
     UiMenu *m = &g.field;
     int id = ui_menu_id(m);
     if (pad_pressed(PSP_CTRL_CIRCLE) && id == 0) {
+        sound_se(SE_DECIDE, 1.0f);
         g.stage_cursor = (int)gamedata_word(STAGE_ORDER + 4u * (uint32_t)g.stage, (uint32_t)g.stage);
         push(SCR_STAGES);
     } else if (id > 0 && pad_repeat(PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) {
@@ -647,6 +666,7 @@ static int update_field(void)
         *v = (*v + d + 3) % 3;
         refresh_values();
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
         ui_menu_open(&g.test);
     }
@@ -679,6 +699,7 @@ static bool stage_enabled(int pos)
 
 static int update_stages(void)
 {
+    int old_cursor = g.stage_cursor;
     if (pad_repeat(PSP_CTRL_UP)) {
         if (g.stage_cursor > 0)
             g.stage_cursor--;
@@ -690,15 +711,21 @@ static int update_stages(void)
         else if (pad_trigger(PSP_CTRL_DOWN))
             g.stage_cursor = 0;
     }
+    if (g.stage_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.stage_cursor < g.stage_scroll)
         g.stage_scroll = g.stage_cursor;
     if (g.stage_cursor >= g.stage_scroll + STAGE_ROWS)
         g.stage_scroll = g.stage_cursor - STAGE_ROWS + 1;
     if (pad_pressed(PSP_CTRL_CIRCLE) && stage_enabled(g.stage_cursor)) {
+        sound_se(SE_DECIDE, 1.0f);
         g.stage = stage_at(g.stage_cursor);
         refresh_values();
         pop();
+    } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_ERROR, 1.0f); /* a locked stage */
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
     }
     return 1;
@@ -708,6 +735,7 @@ static int update_arena(void)
 {
     UiMenu *m = &g.arena;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         switch (ui_menu_id(m)) {
         case 0:
             push(SCR_OPPONENTS);
@@ -724,6 +752,7 @@ static int update_arena(void)
             break;
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
         ui_menu_open(&g.select);
     }
@@ -736,6 +765,7 @@ static int update_arena(void)
  * 1) and have an OKE registered (team strings 0x1F and 0x49). */
 static int update_teams(void)
 {
+    int old_cursor = g.team_cursor;
     if (pad_repeat(PSP_CTRL_UP)) {
         g.team_cursor = g.team_cursor > 0 ? g.team_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? SAVE_TEAMS - 1 : 0;
         g.message = NULL;
@@ -743,11 +773,14 @@ static int update_teams(void)
         g.team_cursor = g.team_cursor < SAVE_TEAMS - 1 ? g.team_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.team_cursor;
         g.message = NULL;
     }
+    if (g.team_cursor != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.team_cursor < g.team_scroll)
         g.team_scroll = g.team_cursor;
     if (g.team_cursor >= g.team_scroll + TEAM_ROWS)
         g.team_scroll = g.team_cursor - TEAM_ROWS + 1;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         int status = savedata_team_status(g.team_cursor);
         if (status != 1)
             g.message = status == 0 ? s_arena(37) : team_string(0x1F);
@@ -758,6 +791,7 @@ static int update_teams(void)
             pop();
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
     }
     return 1;
@@ -767,6 +801,7 @@ static int update_teams(void)
 
 static int update_opponents(void)
 {
+    int old_cursor = g.opponent;
     if (pad_repeat(PSP_CTRL_UP)) {
         if (g.opponent > 0)
             g.opponent--;
@@ -782,14 +817,18 @@ static int update_opponents(void)
     } else if (pad_repeat(PSP_CTRL_RIGHT)) {
         g.opponent = SDL_min(g.opponent + OPP_ROWS, ARENA_COUNT - 1);
     }
+    if (g.opponent != old_cursor)
+        sound_se(SE_CURSOR, 1.0f);
     if (g.opponent < g.opp_scroll)
         g.opp_scroll = g.opponent;
     if (g.opponent >= g.opp_scroll + OPP_ROWS)
         g.opp_scroll = g.opponent - OPP_ROWS + 1;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
         refresh_values();
         pop();
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
         pop();
     }
     return 1;

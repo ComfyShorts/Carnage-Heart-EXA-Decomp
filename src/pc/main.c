@@ -12,6 +12,7 @@
  *                     (one directory per save). Default saves/
  *   --make-test-save [NAME]  write a Battle Data save NAME.CHE (default TESTDATA) holding
  *                     a few of the shipped preset OKEs, then go on (needs --disc)
+ *   --mute            no sound output (the sound code still runs, timed by the clock)
  *   --frames N        quit after N frames (for scripted runs). With --startup, N frames
  *                     shown by the game: then the HOME menu's exit is requested
  *   --gu-trace N      log the game's sceGu calls during its first N frames
@@ -123,6 +124,8 @@ int main(int argc, char **argv)
             psp_savedata_set_root(argv[++i]);
         else if (!strcmp(argv[i], "--make-test-save"))
             test_save = i + 1 < argc && strncmp(argv[i + 1], "--", 2) ? argv[++i] : "TESTDATA";
+        else if (!strcmp(argv[i], "--mute"))
+            psp_audio_set_mute(true);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             frames = strtol(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--shot") && i + 2 < argc) {
@@ -168,7 +171,7 @@ int main(int argc, char **argv)
                                                                                        : "orig/first_frame.png");
         else {
             fprintf(stderr,
-                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--startup] [--trace] [--frames N] [--scale N] "
+                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
                     "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
                     argv[0]);

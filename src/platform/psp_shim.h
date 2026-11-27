@@ -49,6 +49,11 @@ bool psp_io_mount_disc(const char *dir);
 void psp_savedata_set_root(const char *dir);
 const char *psp_savedata_root(void);
 
+/* Audio (audio.c): --mute keeps the sound code running without a device. */
+void psp_audio_set_mute(bool mute);
+bool psp_audio_muted(void);
+void psp_audio_shutdown(void); /* psp_platform_shutdown: before SDL goes */
+
 /* Kernel (kernel.c). */
 int psp_kernel_threads_alive(void);  /* PSP threads currently running */
 void psp_kernel_request_exit(void);  /* the user quit: notify the game's exit callback */

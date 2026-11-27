@@ -128,10 +128,22 @@ long pack_read(const Pack *pack, const PackEntry *e, void *dst, size_t cap)
         return SCE_ERROR_ERRNO_EINVAL;
     char path[300];
     snprintf(path, sizeof path, "%s/%s", pack->dir, pack_name(pack, e->a));
-    uint8_t *stored = malloc(e->stored ? e->stored : 1);
+    SceUID fd;
+    if (e->stored == 0) { /* kept as is (the sound files): read straight in */
+        fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+        if (fd < 0)
+            return fd;
+        long r = sceIoLseek(fd, e->b, PSP_SEEK_SET) == (SceOff)e->b &&
+                         sceIoRead(fd, dst, e->size) == (int32_t)e->size
+                     ? (long)e->size
+                     : SCE_ERROR_ERRNO_EIO;
+        sceIoClose(fd);
+        return r;
+    }
+    uint8_t *stored = malloc(e->stored);
     if (!stored)
         return SCE_ERROR_ERRNO_EIO;
-    SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+    fd = sceIoOpen(path, PSP_O_RDONLY, 0);
     long r = fd;
     if (fd >= 0) {
         if (sceIoLseek(fd, e->b, PSP_SEEK_SET) == (SceOff)e->b &&

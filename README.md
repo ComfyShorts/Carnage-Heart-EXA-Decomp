@@ -89,6 +89,11 @@ multilib and 32-bit X11 packages with `apt-get download` and unpacks them into `
 `libgl1:i386 libpulse0:i386` and rebuild SDL3 with PulseAudio enabled. Without them SDL
 uses its software renderer and dummy audio.
 
+Sound effects play through SDL3 audio (the menus' cursor, decide, cancel, OK and error
+sounds, and the battle's gun reports, launches and hits); `--mute` turns the output
+off. Music, voices and some effects are ATRAC3plus and need a decoder that isn't added
+yet. See "Sound" in `docs/screens.md` and "Battle sounds" in `docs/battle.md`.
+
 Every import logs its first call, implemented or not, with arguments and result for the
 implemented ones (`--trace` or `PSP_SHIM_LOG=all` logs every call). At exit a summary
 lists every import called, in first-call order, marking the ones that are still stubs.

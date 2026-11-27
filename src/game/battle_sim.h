@@ -107,6 +107,7 @@ typedef struct Shot {
     float cool, clock;
     bool hover;
     int from;                 /* the OKE that fired it (Battle.oke index) */
+    int bullet;               /* its bullet row (the sounds and effects), -1 none */
 } Shot;
 
 typedef struct Battle {
@@ -120,6 +121,9 @@ typedef struct Battle {
     uint32_t rng;
     int result; /* -1 running, 0 you win, 1 you lose, 2 draw */
     PgChipHistory *history[MAX_OKES]; /* optional: chip results per OKE, for tracing */
+    /* optional: sound effect `se` (a row of the SE table) at field point x, y */
+    void (*sound)(void *user, int se, float x, float y);
+    void *sound_user;
 } Battle;
 
 /* HP as the chips and the HUD see it: 0-100 (FUN_0883d774 + FUN_0883fc04). */
