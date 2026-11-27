@@ -6,6 +6,7 @@
  *
  * --all    your side: the test designs and tutorial answers; opponents: arena 01-10
  * --arena  every arena design against every other
+ * --teams  three-OKE arena teams (opponents 51-75 against 76-100), on their spots
  * Exits 77 (CTest "skipped") when the game files aren't there. Without the EBOOT
  * (--elf, default orig/EBOOT.elf) the chip speed and range scale use rough defaults. */
 #include <stdio.h>
@@ -74,6 +75,55 @@ static int fight(const char *mine, const char *theirs, int verbose, int *decided
     return 1;
 }
 
+/* An arena opponent's team (CBattleSettingInfo in the EBOOT: count +4, records at
+ * +0x14 + 0x40 n, spots at +0xD4 + 4 n) as one side. */
+#define ARENA_RECORDS 0x0044DC10u
+#define ARENA_STRIDE 0x3C0u
+
+static int load_team(Battle *b, int side, int opponent)
+{
+    uint32_t rec = ARENA_RECORDS + (uint32_t)opponent * ARENA_STRIDE;
+    int n = (int)gamedata_word(rec + 4, 1);
+    for (int m = 0; m < n && m < TEAM_SIZE; m++) {
+        const char *path = gamedata_string(rec + 0x14u + 0x40u * (uint32_t)m);
+        Oke *o = &b->oke[b->count];
+        if (!path || !load(path, &o->rec))
+            return 0;
+        o->side = side;
+        o->member = m;
+        o->spot = (int)gamedata_word(rec + 0xD4u + 4u * (uint32_t)m, (uint32_t)-1);
+        b->count++;
+    }
+    return n;
+}
+
+static int fight_teams(int mine, int theirs, int verbose, int *decided)
+{
+    static Battle b;
+    memset(&b, 0, sizeof b);
+    if (!gamedata_available() || !load_team(&b, 0, mine) || !load_team(&b, 1, theirs))
+        return 0;
+    battle_sim_start(&b, 1);
+    int steps = 0;
+    while (b.result < 0 && steps < 60 * 200) {
+        battle_sim_step(&b, DT);
+        steps++;
+    }
+    int a0 = battle_team_alive(&b, 0), a1 = battle_team_alive(&b, 1);
+    if (b.result < 0 || (b.time < battle_time_limit(&b) - 0.5f && a0 > 0 && a1 > 0)) {
+        printf("FAIL team %d vs %d: no proper end (result %d after %.1f s, %d/%d left)\n", mine + 1, theirs + 1,
+               b.result, b.time, a0, a1);
+        return -1;
+    }
+    if (a0 == 0 || a1 == 0)
+        (*decided)++;
+    static const char *k_res[3] = {"win", "lose", "draw"};
+    if (verbose)
+        printf("team %3d vs team %3d  %5.1f s  %-4s  left %d/%d  durability %3d/%3d\n", mine + 1, theirs + 1, b.time,
+               k_res[b.result], a0, a1, battle_team_percent(&b, 0), battle_team_percent(&b, 1));
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     const char *disc = getenv("CHEXA_DISC"), *elf = "orig/EBOOT.elf";
@@ -88,10 +138,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--theirs") && i + 1 < argc) theirs = argv[++i];
         else if (!strcmp(argv[i], "--all")) all = 1;
         else if (!strcmp(argv[i], "--arena")) all = 2;
+        else if (!strcmp(argv[i], "--teams")) all = 3;
         else if (!strcmp(argv[i], "-v")) verbose = 1;
         else if (!strcmp(argv[i], "--trace") && i + 1 < argc) g_trace = atoi(argv[++i]);
         else {
-            fprintf(stderr, "usage: %s [--disc DIR] [--elf FILE] [--mine PATH] [--theirs PATH] [--all] [--arena] [-v] [--trace N]\n",
+            fprintf(stderr, "usage: %s [--disc DIR] [--elf FILE] [--mine PATH] [--theirs PATH] [--all] [--arena] [--teams] [-v] [--trace N]\n",
                     argv[0]);
             return 2;
         }
@@ -106,7 +157,13 @@ int main(int argc, char **argv)
     }
     gamedata_open(elf);
     int fought = 0, failures = 0, decided = 0;
-    if (all == 2) {
+    if (all == 3) {
+        for (int i = 50; i < 75; i++) {
+            int r = fight_teams(i, i + 25, verbose, &decided);
+            fought += r > 0;
+            failures += r < 0;
+        }
+    } else if (all == 2) {
         char a[48], t[48];
         for (int i = 1; i <= 50; i++)
             for (int j = 1; j <= 50; j++) {

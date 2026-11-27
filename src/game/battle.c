@@ -59,14 +59,14 @@ static bool load_record(const char *path, OkeDataBase *out)
 
 static Battle g_b;
 
-/* The 3D scene: the field and the two bodies (see docs/battle.md). */
+/* The 3D scene: the field and a body per OKE (see docs/battle.md). */
 #define OKE_HW_BODY 0x240   /* s32 in the hardware block: body type (COkeFile id) */
 #define OKE_HW_PAINT 0x244  /* s32: paint scheme 0-3 (assumed from the presets) */
 static struct {
     int map;    /* the loaded land/mapNN, -1 none */
     Terrain *land;
     Gmo *sky;
-    OkeModel *body[2];
+    OkeModel *body[MAX_OKES];
     float cam_eye[3], cam_at[3];
     bool cam_valid;
 } g_scene;
@@ -90,10 +90,13 @@ static void scene_load(void)
         g_scene.sky = gmo_load(path);
         g_scene.map = map;
     }
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < MAX_OKES; i++) {
         okemodel_free(g_scene.body[i]);
-        const OkeDataBase *rec = &g_b.oke[i].rec;
-        g_scene.body[i] = okemodel_load(hw_word(rec, OKE_HW_BODY), hw_word(rec, OKE_HW_PAINT));
+        g_scene.body[i] = NULL;
+        if (i < g_b.count) {
+            const OkeDataBase *rec = &g_b.oke[i].rec;
+            g_scene.body[i] = okemodel_load(hw_word(rec, OKE_HW_BODY), hw_word(rec, OKE_HW_PAINT));
+        }
     }
     g_scene.cam_valid = false;
 }
@@ -108,6 +111,8 @@ static struct {
     int fileset;
     bool node_added;
     bool exit_request;
+    int watch;        /* the OKE the camera and the HUD follow (Battle.oke index) */
+    const char *label[MAX_OKES];
 } g;
 
 #define START_BANNER 1.5f /* seconds of BATTLE START before the fight */
@@ -118,26 +123,46 @@ static void enter(Screen s)
     g.t = 0.0f;
 }
 
+static int battle_team_count(int side)
+{
+    int n = 0;
+    for (int i = 0; i < g_b.count; i++)
+        n += g_b.oke[i].side == side;
+    return n;
+}
+
 /* From the choices made on the Battle Mode screens (battle_menu.c). */
 static bool start_battle(void)
 {
     const BattleSetup *set = battle_menu_setup();
     memset(&g_b, 0, sizeof g_b);
-    for (int side = 0; side < 2; side++) {
-        const OkeDataBase *card = savedata_card(set->oke_card[side]);
-        if (card) /* a saved OKE card */
-            g_b.oke[side].rec = *card;
-        else if (!open_pack() || !load_record(set->oke_path[side], &g_b.oke[side].rec))
-            return false;
-    }
+    for (int side = 0; side < 2; side++)
+        for (int m = 0; m < set->count[side] && m < SETUP_TEAM_MAX; m++) {
+            const BattleOke *bo = &set->oke[side][m];
+            Oke *o = &g_b.oke[g_b.count];
+            const OkeDataBase *card = savedata_card(bo->card);
+            if (card) /* a saved OKE card */
+                o->rec = *card;
+            else if (!open_pack() || !load_record(bo->path, &o->rec))
+                return false;
+            o->side = side;
+            o->member = m;
+            o->spot = bo->spot;
+            g.label[g_b.count++] = bo->label;
+        }
+    if (battle_team_count(0) == 0 || battle_team_count(1) == 0)
+        return false;
     g_b.time_limit = set->time_limit;
+    g_b.map_size = set->map_size;
+    const BattleOke *lead = &set->oke[1][0];
     uint32_t seed = 0x12345678u;
-    for (const char *c = set->oke_path[1][0] ? set->oke_path[1] : set->oke_label[1]; *c; c++)
+    for (const char *c = lead->path[0] ? lead->path : lead->label; *c; c++)
         seed = seed * 31u + (uint8_t)*c;
     battle_sim_start(&g_b, seed ^ (uint32_t)set->map);
+    g.watch = 0; /* your leader */
     scene_load();
-    SDL_Log("[battle] %s vs %s on map %02d, %.0f s", set->oke_label[0], set->oke_label[1], set->map,
-            set->time_limit);
+    SDL_Log("[battle] %s (%d) vs %s (%d) on map %02d, %.0f s", set->team_label[0], set->count[0],
+            set->team_label[1], set->count[1], set->map, set->time_limit);
     return true;
 }
 
@@ -213,9 +238,9 @@ static bool part_had_armour(const Oke *o, int bone)
     return false;
 }
 
-static void draw_oke3d(int side)
+static void draw_oke3d(int i)
 {
-    const Oke *o = &g_b.oke[side];
+    const Oke *o = &g_b.oke[i];
     float p[3];
     world_pos(o->x, o->y, p);
     sceGumMatrixMode(GU_MODEL);
@@ -231,13 +256,14 @@ static void draw_oke3d(int side)
     for (int b = 0; b < OKE_BONES && b < 32; b++)
         if (o->motion.s && b < o->motion.s->n_bones && o->part_hp[b] <= 0 && part_had_armour(o, b))
             broken |= 1u << b;
-    okemodel_draw_hiding(g_scene.body[side], o->motion.pose, broken);
+    okemodel_draw_hiding(g_scene.body[i], o->motion.pose, broken);
 }
 
-/* Stand-in for CBattleSceneCamera: follows your OKE from behind and above, eased. */
+/* Stand-in for CBattleSceneCamera: follows the watched OKE from behind and above,
+ * eased. */
 static void update_camera(float dt)
 {
-    const Oke *o = &g_b.oke[0];
+    const Oke *o = &g_b.oke[g.watch];
     float p[3];
     world_pos(o->x, o->y, p);
     float h = o->heading * DEG, fx = sinf(h), fz = -cosf(h);
@@ -272,7 +298,7 @@ static void draw_shots3d(void)
         float a[3], b[3];
         world_pos(s->x, s->y, a);
         world_pos(s->x - s->vx * 0.05f, s->y - s->vy * 0.05f, b);
-        uint32_t c = s->owner ? 0xFF4080FF : 0xFFFFC040;
+        uint32_t c = s->owner ? 0xFF4080FF : 0xFFFFC040; /* by side */
         v[n++] = (ShotVertex){c, a[0], a[1] + 4.0f, a[2]};
         v[n++] = (ShotVertex){c, b[0], b[1] + 4.0f, b[2]};
     }
@@ -314,7 +340,7 @@ static void draw_scene3d(void)
     sceGuDepthMask(0);
     sceGuDepthFunc(7);
     terrain_draw(g_scene.land);
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < g_b.count; i++)
         draw_oke3d(i);
     draw_shots3d();
     sceGumMatrixMode(GU_MODEL);
@@ -409,16 +435,67 @@ static bool project(const float p[3], float *sx, float *sy)
     return true;
 }
 
+/* CIndicatorFriend (FUN_08904200): in window 4, the watched OKE's two team-mates,
+ * the next member first. Each row (0x08bf28fe, plus 0x08bf28f2) has the member's
+ * mark from bs_memark0 (16 x 18, cut at 0x08bf290a by member), an HP bar from
+ * bs_hpguage 130 pixels for 100% and 12 high (FUN_08904178), and the OKE's name at
+ * +0x18, +5. */
+#define FRIEND_ROWS 0x003EE8FEu
+#define FRIEND_OFFS 0x003EE8F2u
+#define FRIEND_MARKS 0x003EE90Au
+
+static void draw_friends(const Oke *me)
+{
+    const Oke *mate[TEAM_SIZE] = {0};
+    int n = 0;
+    for (int i = 0; i < g_b.count; i++)
+        if (g_b.oke[i].side == me->side && g_b.oke[i].member < TEAM_SIZE)
+            mate[g_b.oke[i].member] = &g_b.oke[i];
+    for (int k = 0; k < TEAM_SIZE; k++)
+        n += mate[k] != NULL;
+    if (n < 2)
+        return;
+    draw_hud_window(4);
+    HudRect w = hud_window(4);
+    static const int16_t k_rows[2][2] = {{330, 0}, {0, 0}}, k_offs[2][2] = {{19, 5}, {19, 5}};
+    static const int16_t k_marks[3][2] = {{0, 0}, {20, 0}, {40, 0}};
+    Picture *marks = pic("parts/bs/bs_memark0.gim"), *bar = pic("parts/bs/bs_hpguage.gim");
+    TextStyle st = text_style(0, 5, 10, 10, 0, 4, 0xFFFFFFFF, 0);
+    int m = me->member;
+    for (int row = 0; row < 2; row++) {
+        m = (m + 1) % TEAM_SIZE;
+        const Oke *o = mate[m];
+        if (!o)
+            continue;
+        int rx = w.x + ed_short(FRIEND_ROWS + (uint32_t)row * 4, k_rows[row][0]);
+        int ry = w.y + ed_short(FRIEND_ROWS + (uint32_t)row * 4 + 2, k_rows[row][1]);
+        int ox = ed_short(FRIEND_OFFS + (uint32_t)row * 4, k_offs[row][0]);
+        int oy = ed_short(FRIEND_OFFS + (uint32_t)row * 4 + 2, k_offs[row][1]);
+        int mu = ed_short(FRIEND_MARKS + (uint32_t)m * 4, k_marks[m][0]);
+        int mv = ed_short(FRIEND_MARKS + (uint32_t)m * 4 + 2, k_marks[m][1]);
+        if (marks)
+            picture_draw_ex(marks, rx, ry + 1, 0, 16, 18, mu, mv, 16, 18, BLEND_ALPHA,
+                            o->hp > 0 ? 0xFFFFFFFF : 0xFF808080, 0, 0, 0, 0);
+        int len = o->hp > 0 ? oke_hp_percent(o) * 0x82 / 100 : 0;
+        if (bar && len > 0)
+            picture_draw_ex(bar, rx + ox, ry + oy, 0, len, 12, 0, 0, 12, 12, BLEND_ALPHA, 0xFFFFFFFF, 0, 0, 0, 0);
+        const char *name = g.label[o->index];
+        text_draw(name ? name : "", &st, rx + ox + 0x18 - 19, ry + 5, 0, NULL, NULL);
+    }
+}
+
 static void draw_hud(void)
 {
-    const Oke *me = &g_b.oke[0], *foe = &g_b.oke[1];
+    const Oke *me = &g_b.oke[g.watch];
     /* Status window with HP and heat; energy isn't simulated, so it shows full. */
     draw_hud_window(2);
     draw_gauge("parts/bs/bs_hpguage.gim", 0, me->hp_max ? me->hp * 1000 / me->hp_max : 0, true);
     draw_gauge("parts/bs/bs_htguage.gim", 1, me->heat_max ? me->heat * 1000 / me->heat_max : 0, false);
     draw_gauge("parts/bs/bs_enguage.gim", 2, 1000, false);
-    /* Radar window (3) with the game's radar frame and markers. Their placement and
-     * scale inside it are stand-ins: CBattleRadarMngr isn't read yet. */
+    draw_friends(me);
+    /* Radar window (3) with the game's radar frame and a marker per OKE, centred on
+     * the watched one. Their placement, scale and colours are stand-ins:
+     * CIndicatorRadar (FUN_08909a98) isn't read yet. */
     draw_hud_window(3);
     HudRect rw = hud_window(3);
     Picture *frame = pic("parts/bs/bs_radf0.gim");
@@ -428,12 +505,12 @@ static void draw_hud(void)
                         picture_height(frame), BLEND_ALPHA, 0xFFFFFFFF, 0, 0, 0, 0);
     Picture *dot = pic("parts/bs/bs_radm2.gim");
     float scale = (float)(rw.h - 12) / FIELD;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < g_b.count; i++) {
         const Oke *o = &g_b.oke[i];
         int x = cx + (int)((o->x - me->x) * scale), y = cy + (int)((o->y - me->y) * scale);
         if (x < rw.x + 4 || x > rw.x + rw.w - 4 || y < rw.y + 4 || y > rw.y + rw.h - 4)
             continue;
-        uint32_t c = o->hp <= 0 ? 0xFF606060 : i == 0 ? 0xFFFFC080 : 0xFF4040FF;
+        uint32_t c = o->hp <= 0 ? 0xFF606060 : i == g.watch ? 0xFFFFFFFF : o->side == me->side ? 0xFFFFC080 : 0xFF4040FF;
         if (dot)
             picture_draw(dot, x - 4, y - 4, 0, BLEND_ALPHA, c, 0, 0);
     }
@@ -447,11 +524,18 @@ static void draw_hud(void)
     if (sight && me->hp > 0 && project(p, &sx, &sy) && sx > 0 && sx < 480 && sy > 0 && sy < 272)
         picture_draw(sight, (int)sx - picture_width(sight) / 2, (int)sy - picture_height(sight) / 2, 0, BLEND_ALPHA,
                      0xFFFFFFFF, 0, 0);
-    /* Names: plain text until the game's top windows are read. */
-    text(battle_menu_setup()->oke_label[0], 6, 6, 0xFFFFC080);
-    text_right(battle_menu_setup()->oke_label[1], 474, 6, 0xFF8080FF);
+    /* Names: plain text until the game's top windows are read. The watched OKE's
+     * name, and the other team with its OKEs left. */
+    const BattleSetup *set = battle_menu_setup();
+    int foe = me->side ^ 1;
+    text(g.label[g.watch] ? g.label[g.watch] : "", 6, 6, me->side == 0 ? 0xFFFFC080 : 0xFF8080FF);
+    text_right(set->team_label[foe], 474, 6, foe == 0 ? 0xFFFFC080 : 0xFF8080FF);
     char line[24];
-    snprintf(line, sizeof line, "%d%%", oke_hp_percent(foe));
+    if (set->count[foe] > 1)
+        snprintf(line, sizeof line, "%d/%d  %d%%", battle_team_alive(&g_b, foe), set->count[foe],
+                 battle_team_percent(&g_b, foe));
+    else
+        snprintf(line, sizeof line, "%d%%", battle_team_percent(&g_b, foe));
     text_right(line, 474, 22, 0xFFFFFFFF);
 }
 
@@ -529,12 +613,21 @@ int battle_mode_update(float dt)
         break;
     }
     case SCR_BATTLE:
+        /* The watched OKE: L and R step through every OKE on the field (the port's
+         * buttons; CBattleSceneCamera's own switching isn't read yet). */
+        if (pad_pressed(PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER) && g_b.count > 1) {
+            int d = pad_pressed(PSP_CTRL_RTRIGGER) ? 1 : g_b.count - 1;
+            g.watch = (g.watch + d) % g_b.count;
+            g_scene.cam_valid = false;
+            SDL_Log("[battle] watching %s", g.label[g.watch] ? g.label[g.watch] : "?");
+        }
         if (g.t >= START_BANNER) {
             battle_sim_step(&g_b, dt);
             if (g_b.result >= 0) {
                 static const char *k_res[3] = {"you win", "you lose", "draw"};
-                SDL_Log("[battle] over after %.1f s: %s (HP %d vs %d, hits %d vs %d)", g_b.time,
-                        k_res[g_b.result], oke_hp_percent(&g_b.oke[0]), oke_hp_percent(&g_b.oke[1]), g_b.oke[0].hits, g_b.oke[1].hits);
+                SDL_Log("[battle] over after %.1f s: %s (OKEs left %d vs %d, durability %d%% vs %d%%)", g_b.time,
+                        k_res[g_b.result], battle_team_alive(&g_b, 0), battle_team_alive(&g_b, 1),
+                        battle_team_percent(&g_b, 0), battle_team_percent(&g_b, 1));
                 enter(SCR_RESULT);
             }
         }

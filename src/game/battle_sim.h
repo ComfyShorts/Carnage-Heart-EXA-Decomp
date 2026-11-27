@@ -1,4 +1,5 @@
-/* The battle simulation behind battle.c: two OKEs running their chip programs.
+/* The battle simulation behind battle.c: two teams of up to three OKEs running their
+ * chip programs.
  *
  * The chip interpreter (pgchip.c) and the numbers it depends on (the per-CPU chip
  * speed, the PGCHIP::CRange distance scale) are the game's, and so are walking and
@@ -27,6 +28,9 @@
 #define COOLING 0.08f       /* stand-in: share of max heat shed per second */
 #define TIME_LIMIT 120.0f   /* seconds */
 #define MAX_SHOTS 160
+#define TEAM_SIZE 3         /* CTeamDataBase: three CFormationDataBase entries */
+#define MAX_OKES (2 * TEAM_SIZE)
+#define FORMATION_SPOTS 9   /* the formation grid (0x08bd7d10) */
 
 typedef enum { ACT_NONE, ACT_MOVE, ACT_TURN, ACT_ATTACK, ACT_DEFEND, ACT_JUMP } ActKind;
 
@@ -34,6 +38,10 @@ typedef struct Oke {
     PgChipTarget base; /* must come first: the interpreter's view */
     struct Battle *battle;
     int side;          /* 0 you, 1 the opponent */
+    int index;         /* in Battle.oke */
+    int member;        /* 0-2 in its team; member 0 is the leader */
+    int spot;          /* formation spot 0-8 (CFormationDataBase +0x24), -1: by member */
+    int target;        /* the enemy the chips last found or locked, -1 none */
     OkeDataBase rec;
     PgChipVm vm;
     float x, y, heading; /* heading in degrees, 0 = up the screen, clockwise */
@@ -98,27 +106,35 @@ typedef struct Shot {
     int mine, rounds;
     float cool, clock;
     bool hover;
+    int from;                 /* the OKE that fired it (Battle.oke index) */
 } Shot;
 
 typedef struct Battle {
-    Oke oke[2];
+    Oke oke[MAX_OKES];
+    int count;        /* OKEs in oke[]; 0 at start means the 1-on-1 oke[0] vs oke[1] */
     Shot shots[MAX_SHOTS];
     float time;
     float time_limit; /* seconds; 0 means TIME_LIMIT */
+    float map_size;   /* metres, 180-540 (CBattleParam +4); 0 means 540 */
     int tick;
     uint32_t rng;
     int result; /* -1 running, 0 you win, 1 you lose, 2 draw */
-    PgChipHistory *history[2]; /* optional: chip results per side, for tracing */
+    PgChipHistory *history[MAX_OKES]; /* optional: chip results per OKE, for tracing */
 } Battle;
 
-
-/* Places the two designs facing each other and sets up their interpreters. The
- * records must already be in b->oke[0].rec and b->oke[1].rec. */
 /* HP as the chips and the HUD see it: 0-100 (FUN_0883d774 + FUN_0883fc04). */
 int oke_hp_percent(const Oke *o);
 int oke_heat_percent(const Oke *o);
 
+/* Places the teams on their formation spots and sets up the interpreters. Before it,
+ * fill b->oke[0..count-1] with .rec, .side, .member and .spot (or leave count 0 with
+ * the two records in oke[0] (you) and oke[1]). */
 void battle_sim_start(Battle *b, uint32_t seed);
+
+/* A team's live OKEs (CBattleOkeMngr FUN_0881f908) and its durability: the members'
+ * HP percentages averaged, destroyed ones as 0. */
+int battle_team_alive(const Battle *b, int side);
+int battle_team_percent(const Battle *b, int side);
 
 /* The battle's length: b->time_limit, or TIME_LIMIT when that's unset. */
 float battle_time_limit(const Battle *b);

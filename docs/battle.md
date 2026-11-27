@@ -2,23 +2,24 @@
 
 Choosing **Battle Mode** on the title's mode menu now runs the game's own Battle Mode
 screens (see `docs/screens.md`): the top menu, Battle, then either the **Test
-Program** (Enemy and Friend OKEs from the OKE cards, the map, test time, "Start
-battle?") or the **Battle Arena** (one of the game's 100 opponents, your OKE, "Start
-Battle Arena?"). The battle then starts from those choices:
+Program** (Enemy and Friend teams of up to three OKE cards, the map, test time,
+"Start battle?") or the **Battle Arena** (one of the game's 100 opponents, one of your
+Team Formation teams, "Start Battle Arena?"). The battle then starts from those
+choices:
 
-- your side's OKE and the enemy's: the chosen cards, or the arena opponent's leader
-  (the record's first OKE file);
+- each side's OKEs, up to three: the chosen cards, your team card's members, or all of
+  the arena opponent's OKEs (the record's OKE files), each on its formation spot;
 - the map: the chosen stage, or the opponent's, through `CPresetStage`'s table
   (`0x08c21854`, field 0 = `land/mapNN`); "Select Randomly" picks one of 00-24;
 - the time limit: the Test Time, or the opponent's (`+0x114` of its record).
 
-"BATTLE START", then both robots run their own chip programs until one is destroyed
-or time runs out. WINNER, LOSER or DRAW follows, and circle goes back to the screen
+"BATTLE START", then every robot runs its own chip program until one team has no OKE
+left or time runs out. WINNER, LOSER or DRAW follows, and circle goes back to the screen
 the battle was started from. The cards you can field are the save's 32 (blank for a
 new game, or the ones of the Battle Data loaded with Continue, see "Save data" in
 `docs/screens.md`) and the two simulation OKEs. A saved card's record goes to the
-battle as it is in the save. `--make-test-save` writes a save with six preset OKEs to
-try it (OKE Configuration and the shop, which fill the cards in the game, aren't
+battle as it is in the save. `--make-test-save` writes a save with twelve preset OKEs
+and two teams to try it (OKE Configuration and the shop, which fill the cards in the game, aren't
 ported).
 
 Code: `src/game/battle.c` (screens and drawing), `src/game/battle_sim.c` (the
@@ -31,6 +32,13 @@ build/pc-m32/chexa-pc --disc DIR --startup --press 70 circle --press 90 down \
 build/pc-m32/chexa-battle-test --mine preset/arena/oke_b15_1.bin \
     --theirs preset/arena/oke_b04_1.bin --trace 40   # one battle, first 40 chips
 build/pc-m32/chexa-battle-test --arena -v            # all 2450 arena pairings
+build/pc-m32/chexa-battle-test --teams -v            # 3-on-3: arena teams 51-75 vs 76-100
+# a 3-on-3 arena battle with the test save's Team 01 (R switches the watched OKE)
+C="--press 70 down --press 90 circle --press 110 circle"   # Continue -> top menu
+build/pc-m32/chexa-pc --disc DIR --saves orig/teamtest --startup $C --press 190 circle \
+    --press 210 down --press 230 circle --press 250 down --press 270 circle --press 300 circle \
+    --press 320 down --press 340 circle --press 370 circle --shot 1400 orig/tm_battle1.png \
+    --press 1500 r --shot 1530 orig/tm_battle_watch.png --frames 1540
 build/pc-m32/chexa-pc --disc DIR --startup --oke 8 --shot 20 orig/oke.png   # one body
 build/pc-m32/chexa-pc --disc DIR --startup --map 15 --oke 3 --shot 20 orig/map.png
 build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot 20 orig/m.png
@@ -58,17 +66,22 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Poses | Partly | the pose each script's pose command names is drawn straight away; the game blends to it over the command's frames. No blending yet |
 | Weapons on the body | Stand-in | the `PARTS2` defaults; the equipment-dependent part choice isn't read |
 | Map choice | **Real** | the stage picked on the Test Program's map screen, or the arena opponent's stage, through `CPresetStage` (`FUN_08a35844`, table at `0x08c21854`). Map size and barricade are chosen but not simulated (the field stays 720×720) |
-| OKE choice | **Real** (partly) | the cards chosen on the Test Program's team screen or the arena's team screen (the save's `COkeDataBase` records, or the simulation OKEs from the pack), and the arena opponent's OKE files. One OKE a side: of an arena team, only its leader fights |
+| OKE choice | **Real** | the cards chosen on the Test Program's team windows (up to three a team), the members of the Team Formation team chosen in the arena (the save's `COkeDataBase` records, or the simulation OKEs from the pack), and all of the arena opponent's OKE files (`+4` count, `+0x14` + 0x40 n) |
+| Teams and spawn positions | **Real** | up to three OKEs a side (`TEAM_SIZE`, `CTeamDataBase`'s three `CFormationDataBase`). Placement as `CBattleScene` `FUN_08869a28` does it: each member's formation spot (`+0x24`: 0-8) is a point of the 3 × 3 grid at `0x08bd7d10` (x ±60 / 0, z -60 / -120 / -180), scaled by map size / 540; the enemy team (the game's team 0) keeps the point and faces the centre, yours takes it mirrored (-x, -z) and turned round. A member without a spot takes the free ones in the order at `0x08c3e228` (4, 3, 5, ...: the middle of the second row, then its sides). Arena opponents' spots come from their record (`+0xD4`). The game's nudge of 16 units away from obstacles near a spot isn't done |
+| End of the battle and the winner | **Real** (partly) | the judge (`FUN_088689c8`) ends the battle once a team has no live OKE (`FUN_0881f908`), or at the time limit. A team with none left loses. Otherwise the winner is chosen by the Test Program's default condition (`CBattleParam +0x14` = 0, "Durability Left %", string 0x4B): the team with the higher average HP %, destroyed OKEs counting 0; equal is a draw. The other conditions (Remaining OKEs, OKEs & Durability, Defeat Leader) and the arena opponents' own conditions aren't chosen yet, and the leader isn't treated specially |
+| Targets with several enemies | Stand-in | `CBattleOke` keeps the target its search chips found (`FUN_08841bd8`); the port takes the nearest live enemy in the chip's range for the search, lock-on, Select and Fire and Auto Rotate chips and keeps it as the target, else the nearest live enemy. Friendly fire is off: shots and mines only hit the other team. With one OKE a side the battles are exactly as before (the 200 preset battles give the same results with the old spawn distance) |
+| Watched OKE | Stand-in | the camera and the HUD follow your leader; L and R step through every OKE on the field (the port's buttons; `CBattleSceneCamera`'s own switching isn't read) |
 | Time limit | **Real** | Test Time (30-300 s, `CBattleParam +8`) or the arena record's `+0x114` (90-120 s); `Battle.time_limit` |
 | Terrain height scale and tiles | Stand-in | height = byte × block-0 height / 255 over the used cells; one tile texture (`mapNN_a00.gim`); vertex shading from the map's light direction instead of GE lighting |
-| Battle camera | Stand-in | a chase camera behind your OKE (`CBattleSceneCamera` isn't read) |
+| Battle camera | Stand-in | a chase camera behind the watched OKE (`CBattleSceneCamera` isn't read) |
 | What the robot does with the other chip orders (`CBattleOke`) | Stand-in | a 2D simulation with guessed units on a 720×720 field (the terrain's size): jumps, the special moves and the bodies without scripts move at 50 units/s and turn at 180°/s; melee 10% within 36 units. Heights don't affect it |
-| HUD windows and gauges | **Real** (partly) | the `CIndicatorBase` window table at `0x003ed78c` (`FUN_089011d8` / `FUN_0890126c`), each window cut from the `bs_wind0` atlas; the status window's HP, heat and energy gauges as `FUN_089104fc` / `FUN_089106ac` / `FUN_08910860` draw them (130 px per 1000, positions at `0x003f0514`, heights at `0x003f0508`). Only windows 2 (status) and 3 (radar) are drawn. Energy isn't simulated and shows full; heat shows the simulated heat |
-| Radar contents | Stand-in | `bs_radm2` dots placed by hand inside window 3, centred on your OKE; `CBattleRadarMngr` isn't read |
+| HUD windows and gauges | **Real** (partly) | the `CIndicatorBase` window table at `0x003ed78c` (`FUN_089011d8` / `FUN_0890126c`), each window cut from the `bs_wind0` atlas; the status window's HP, heat and energy gauges as `FUN_089104fc` / `FUN_089106ac` / `FUN_08910860` draw them (130 px per 1000, positions at `0x003f0514`, heights at `0x003f0508`). Windows 2 (status, for the watched OKE), 3 (radar) and 4 are drawn. Energy isn't simulated and shows full; heat shows the simulated heat |
+| Team-mate window | **Real** | `CIndicatorFriend` (`FUN_08904200`): in window 4, the watched OKE's two team-mates, the next member first, each with its member mark from `bs_memark0` (16 × 18, cut at `0x08bf290a`), an HP bar from `bs_hpguage` (130 px for 100%, 12 high, `FUN_08904178`) and its name, at the rows of `0x08bf28fe` + `0x08bf28f2`; picture numbers 0x29 / 0x2a of the battle scene's list (`0x08c7a398`). Only drawn when the team has more than one OKE. The name's font is the port's |
+| Radar contents | Stand-in | a `bs_radm2` dot for every OKE, placed by hand inside window 3 and centred on the watched OKE: white for it, orange for its team, blue for the other, grey when destroyed. `CIndicatorRadar` (`FUN_08909a98`) isn't read |
 | Lock-on and gun sight | **Real** (mostly) | Lock-On (`FUN_088464b0`) locks a target found in range and otherwise keeps the old lock; only Cancel Lock-On clears it (`FUN_088465dc`). `CBattleOkeGunSightController` (`+0xb470`) at 30 Hz: the tracker (`FUN_0883baa4`) gives the locked target's direction and distance (200 without a lock, the sight then holds its last yaw, straight ahead at first); the sight turns half the remaining angle a frame, at most 30° (body table `+0x50`), with up to 50% extra while it keeps turning one way, aiming one frame ahead (`FUN_0884a1c8`, `FUN_0883b300`, `FUN_0883b214`). The HUD mark eases after the aim point at (0.5 + momentum) of the way, at most 20 a frame (`+0x54`, `FUN_0884a4d8`): `gunsite` while locked, `gundot` otherwise |
 | Reticle chips and lead | **Real** (mostly) | Start Reticle (`FUN_0883be40`) readies weapon 1-5 (8: broken off, 9: empty slot), 5 puts it away and resets the sight, 6 readies the next usable one. "Current weapon" in the fire chips means the readied one; with none they fail with 0x11. Move Reticle (`FUN_0883c0d4`) sets the sight's goal yaw (0.01°, ±180, relative with b2 = 1) and holds the tracker off for 2 s; it is ignored while firing in mode 2 or 3. Shoot Reticle (`FUN_08848288`) fires at the sight's HUD point (mode 1), Select and Fire at the target itself (mode 2), Firing Direction along its angle (mode 3) (`FUN_0883c298`). The gun rises while the fire control aims, at 2 × body `+0x38` / 100 per second, and drops at once otherwise (`FUN_088509bc`). Once fully raised, with the chip's spread setting 0, 1 or 4 (table `0x08cce2c0` is 0 there), the shot leads: target + its velocity × distance / bullet speed, one pass (`FUN_0883e2c4`). In mode 1 the lead goes into the sight, in mode 2 into the shot. The fire control stays aiming until the weapon is put away |
 | Pitch, muzzle cone, part targeting | Stand-in | pitch isn't simulated (shots have no height), so the reticle's pitch is ignored and the mark's height is a stand-in. Shots leave from the body's centre, not the muzzle (`+0x30` of the slot), and aren't limited to the weapon's aiming cone (`DAT_08cce2d8`, `FUN_08810edc`) or its turret limits. Selecting a target part (weapon mounts) isn't ported. The spread values themselves (table `0x08cce2c0`) aren't applied as scatter |
-| Names, timer | Stand-in | plain text where the game has its top windows |
+| Names, timer | Stand-in | plain text where the game has its top windows: the watched OKE's name, the other team's name, its OKEs left and durability |
 | Selection screens | **Real** (partly) | the game's Battle Mode, Battle, Test Program and Battle Arena screens; their stand-ins are listed in `docs/screens.md` |
 
 The tables come from your EBOOT at run time (`--elf`), so nothing is copied into the
@@ -95,6 +108,11 @@ From the entrance code (`FUN_088d5510`, `FUN_088d497c`, `FUN_088d5a70`,
   each robot.
 
 ## How the presets behave in the stand-in
+
+`chexa-battle-test --teams` fights the three-OKE arena teams 51-75 against 76-100 on
+their own formation spots (25 battles; the ctest `battle_teams`): a few end with a team
+destroyed, most go to the time limit and the durability judge, and many are draws for
+the reasons below.
 
 `chexa-battle-test --arena` fights every arena design against every other: 2450
 battles, about 270 end with a robot destroyed. Ten designs fire in nearly all their
