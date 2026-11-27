@@ -27,10 +27,12 @@ Relevant source files (from assert strings):
 
 - An OKE carries **three programs**, indexed by the enum `PGCHIP_PROGRAM` (asserted
   `< PGCHIP_PROGRAM_MAX`, which is 3): `0` = main program, `1` and `2` = sub-programs.
-- A program is a **square grid of chips**, `width × width`, stored row-major
-  (`index = y * width + x`). The main program has room for 15×15 chips, each sub-program
-  for 7×7. The active width is stored separately, so smaller grids use only the top-left
-  part of the buffer (**likely**; see open questions).
+- A program is a **square grid of chips**, `width × width`, stored compactly row-major
+  (`index = y * width + x`, so a 10×10 program fills the first 100 slots and does not keep
+  the 15-wide row stride). The main program has room for 15×15 chips, each sub-program
+  for 7×7. **Confirmed** against 205 shipped records: the stored width is the only size
+  field, and the programs are only consistent when read this way (see
+  [Validation against real data](#validation-against-real-data)).
 - Each program has a **start index**. Execution begins there and returns there when
   the main program runs off the grid or hits a Return chip.
 - Each chip is an 8-byte `PGCHIP::tagCOMMAND`. After executing, a chip yields one of
@@ -41,10 +43,22 @@ Relevant source files (from assert strings):
 | Byte | Bits | Meaning | Confidence |
 |---|---|---|---|
 | 0 | 0-5 | `eCOMMAND_TYPE` (1..0x35; 0 = `COMMAND_NONE`, asserted never to be executed) | confirmed |
-| 0 | 6 | unknown | — |
-| 0 | 7 | "active" flag: if clear, the chip is skipped, nothing is called, and execution continues along the default direction | confirmed behaviour, name a guess |
+| 0 | 6 | unknown; the interpreter ignores it. Set on every reachable chip in the data | — |
+| 0 | 7 | "active" flag: if clear, the chip is skipped, nothing is called, and execution continues along the default direction. The test comes *after* the Return check, so Return chips ignore it | confirmed behaviour, name a guess |
 | 1 | 0-3 | default / "process" exit direction (0-7) | confirmed |
 | 1 | 4-7 | branch exit direction (0-7), taken when a judge chip's target call returns 1 (condition true) | confirmed |
+
+What the data shows about these bits (205 records; details under Validation):
+
+- Every **reachable non-Return chip** has bits 7 and 6 both set (0xC0 | type). Clear bits
+  only appear on Return chips (where the interpreter never looks) and on 16 chips that
+  can't be reached from the start.
+- **Non-judge chips** carry 0xF (most) or 4 in the branch nibble. Judges (0x0A-0x1C)
+  always have 0-7 there. So 0xF is "no branch" and 4 is probably an editor default
+  (**likely**).
+- Return chips often have byte 1 = 0xCD, MSVC-style uninitialised fill, because they have
+  no exit. Empty cells (type 0) hold 0x00/0x80/0xC0 in byte 0 and 0x40/0xFF/0xCD in byte 1.
+  None is ever reached.
 | 2-7 | | per-type parameters (see the chip table). Read as signed/unsigned bytes, 16-bit halves, nibbles, a 3+5-bit split, or a 4-byte `PGCHIP::tagRANGE` at bytes 2-5 | confirmed per type |
 
 Directions (`PGCHIP::eCONNECT_DIR_TYPE`, 0-7) step through the 8 neighbours clockwise,
@@ -62,12 +76,43 @@ One OKE's complete design (hardware plus software). Constructor `0x089EEA80 / 0x
 
 | Offset | Size | Contents | Confidence |
 |---|---|---|---|
-| 0x0000 | 0x30 | header: name object at +0x04, misc fields at +0x20 / +0x24 | likely |
-| 0x0030 | 0xFB0 | hardware design. The CPU part id is at hardware+0x288 | likely |
+| 0x0000 | 0x30 | header, below | layout from data; meanings guessed |
+| 0x0030 | 0xFB0 | hardware design. The CPU part id is at hardware+0x288 (s32, 1-7 in the data) | confirmed (decides the program size, see below) |
 | 0x0FE0 | 0xA60 | **software** (programs, below) | confirmed |
-| 0x1A40 | 0x460 | unknown block (own constructor) | — |
-| 0x1EA0 | 0x1C | unknown block (own constructor) | — |
-| 0x1EBC | 4 | zero-initialised field | — |
+| 0x1A40 | 0x460 | **comment block**: 10 × 11-byte tag lists, then 10 × 101-byte Shift-JIS texts | layout confirmed; tag meaning unknown |
+| 0x1EA0 | 0x1C | 7 × s32: six zeros and a **colour index** (0-7) in word 6 | likely |
+| 0x1EBC | 4 | zero-initialised field; 0 in every record | — |
+
+**Header.**
+- +0x00 is a u32, 1 in every record (a version, **guess**).
+- +0x04..0x1F is a 28-byte field: a 0 byte, then a NUL-terminated Shift-JIS string of
+  up to 26 bytes, then leftover 0xCD/0xFF fill. Probably the design name (**guess**).
+  Many shipped records leave it empty.
+- +0x20 is a u32, always 0.
+- +0x24..0x2F is a 12-byte field with the same shape (0 byte, then ASCII/Shift-JIS up to
+  10 bytes). Probably a model code or author tag (**guess**).
+- The 0xCD fill means the records were written from uninitialised heap/stack memory by an
+  MSVC debug build of the editor (**likely**).
+
+**Comment block (0x1A40).**
+- Ten entries. Entry *k* has an 11-byte list at `0x1A40 + 11k` and a 101-byte NUL-terminated
+  Shift-JIS text at `0x1AAE + 101k` (up to 100 bytes of text). Together these fill the
+  0x460 bytes exactly.
+- In default records, entry *k* holds the list `[k+1, 0, …]` and a numbered placeholder
+  label. Edited records carry real notes, with lists of up to six small numbers
+  (e.g. `[3, 13, 5, 6, 7, 8]`).
+- Since the list values are 1-14, they're probably references to other comments or
+  palette/marker ids, not chip positions. That's a **guess**; they need the editor code read.
+- The block's purpose (chip-area comments/labels) is a **likely** reading of the data, not
+  confirmed from code.
+
+**0x1EA0 block.**
+- Its constructor (`0x08A77378 / 0x273378`) zeroes six words and sets word 6 to 1. Every
+  shipped record holds exactly that.
+- A neighbouring accessor (`0x08A773BC`) passes word 6 to a lookup (`0x08A7740C`) that
+  returns an entry from an 8-entry 32-bit colour table, or `0xFF3F3F3F` if out of range.
+  Another helper cycles an index 0→7→0. So word 6 is a colour index (**likely**); words
+  0-5 are unknown.
 
 Accessors: OKE → hardware `0x089EEB2C / 0x1EAB2C`, OKE → software
 `0x089EEB1C / 0x1EAB1C`, hardware → CPU id `0x089ED434 / 0x1E9434`.
@@ -81,9 +126,22 @@ Constructor `0x089EE02C / 0x1EA02C` clears every chip and counter.
 | 0x000 | 225 × 8 = 0x708 | main program chips (15×15 buffer) |
 | 0x708 | 49 × 8 = 0x188 | sub-program 1 chips (7×7 buffer) |
 | 0x890 | 49 × 8 = 0x188 | sub-program 2 chips (7×7 buffer) |
-| 0xA18 | 3 × 4 | grid width for main, sub 1, sub 2 |
-| 0xA24 | 3 × 4 | start index for main, sub 1, sub 2 |
-| 0xA30 | 8 × 6 | 8 counter definitions (`PGCHIP::tagCOUNTER`, indexed by `eCOUNTER_TYPE`; read by `CSoftwareDataBase::GetCounter`) |
+| 0xA18 | 3 × 4 | grid width for main, sub 1, sub 2 (0 = sub-program not available) |
+| 0xA24 | 3 × 4 | start index for main, sub 1, sub 2 (compact `y*width+x`) |
+| 0xA30 | 8 × 6 | 8 counters (`PGCHIP::tagCOUNTER`, indexed by `eCOUNTER_TYPE`; read by `CSoftwareDataBase::GetCounter`). In the data each is just a **counter name**: up to 5 ASCII characters plus a NUL. No value or range is stored |
+
+**Program size comes from the CPU part (confirmed against the data).** Each width triple
+appears only with these CPU part ids (hardware+0x288):
+
+| CPU part id | Widths (main, sub 1, sub 2) | Records |
+|---|---|---|
+| 1, 2 | 6, 0, 0 | 33 |
+| 3, 4 | 10, 0, 0 | 121 |
+| 5, 6, 7 | 15, 7, 7 | 51 |
+
+So only the largest CPUs have sub-programs. Every Call Sub-Program chip in the data sits
+in a 15/7/7 record. Whether the game rewrites the widths when a CPU part is swapped
+hasn't been checked in code.
 
 Getter pairs (address-of, then value) for each field sit at
 `0x089EE138..0x089EE1C0 / 0x1EA138..0x1EA1C0`.
@@ -100,6 +158,31 @@ Getter pairs (address-of, then value) for each field sit at
   carry-in/backup). Saves go through `sceUtilitySavedata` into `DATA.BIN`. Whether a
   save holds plain `COkeDataBase` images, and whether the savedata utility encrypts them,
   has **not been checked**.
+
+### Where the shipped records live: the PIDX pack (confirmed)
+
+The game's files sit in `PSP_GAME/USRDIR` as an index, `chexa.idx`, plus two archives,
+`common.dat` and `voice.dat`. `tools/chexa_pack.py` lists and extracts them; its
+docstring gives the byte layout. In short:
+
+- **Index.** A "PIDX" header, a table of 0x20-byte archive records (name, a 16-byte hash),
+  and a flat entry table (6 × u32 per entry). The entries form a directory tree: a
+  directory entry gives a child count and first child, a file entry gives the archive,
+  offset, unpacked size and stored size. Names are offsets into a string table.
+- **Stored files.** Each starts with an 8-byte "ARZ" header (magic `ARZ` or ` 3;`, a
+  method digit, the unpacked size), and the payload is XORed with 0x72.
+  - Method 0 is stored as-is.
+  - Method 1 is classic Okumura LZSS: a 4 KiB ring that starts at 0xFEE, LSB-first flag
+    bytes where 1 means literal, and matches of 12-bit position + 4-bit length (plus 3).
+
+Every 0x1EC0-byte file under `preset/` is a raw `COkeDataBase` (205 records):
+
+| Path | Contents |
+|---|---|
+| `preset/arena/oke_bNN_1.bin` | arena opponents |
+| `preset/lecture/oke_lNN_{1,2,a}.bin` | tutorial OKEs (`_a` looks like the model answer) |
+| `preset/mission/…` | mission enemies |
+| `preset/oke_t01_{1,2}.bin` | test/default designs |
 
 ## Battle-time state: `CBattleOkePgChip` (0x1E4 bytes)
 
@@ -196,6 +279,59 @@ Shared slots used across many chips (confirmed from the call pattern; names infe
 Calls Ghidra never defined as functions (they're only reached through the vtable) were
 read from the splat disassembly.
 
+## `PGCHIP::tagRANGE`: the 4-byte scan/aim area (bytes 2-5)
+
+Used by the chips the editor's `CSoftDesignMngr::GetCommandRange` (`0x08A876AC`, via
+`0x08A8AE60`) accepts: 0x0B, 0x0C, 0x0D, 0x0E, 0x13, 0x14, 0x26, 0x2E and 0x2F. The
+editor's polar preview (`l_PolarDraw`, `0x08A0DD10`) decodes it as follows:
+
+| Byte | Meaning | Confidence |
+|---|---|---|
+| 2 | bits 1-7: inner distance step; bit 0: a flag (unknown; set in about 11% of range chips) | likely |
+| 3 | half-width of the arc in degrees; the arc spans direction ± this, so 180 = full circle | likely (5-180 in data, 90 and 45 most common) |
+| 4 | outer distance step | likely (0-110 in data) |
+| 5 | arc direction in 2° units (×2, then values above 180 wrap to negative) | likely |
+
+The "steps" become distances through `PGCHIP::CRange`'s piecewise scale. There are five
+scale levels (`ms_ScaleLevelCount`), each with a base step, base length and magnification
+(`GetScaleBaseMeter` / `GetScaleBaseLength` / `GetScaleMagnification`,
+`0x089FC14C..0x089FC264`). `0x089FC37C` maps a step to a distance and `0x089FC410` maps
+it back, so larger steps cover coarser distances. The table values (in
+`.rodata`, `0x08C1CAB4` / `0x08C1CB7C` / `0x08C1CBD0`) aren't listed here.
+
+## Parameter value ranges seen in the data
+
+Ranges for the chips in the 205 shipped records (all programs, empty and Return chips
+excluded). Bytes not listed were always 0, which confirms that the byte layout in the
+tables below doesn't over-read.
+`tools/okedb.py dump` prints the decoded fields for a record.
+
+- 0x01 NOP, 0x32 Cancel Lock-On: no parameters (all zero).
+- 0x02 Halt: b2 = 1-120 (so up to 4 s at 1/30 s).
+- 0x04 Call: b2 = 0/1.
+- 0x09 Button Input: b2 always 1.
+- 0x0F Status Assessment: b3 = 1-100, likely a percentage; b2 = 0-2 and b4 = 0/1,
+  likely an enum and a comparison.
+- 0x10 Action Assessment: b2 = 0-16.
+- 0x11 Random Branching: b2 = 1-80, likely a percentage.
+- 0x12 Assess Time: b2 = 1-200.
+- 0x16 Assess Target Code: b2 = 1-255.
+- 0x17 Lock-On Alert: b2 = 1/2.
+- 0x18 Target Weapon: b2 = 0-3, b3 = 0-16.
+- 0x19 Line of Fire: b2 = 0-3.
+- 0x1D Halt Action: b2 = 0-3.
+- 0x2B Shoot Reticle: b2 = 0-5, b3 = 0-2, b4 = 1-16, b5 = 0/1 (the no-wait flag).
+- 0x2C Set Flying Altitude: b2 = 20-100, b3 = 0-2.
+- 0x2D Activate Option: b2 = 0-3.
+- 0x30 Change Sight Location: b2 = 1-3.
+- 0x31 Counter and Lock-On: b2 = 0-7, likely a counter index.
+- 0x33 Change Camera View: b3 always 2.
+- Range chips: b2 bit 0 is set in 374 of 3302 range chips; b6/b7 are small enums (e.g. Scan for
+  OKE b7 = 1, 2 or 17; Lock-On b7 = 0-6).
+
+All units except the wait flags, counter indices, and the range layout are **guesses**
+until the target functions are read.
+
 ## Chip types: `PGCHIP::eCOMMAND_TYPE`
 
 53 types, `COMMAND_BEGIN` = 1 to `COMMAND_END` = 0x36. The names come from the game's
@@ -221,10 +357,10 @@ passed to the call.
 
 | Type | Name | Target slot | Params |
 |---|---|---|---|
-| 0x05 | Input Counter | +0x160 | b2, b3 |
-| 0x06 | Control Counter | +0x168 | 16-bit at b2, 16-bit at b4, b6 low/high nibbles, b7 |
-| 0x07 | Send Counter | +0x190 | b2, b3 |
-| 0x08 | Receive Counter | +0x198 | b2, b3 |
+| 0x05 | Input Counter | +0x160 | b2 = counter index (0-7, confirmed in data), b3 |
+| 0x06 | Control Counter | +0x168 | 16-bit at b2, 16-bit at b4, b6 low nibble (always 0-7: likely a counter index) / high nibble (mostly 8), b7 |
+| 0x07 | Send Counter | +0x190 | b2 = counter index (0-7), b3 (0/1) |
+| 0x08 | Receive Counter | +0x198 | b2 = counter index (0-7), b3 (0/1) |
 | 0x09 | Button Input | +0x1B0 | b2 (zero = multi-tick wait for input) |
 | 0x1B | Button Assignment (judge) | +0x1A8 | 16-bit at b2, b4 |
 | 0x1C | Assess Analog (judge) | +0x1B8 | b2, b3, b4 |
@@ -249,26 +385,34 @@ passed to the call.
 | 0x17 | Assess Target Lock-On Alert | +0x130 | b2 |
 | 0x18 | Assess Target Weapon | +0x138 | b2, b3 |
 | 0x19 | Assess Line of Fire | +0x158 | b2 |
-| 0x1A | Assess Counter | +0x188 | 16-bit at b2, 16-bit at b4, b6 nibbles, b7 |
+| 0x1A | Assess Counter | +0x188 | 16-bit at b2, 16-bit at b4, b6 nibbles (low always 0-7, high mostly 8), b7 |
 
 ### Movement and actions (multi-tick: issue the order, then poll until done)
 
 | Type | Name | Target method | Target slot | Params |
 |---|---|---|---|---|
 | 0x1D | Halt Action | (cancels the current action; `CBattleOke::SetScript` underneath) | +0x40 | b2 = action category |
-| 0x1E | Move | wrapper around `CBattleOke::SetPgChipCommandMove(dir)` (**likely**) | +0x50 | b2 = direction (0-7), b3 |
-| 0x1F | Rotate | — | +0x60 | b2, b3 |
-| 0x20 | Jump | `CBattleOke::SetPgChipCommandJump` (confirmed) | +0x68 | b2, b3 |
-| 0x21 | Quick Movement | `CBattleOke::SetPgChipCommandRapidMove` (confirmed) | +0x70 | b2, b3 |
-| 0x22 | Quick Rotation | — | +0x78 | b2, b3 |
-| 0x23 | Attack | — | +0x80 | b2, b3 |
-| 0x24 | Defense | — | +0x88 | b2, b3 |
-| 0x25 | Special Move | — | +0x90 | b2, b3 |
-| 0x26 | Select and Fire | `CBattleOke::SetPgChipCommandShoot(tagRANGE, …)` (confirmed) | +0xA0 | range at b2-5, b6 split 3/5 bits, b7 low nibble |
-| 0x27 | Firing Direction | `CBattleOke::SetPgChipCommandDirectionalShoot` (confirmed) | +0xA8 | b2, b3, b4, b5 |
+| 0x1E | Move | wrapper around `CBattleOke::SetPgChipCommandMove(dir)` (**likely**) | +0x50 | b2 = direction (0-7), b3 = no-wait flag, s16 at b4 = amount (0-150 seen) |
+| 0x1F | Rotate | — | +0x60 | b2 (0/1, likely left/right), b3 = no-wait flag, s16 at b4 = angle (0-180 seen, likely degrees) |
+| 0x20 | Jump | `CBattleOke::SetPgChipCommandJump` (confirmed) | +0x68 | b2 (0-8, likely a direction with 8 = straight up), b3 = no-wait flag |
+| 0x21 | Quick Movement | `CBattleOke::SetPgChipCommandRapidMove` (confirmed) | +0x70 | b2 = direction (0-7), b3 = no-wait flag |
+| 0x22 | Quick Rotation | — | +0x78 | b2 (0/1), b3 = no-wait flag |
+| 0x23 | Attack | — | +0x80 | b2 (0-3), b3 = no-wait flag |
+| 0x24 | Defense | — | +0x88 | b2 (0/1), b3 (5-60 seen, likely a duration), b4 = no-wait flag |
+| 0x25 | Special Move | — | +0x90 | b2 (0-2), b3 = no-wait flag |
+| 0x26 | Select and Fire | `CBattleOke::SetPgChipCommandShoot(tagRANGE, …)` (confirmed) | +0xA0 | range at b2-5, b6 split 3/5 bits, b7 low nibble; b7 high nibble = no-wait flag |
+| 0x27 | Firing Direction | `CBattleOke::SetPgChipCommandDirectionalShoot` (confirmed) | +0xA8 | b2 = unsigned angle, b3 = signed angle (both in 2° units; the editor's `CSoftDesignMngr` helper `0x08A8B0B8`/`0x08A8B1A4` scales them ×200, i.e. to hundredths of a degree), b4 (2-5), b5 (1-16); b6 = no-wait flag |
 
-The b3 (or b7 high nibble) byte in these chips decides whether the chip waits for the
-action to finish or continues at once (**likely**).
+**Wait flags (confirmed from the interpreter):**
+- The interpreter sets the busy flag, so the chip waits for the action to finish, only
+  when the target call returned 0 *and* the chip's wait byte is zero. A non-zero byte
+  means "continue at once".
+- The wait byte is b3 for 0x1E-0x23 and 0x25, b4 for Defense, the high nibble of b7 for
+  Select and Fire, b6 for Firing Direction and b5 for Shoot Reticle.
+- In the data these bytes are only ever 0 or 1.
+
+The 16-bit amount in Move and Rotate is read from bytes 4-5. The old "b2, b3" reading
+missed it.
 
 ### Aiming, lock-on and misc
 
@@ -309,24 +453,58 @@ Parameter enums named in asserts (value meanings not yet mapped): `ACTION`, `AIM
   between a "deformed" layout and normal grid positions; their purpose isn't understood.
 - `CSoftwareSceneDataBase::GetMacro` returns `PGCHIP::tagMACRO` (chip macros/templates).
 
+## Validation against real data
+
+`tools/okedb.py validate orig/pack/preset` parses all 205 shipped records (extract them
+first with `tools/chexa_pack.py extract 'preset/*'`) and checks them against this
+document. All checks pass:
+
+- **Widths.** The width triple is always (6,0,0), (10,0,0) or (15,7,7), and it matches
+  the CPU part. Starts are inside the grid.
+- **Grid layout.** Following the interpreter's rules, a static flood fill from the start
+  index:
+  - never reaches an empty cell;
+  - never meets an exit nibble above 7;
+  - never leaves the compact `y*width+x` grid in a way the interpreter wouldn't treat as
+    "back to start".
+
+  This holds for all 307 programs. Reading the smaller grids with a 15-wide row stride
+  doesn't give consistent programs.
+- **Chip bits.** Every reachable non-Return chip has bits 7 and 6 set. Types are always
+  1-0x35, and all 53 types appear.
+- **Sub-programs.** Every Call Sub-Program chip (213 of them) targets a sub-program
+  whose width is non-zero.
+- **Counters.** Counter-chip indices are below 8. Counter names are ≤5 printable ASCII
+  characters.
+- **Ranges.** Every range chip's arc width is 0-360°.
+- **Other blocks.** The 0x1EA0 block's colour index is 0-7.
+
+Leftovers: in 13 records, cells *beyond* `width²` (inside the 15×15/7×7 buffer) still hold
+chips. There are 145 such chips in main programs and 10 in each sub-program. They match
+neither layout and are never executed. They look like stale data from when the design had
+a bigger CPU (**likely**). Such data is harmless, because the interpreter only addresses
+`width²` cells.
+
 ## Open questions
 
-- **Rectangular vs square.** The editor's `CPgChipArea` has separate width and height,
-  but the stored format keeps one width per program and the interpreter assumes a square
-  grid (`y = index / width`, bounds-checked against width). Either battle programs are
-  always square or the stored "width" means something else. Not checked against real
-  data.
-- **Where the active width comes from.** Probably the CPU part or the game mode; the
-  setup code just copies it from the software block.
-- **Byte 0 bit 6** of a chip is unused by the interpreter. It may be an editor flag.
+- **Byte 0 bit 6.** Ignored by the interpreter and set on every live chip. Probably an
+  editor flag (e.g. "placed" or "selected"), but no code reading it has been found.
+- **Comment tag lists** (the 11-byte lists in the 0x1A40 block) and words 0-5 of the
+  0x1EA0 block: what they refer to is unknown.
+- **Header fields** at +0x04 and +0x24: the name/model reading is a guess from the
+  shape of the strings.
+- **Parameter units and enums.** Byte positions, the no-wait flags, counter indices and
+  the tagRANGE layout are settled. Most other parameter meanings (speeds, distances,
+  enums like `ACTION` or `ATTRIBUTE`) are guesses from value ranges until each target
+  function is read. The `CRange` scale tables also need decoding to turn steps into
+  metres.
+- **Width vs CPU part in code.** The data ties them together, but the code that sets the
+  widths when the CPU part changes hasn't been found.
 - **`CPgChipTarget::RET` values.** Only 1 (true/branch) and the default 2 are clear. The
   console has a glyph for each value up to `RET_MAX`, but the full list isn't mapped.
-- **Exact meaning of each chip parameter.** Byte positions are confirmed from the
-  interpreter, but units and enums (for example range encoding in `tagRANGE`, speeds,
-  angles) need the target functions read one by one.
 - **The speed unit.** `speed × dt` with a default of 2. Whether `dt` is seconds or frames,
   and the per-CPU values, haven't been checked.
-- **Save format.** Whether the savedata blob contains plain `COkeDataBase` images, and
-  what the 0x1A40 and 0x1EA0 blocks are, is unverified.
+- **Save format.** Whether `DATA.BIN` holds plain `COkeDataBase` images (the shipped
+  preset files do) is unverified.
 - **Slots without assert names.** For those, behaviour is inferred from the name table
   plus argument shapes, not from the target code.
