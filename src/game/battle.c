@@ -501,13 +501,14 @@ static void draw_hud(void)
         if (dot)
             picture_draw(dot, x - 4, y - 4, 0, BLEND_ALPHA, c, 0, 0);
     }
-    /* Lock-on: the game's gunsite mark on the opponent while your OKE is locked on
-     * (stand-in for CBattleOkeGunSightCon's placement). */
+    /* The gun sight: CBattleOkeGunSightController's HUD point (+0x70), which eases
+     * after where the gun aims; the gunsite mark while locked on, else the dot. The
+     * height is a stand-in (the sight's pitch isn't simulated). */
     float p[3], sx, sy;
-    world_pos(foe->x, foe->y, p);
+    world_pos(me->mark_x, me->mark_y, p);
     p[1] += 4.0f;
     Picture *sight = pic(me->locked ? "parts/bs/gunsite.gim" : "parts/bs/gundot.gim");
-    if (sight && foe->hp > 0 && project(p, &sx, &sy) && sx > 0 && sx < 480 && sy > 0 && sy < 272)
+    if (sight && me->hp > 0 && project(p, &sx, &sy) && sx > 0 && sx < 480 && sy > 0 && sy < 272)
         picture_draw(sight, (int)sx - picture_width(sight) / 2, (int)sy - picture_height(sight) / 2, 0, BLEND_ALPHA,
                      0xFFFFFFFF, 0, 0);
     /* Names: plain text until the game's top windows are read. */

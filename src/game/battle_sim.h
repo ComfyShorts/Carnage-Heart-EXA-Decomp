@@ -20,7 +20,6 @@
 #define MOVE_SPEED 50.0f    /* units per second */
 #define QUICK_SPEED 160.0f
 #define TURN_SPEED 180.0f   /* degrees per second */
-#define SHOT_REACH 700.0f   /* stand-in: shots fly this far */
 #define BURST_GAP 0.1f      /* stand-in: seconds between the shots of a burst */
 #define MELEE_RANGE 36.0f
 #define MELEE_DAMAGE 10     /* stand-in: % of max HP */
@@ -47,6 +46,13 @@ typedef struct Oke {
     float react_left;  /* a flinch (scripts 0x57-0x5a) is playing */
     float down_left;   /* knocked down (state +0xb6ac = 2) */
     float push_x, push_y, push_spin; /* this frame's knock-back (+0xb040 / +0xb050) */
+    /* CBattleOkeGunSightController (+0xb470): the sight's yaw relative to the body
+     * (+0x50), its target yaw now and last frame (+0x58 / +0x60), last step and
+     * momentum (+0x68 / +0x24), aim distance (+0x1c); the HUD mark's point (+0x70)
+     * and its momentum (+0x2c). Ticks at 30 Hz. */
+    float sight_yaw, sight_goal, sight_goal_prev, sight_step, sight_bonus, sight_dist;
+    float mark_x, mark_y, mark_bonus, sight_clock;
+    float aim_speed, mark_speed; /* degrees / units per frame */
     ActKind act;
     float act_left;    /* seconds */
     float vx, vy, turn_rate;
@@ -67,16 +73,31 @@ typedef struct Oke {
     bool armed;        /* the weapon script pulled the trigger */
     int burst_left;
     float burst_timer;
-    bool aim_at_enemy;
+    /* The fire control's chip state (+0xb470): the readied weapon (+0x10, Start
+     * Reticle), state 3 "aiming" (+0x0) and the mode of the last fire chip (+0xc:
+     * 1 Shoot Reticle, 2 Select and Fire, 3 Firing Direction). */
+    int readied;       /* slot, -1 none */
+    bool aiming;
+    int aim_mode;
+    bool lead_ok;      /* the fire chip's spread setting is 0 (+0xa318 == 0) */
     float aim_angle;   /* Firing Direction: degrees from the heading */
+    float gun_raise, raise_rate; /* +0xb10c, 0..1; per second (2 x body +0x38 / 100) */
+    float sight_hold;  /* +0x18: seconds Move Reticle holds off the tracker */
+    float last_x, last_y, vel_x, vel_y; /* for the target's velocity (FUN_0883f648) */
 } Oke;
 
 typedef struct Shot {
     bool live;
     int owner;
-    float x, y, vx, vy, life;
+    float x, y, vx, vy;
+    float drag, min_speed;    /* ballistic bullets slow by drag/s down to min_speed */
     float age, falloff_after; /* attack fades after this many seconds */
     int attack, heat, flags;  /* the hit record CBattleBulletManager passes on */
+    /* A mine (CBattleDispenser): its dispenser row, volleys left, the volley timer,
+     * the 30 Hz clock it steps on; aerial mines hover out of reach. */
+    int mine, rounds;
+    float cool, clock;
+    bool hover;
 } Shot;
 
 typedef struct Battle {

@@ -83,8 +83,9 @@ static float bearing(const Oke *o, float px, float py)
     return wrap180(a - o->heading);
 }
 
-/* PGCHIP::tagRANGE: b2 bits 1-7 inner step, b3 half-width, b4 outer step, b5 the arc
- * direction in 2-degree units (values above 180 degrees wrap negative). */
+/* PGCHIP::tagRANGE, sector mode (b2 bit 0 clear): b2 bits 1-7 inner step, b3
+ * half-width, b4 outer step, b5 the arc direction in 2-degree units (values above
+ * 180 degrees wrap negative). */
 static void range_bounds(PgChipRange r, float *inner, float *outer)
 {
     float a = (float)battle_range_distance(r.b[0] >> 1), b = (float)battle_range_distance(r.b[2]);
@@ -95,6 +96,18 @@ static void range_bounds(PgChipRange r, float *inner, float *outer)
 
 static bool in_range(const Oke *o, PgChipRange r, float px, float py)
 {
+    if (r.b[0] & 1) {
+        /* Rectangle mode (FUN_08841bd8 -> FUN_08860408 -> FUN_0887eab8): a box in
+         * the OKE's frame centred dist(b4) to the right and dist(b5) ahead (both
+         * signed), dist(b3) wide and dist(b2 bits 1-7) deep. */
+        float cx = (float)battle_range_distance((int8_t)r.b[2]);
+        float cz = (float)battle_range_distance((int8_t)r.b[3]);
+        float w = (float)battle_range_distance(r.b[1]);
+        float dpt = (float)battle_range_distance((r.b[0] & 0xFE) >> 1);
+        float h = o->heading * DEG, dx = px - o->x, dy = py - o->y;
+        float right = dx * cosf(h) + dy * sinf(h), ahead = dx * sinf(h) - dy * cosf(h);
+        return fabsf(right - cx) <= w * 0.5f && fabsf(ahead - cz) <= dpt * 0.5f;
+    }
     float inner, outer;
     range_bounds(r, &inner, &outer);
     float half = (float)r.b[1], dir = (float)(r.b[3] * 2);
@@ -372,6 +385,57 @@ static void add_heat(Oke *o, int amount)
         o->heat = o->heat_max * 120 / 100;
 }
 
+/* A mine's volley (FUN_08811940 from CBattleDispenser::Update): `count` of the
+ * child bullet from (x, y) at the target. */
+static void fire_child(Battle *b, int side, float x, float y, float tx, float ty, int bullet)
+{
+    if (bullet < 0 || bullet >= NO_BULLET)
+        return;
+    for (int i = 0; i < MAX_SHOTS; i++)
+        if (!b->shots[i].live) {
+            float d = fmaxf(hypotf(tx - x, ty - y), 1.0f);
+            float speed = float_at(0x00465C80u + (uint32_t)bullet * 0x34, 100.0f);
+            if (!(speed > 1.0f && speed < 10000.0f))
+                speed = 100.0f;
+            b->shots[i] = (Shot){true, side, x, y, (tx - x) / d * speed, (ty - y) / d * speed, 0.0f, 0.0f,
+                                 0.0f, float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f),
+                                 bullet_stat(bullet, 0), bullet_stat(bullet, 1), bullet_stat(bullet, 2),
+                                 -1, 0, 0.0f, 0.0f, false};
+            return;
+        }
+}
+
+/* One 30 Hz frame of a mine (CBattleDispenser::Update, FUN_088167a8). It moves by
+ * its velocity each frame, damped x0.95. The search (FUN_088151f8) finds the
+ * nearest enemy within +0x30 across the ground. With +0x20 = 0 the mine rolls at
+ * it, 1.5 a frame-second of push; otherwise it fires +0x10 of its child bullet
+ * (+0x0c) at it every 0.5 s, +0x14 times, then is spent. */
+static void mine_tick(Battle *b, Shot *s)
+{
+    uint32_t row = 0x003C78DCu + (uint32_t)s->mine * 0x34;
+    Oke *e = &b->oke[s->owner ^ 1];
+    float dx = e->x - s->x, dy = e->y - s->y, d = hypotf(dx, dy);
+    bool found = e->hp > 0 && d <= float_at(row + 0x30, 40.0f);
+    if (word_at(row + 0x20, 0) == 0) {
+        if (found && d > 0.0f) {
+            s->vx += dx / d * 1.5f;
+            s->vy += dy / d * 1.5f;
+        }
+    } else if (s->rounds > 0) {
+        s->cool = fmaxf(0.0f, s->cool - 1.0f / 30.0f);
+        if (found && s->cool == 0.0f) {
+            int n = word_at(row + 0x10, 1);
+            for (int k = 0; k < n && k < 8; k++)
+                fire_child(b, s->owner, s->x, s->y, e->x, e->y, word_at(row + 0x0c, NO_BULLET));
+            s->cool = 0.5f;
+            if (--s->rounds == 0)
+                s->live = false;
+        }
+    }
+    s->vx *= 0.95f;
+    s->vy *= 0.95f;
+}
+
 static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float spread_max)
 {
     Battle *b = o->battle;
@@ -393,15 +457,37 @@ static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float s
             float falloff = bullet >= 0 && bullet < NO_BULLET
                                 ? float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f) /* +0x2c */
                                 : 3.4e38f;
-            /* +0x28: lifetime in seconds, where the bullet has one. */
-            float life = bullet >= 0 && bullet < NO_BULLET
-                             ? float_at(0x00465C9Cu + (uint32_t)bullet * 0x34, 3.4e38f)
-                             : 3.4e38f;
-            if (!(life > 0.0f && life < 1e30f))
-                life = SHOT_REACH / speed;
+            /* +0x28 finite: a ballistic bullet (the bullet update, FUN_08812xxx,
+             * sets its flag from that alone). It slows by +0x18 a second down to
+             * half its base speed (+0xc) and falls by +0x30 x gravity (no height
+             * here), and homes by +0x24 (0 for every bullet). */
+            float drag = 0.0f, min_speed = 0.0f;
+            if (bullet >= 0 && bullet < NO_BULLET &&
+                float_at(0x00465C9Cu + (uint32_t)bullet * 0x34, 3.4e38f) < 3.4e38f) {
+                drag = float_at(0x00465C8Cu + (uint32_t)bullet * 0x34, 0.0f);
+                min_speed = float_at(0x00465C80u + (uint32_t)bullet * 0x34, 0.0f) * 0.5f;
+                if (!(drag > 0.0f && drag < 1000.0f))
+                    drag = 0.0f;
+            }
             b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * speed,
-                                 (ux * s + uy * c) * speed, life, 0.0f, falloff,
-                                 weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2)};
+                                 (ux * s + uy * c) * speed, drag, min_speed, 0.0f, falloff,
+                                 weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2),
+                                 -1, 0, 0.0f, 0.0f, false};
+            int disp = word_at(0x003D1580u + (uint32_t)weapon * 20, NO_DISPENSER);
+            if (disp != NO_DISPENSER && disp >= 0 && disp < 32) {
+                /* CBattleDispenser's launch (FUN_08815948): a velocity of +0x2c x
+                 * the muzzle direction, in units per frame, and +0x14 volleys. An
+                 * aerial mine (+0x18 = 14) rises 30-50 above the muzzle. */
+                uint32_t e = 0x003C78DCu + (uint32_t)disp * 0x34;
+                float v = float_at(e + 0x2c, 2.5f) * 30.0f;
+                Shot *m = &b->shots[i];
+                m->vx = ux * v;
+                m->vy = uy * v;
+                m->drag = m->min_speed = 0.0f;
+                m->mine = disp;
+                m->rounds = word_at(e + 0x14, 0);
+                m->hover = word_at(e + 0x18, 13) == 14;
+            }
             o->shots_fired++;
             return;
         }
@@ -415,10 +501,7 @@ static int pick_weapon(const Oke *o, int slot)
 {
     if (slot > 0)
         return slot <= 5 ? slot - 1 : -1;
-    for (int i = 0; i < 5; i++) /* stand-in for the selected weapon (FUN_0883fbb0) */
-        if (o->weapon[i] > 0 && o->ammo[i] > 0 && !weapon_lost(o, i))
-            return i;
-    return -1;
+    return o->readied; /* FUN_0883fbb0: the weapon Start Reticle readied */
 }
 
 static int start_fire(Oke *o, int slot, int count)
@@ -445,6 +528,86 @@ static int start_fire(Oke *o, int slot, int count)
     return 0;
 }
 
+/* FUN_0883bf74 / _bfd0 / _c034: the fire control goes to state 3 in that mode.
+ * `spread` indexes the per-shot table at 0x08cce2c0 (filled at start-up: entries
+ * 0, 1 and 4 are 0); only a 0 entry lets the shot lead (FUN_0884299c). */
+static void aim_as(Oke *o, int mode, int spread)
+{
+    o->aiming = true;
+    o->aim_mode = mode;
+    o->lead_ok = spread == 0 || spread == 1 || spread == 4;
+}
+
+/* Start Reticle (FUN_088481b0 -> FUN_0883be40): 0-4 readies that weapon (8 if it
+ * has broken off, 9 if the slot is empty, FUN_08843bf8), 5 puts it away and resets
+ * the sight (FUN_0883b1d0), 6 readies the next usable one after the current
+ * (FUN_0883b084), putting it away after the last. */
+static int t_start_reticle(PgChipTarget *t, int which)
+{
+    Oke *o = O(t);
+    if (which == 6) {
+        int i = o->readied;
+        do
+            i = i < 0 ? 0 : i + 1;
+        while (i < 5 && (o->weapon[i] <= 0 || weapon_lost(o, i)));
+        which = i < 5 ? i : 5;
+    }
+    if (which == 5 || which < 0 || which > 4) {
+        o->readied = -1;
+        o->aiming = false;
+        o->aim_mode = 0;
+        o->sight_yaw = o->sight_goal = o->sight_goal_prev = o->sight_step = o->sight_bonus = 0.0f;
+        o->mark_bonus = 0.0f;
+        return 0;
+    }
+    if (reacting(o))
+        return 0x10;
+    if (weapon_lost(o, which))
+        return 8;
+    if (o->weapon[which] <= 0)
+        return 9;
+    o->readied = which;
+    return 0;
+}
+
+/* Move Reticle (FUN_088481d8 -> FUN_0883c0d4): needs a readied weapon; ignored
+ * while firing in mode 2 or 3. Sets the sight's goal to yaw/100 degrees (pitch
+ * isn't simulated), relative to where it points when b2 is 1, and holds the
+ * tracker off for 2 seconds. */
+static int t_move_reticle(PgChipTarget *t, int rel, int yaw, int pitch)
+{
+    (void)pitch;
+    Oke *o = O(t);
+    if (o->readied < 0)
+        return 0x11;
+    if (o->aiming && (o->aim_mode == 2 || o->aim_mode == 3))
+        return 0;
+    int v = yaw & 0xffff;
+    if (v > 18000)
+        v -= 36000;
+    float g = (float)v * 0.01f;
+    g = g < -180.0f ? -180.0f : g > 180.0f ? 180.0f : g;
+    if (rel == 1)
+        g = wrap180(g + o->sight_yaw);
+    o->sight_goal = g;
+    o->sight_hold = 2.0f;
+    return 0;
+}
+
+/* Shoot Reticle (FUN_08848288): fires weapon b2 (0: the readied one) b4 times at
+ * the sight's mark, mode 1; b3 is the spread setting. */
+static int t_shoot_reticle(PgChipTarget *t, int which, int spread, int count, int one)
+{
+    (void)one;
+    Oke *o = O(t);
+    if (o->readied < 0)
+        return 0x11;
+    int res = start_fire(o, which, count);
+    if (res == 0)
+        aim_as(o, 1, spread);
+    return res;
+}
+
 static int t_select_fire(PgChipTarget *t, PgChipRange r, int a, int b, int c, int one)
 {
     (void)c; (void)one;
@@ -452,7 +615,8 @@ static int t_select_fire(PgChipTarget *t, PgChipRange r, int a, int b, int c, in
     if (!in_range(o, r, e->x, e->y))
         return 0xd; /* no target (FUN_08841bd8 == -1) */
     int res = start_fire(o, a, b);
-    o->aim_at_enemy = true;
+    if (res == 0) /* FUN_0883bfd0 */
+        aim_as(o, 2, c);
     return res;
 }
 
@@ -461,9 +625,101 @@ static int t_firing_direction(PgChipTarget *t, int b2, int b3, int b4, int b5, i
     (void)b2; (void)one;
     Oke *o = O(t);
     int res = start_fire(o, b4, b5);
-    o->aim_at_enemy = false;
+    if (res == 0)
+        aim_as(o, 3, 0);
     o->aim_angle = (float)b3 * 2.0f; /* stand-in for FUN_089fc4d4 */
     return res;
+}
+
+/* FUN_0883e2c4: where to aim at the target, its body; with a bullet speed, moved
+ * on by the target's velocity over the flight time (one pass, no iteration). */
+static void aim_point(const Oke *o, const Oke *e, float speed, float *tx, float *ty)
+{
+    *tx = e->x;
+    *ty = e->y;
+    if (speed > 0.0f) {
+        float t = hypotf(*tx - o->x, *ty - o->y) / speed;
+        *tx += e->vel_x * t;
+        *ty += e->vel_y * t;
+    }
+}
+
+/* One 30 Hz frame of the gun sight. FUN_0883baa4 aims at the locked target's
+ * body (lead only applies to the reticle chips, mode 1: not used here) and gives
+ * the distance, 200 without a lock; FUN_0884a1c8 turns the sight half the way per
+ * frame, at most 30 degrees (body table +0x50), with up to 50% extra while it keeps
+ * turning the same way; FUN_0883b300 / FUN_0883b214 keep it within a turn. */
+static void sight_tick(Oke *o)
+{
+    Oke *e = ENEMY(o);
+    o->vel_x = (o->x - o->last_x) * 30.0f;
+    o->vel_y = (o->y - o->last_y) * 30.0f;
+    o->last_x = o->x;
+    o->last_y = o->y;
+    bool tracking = o->locked && e->hp > 0;
+    if (tracking) {
+        /* Shoot Reticle with the gun fully raised leads the target. */
+        float speed = 0.0f;
+        if (o->aiming && o->aim_mode == 1 && o->gun_raise >= 1.0f && o->lead_ok)
+            speed = weapon_speed(o->weapon[o->firing >= 0 ? o->firing : o->readied]);
+        float tx, ty;
+        aim_point(o, e, speed, &tx, &ty);
+        o->sight_dist = hypotf(tx - o->x, ty - o->y);
+        if (o->sight_hold > 0.0f) {
+            o->sight_hold -= 1.0f / 30.0f;
+        } else {
+            o->sight_goal_prev = o->sight_goal;
+            o->sight_goal = wrap180(atan2f(tx - o->x, -(ty - o->y)) / DEG - o->heading);
+        }
+    } else {
+        o->sight_hold = 0.0f;
+        o->sight_dist = 200.0f;
+    }
+    float goal = o->sight_goal;
+    if (tracking && o->sight_hold <= 0.0f) /* one frame ahead */
+        goal += wrap180(o->sight_goal - o->sight_goal_prev);
+    float best = goal;
+    for (int k = -1; k <= 1; k += 2)
+        if (fabsf(goal + 360.0f * k - o->sight_yaw) < fabsf(best - o->sight_yaw))
+            best = goal + 360.0f * k;
+    goal = best;
+    float limit = o->aim_speed > 0.0f ? o->aim_speed : 30.0f;
+    float step = (goal - o->sight_yaw) * 0.5f;
+    if (step > limit) step = limit;
+    if (step < -limit) step = -limit;
+    if (fabsf(step) < 0.0017453292f) {
+        o->sight_yaw = goal;
+        o->sight_step = 0.0f;
+        o->sight_bonus = 0.0f;
+    } else {
+        if (o->sight_step * step > 0.0f) {
+            o->sight_bonus = o->sight_bonus + 0.05f > 0.5f ? 0.5f : o->sight_bonus + 0.05f;
+            step += (goal - o->sight_yaw) * o->sight_bonus;
+        } else {
+            o->sight_bonus = 0.0f;
+        }
+        o->sight_yaw += step;
+        o->sight_step = step;
+    }
+    o->sight_yaw = wrap180(o->sight_yaw);
+
+    /* FUN_0884a4d8: the HUD mark follows the aim point at (0.5 + momentum) of the
+     * way, at most 20 units a frame per axis (body table +0x54). */
+    float h = (o->heading + o->sight_yaw) * DEG;
+    float ax = o->x + sinf(h) * o->sight_dist, ay = o->y - cosf(h) * o->sight_dist;
+    float dx = ax - o->mark_x, dy = ay - o->mark_y, f;
+    if (hypotf(dx, dy) < 1.0f) {
+        o->mark_bonus = 0.0f;
+        f = 0.5f;
+    } else {
+        o->mark_bonus = o->mark_bonus + 0.05f > 0.5f ? 0.5f : o->mark_bonus + 0.05f;
+        f = o->mark_bonus + 0.5f;
+    }
+    float ml = o->mark_speed > 0.0f ? o->mark_speed : 20.0f;
+    dx *= f;
+    dy *= f;
+    o->mark_x += dx > ml ? ml : dx < -ml ? -ml : dx;
+    o->mark_y += dy > ml ? ml : dy < -ml ? -ml : dy;
 }
 
 static void fire_step(Oke *o, float dt)
@@ -491,9 +747,15 @@ static void fire_step(Oke *o, float dt)
         if (pellets < 1 || pellets > 16)
             pellets = 1;
         float tx, ty;
-        if (o->aim_at_enemy) {
-            tx = e->x;
-            ty = e->y;
+        /* FUN_0883c298 picks the point the shot flies at (+0x40): Select and
+         * Fire aims at the target itself, leading it once the gun is fully raised;
+         * Shoot Reticle at the sight's mark (+0x70); Firing Direction along its
+         * angle. */
+        if (o->aim_mode == 2) {
+            aim_point(o, e, o->gun_raise >= 1.0f && o->lead_ok ? speed : 0.0f, &tx, &ty);
+        } else if (o->aim_mode == 1) {
+            tx = o->mark_x;
+            ty = o->mark_y;
         } else {
             float h = (o->heading + o->aim_angle) * DEG;
             tx = o->x + sinf(h) * 100.0f;
@@ -582,8 +844,11 @@ static int t_lock_on(PgChipTarget *t, PgChipRange r, int a, int b, int c)
 {
     (void)a; (void)b; (void)c;
     Oke *o = O(t), *e = ENEMY(o);
-    o->locked = in_range(o, r, e->x, e->y);
-    return o->locked ? 0 : 2;
+    /* FUN_088464b0: a target found in range becomes the lock; otherwise the old
+     * lock stays. Always accepted. */
+    if (e->hp > 0 && in_range(o, r, e->x, e->y))
+        o->locked = true;
+    return 0;
 }
 
 static int t_cancel_lock_on(PgChipTarget *t) { O(t)->locked = false; return 0; }
@@ -620,11 +885,6 @@ static int t_zero3(PgChipTarget *t, int a, int b, int c) { (void)t; (void)a; (vo
 static int t_zero5(PgChipTarget *t, int a, int b, int c, int d, int e)
 {
     (void)t; (void)a; (void)b; (void)c; (void)d; (void)e;
-    return 0;
-}
-static int t_zero4(PgChipTarget *t, int a, int b, int c, int d)
-{
-    (void)t; (void)a; (void)b; (void)c; (void)d;
     return 0;
 }
 static int t_button_input(PgChipTarget *t, int wait, int *pressed)
@@ -685,9 +945,9 @@ static const PgChipTargetOps k_oke_ops = {
     .judge_button_assign = t_zero2,
     .button_input = t_button_input,
     .judge_analog = t_zero3,
-    .start_reticle = t_zero1,
-    .move_reticle = t_zero3,
-    .shoot_reticle = t_zero4,
+    .start_reticle = t_start_reticle,
+    .move_reticle = t_move_reticle,
+    .shoot_reticle = t_shoot_reticle,
     .alert = t_zero3,
 };
 
@@ -718,6 +978,23 @@ static void oke_init(Oke *o, Battle *b, int side, float x, float y, float headin
     o->stagger = word_at(bt + 0x30, 40);
     o->react_left = o->down_left = 0.0f;
     o->push_x = o->push_y = o->push_spin = 0.0f;
+    float as = float_at(bt + 0x50, 30.0f), ms = float_at(bt + 0x54, 20.0f); /* FUN_089ed9c0 / _9e8 */
+    o->aim_speed = as > 0.0f && as < 360.0f ? as : 30.0f;
+    o->mark_speed = ms > 0.0f && ms < 1000.0f ? ms : 20.0f;
+    o->sight_yaw = o->sight_goal = o->sight_goal_prev = o->sight_step = o->sight_bonus = 0.0f;
+    o->sight_dist = 200.0f;
+    o->readied = -1;
+    o->aiming = false;
+    o->aim_mode = 0;
+    o->lead_ok = false;
+    o->gun_raise = o->sight_hold = 0.0f;
+    o->raise_rate = 2.0f * (float)word_at(bt + 0x38, 160) / 100.0f; /* FUN_089ed880 */
+    o->last_x = x;
+    o->last_y = y;
+    o->vel_x = o->vel_y = 0.0f;
+    o->sight_clock = o->mark_bonus = 0.0f;
+    o->mark_x = x + sinf(heading * DEG) * 200.0f;
+    o->mark_y = y - cosf(heading * DEG) * 200.0f;
     oke_motion_reset(&o->motion, oke_scripts_get(body));
     o->scripted = false;
     for (int i = 0; i < 5; i++) {
@@ -752,6 +1029,11 @@ static void oke_step(Oke *o, float dt)
     o->motion.vy += o->push_y / 30.0f;
     o->motion.omega += o->push_spin / 30.0f / DEG;
     o->push_x = o->push_y = o->push_spin = 0.0f;
+    /* FUN_088509bc: the gun rises while the fire control aims and drops at once
+     * otherwise. */
+    o->gun_raise = o->aiming ? fminf(1.0f, o->gun_raise + dt * o->raise_rate) : 0.0f;
+    for (o->sight_clock += dt; o->sight_clock >= 1.0f / 30.0f; o->sight_clock -= 1.0f / 30.0f)
+        sight_tick(o);
     fire_step(o, dt);
     if (o->motion.s && (o->act == ACT_NONE || o->scripted)) {
         oke_motion_step(&o->motion, dt, &o->x, &o->y, &o->heading);
@@ -1004,11 +1286,16 @@ void battle_sim_step(Battle *b, float dt)
         if (!s->live)
             continue;
         Oke *e = &b->oke[s->owner ^ 1];
+        if (s->mine >= 0)
+            for (s->clock += dt; s->clock >= 1.0f / 30.0f && s->live; s->clock -= 1.0f / 30.0f)
+                mine_tick(b, s);
+        if (!s->live)
+            continue;
         /* Sweep the step in half-unit samples so fast shots can't skip a box. */
         float step = hypotf(s->vx, s->vy) * dt;
         int n = (int)(step / 0.5f) + 1, bone = -1, cls = 0;
         float hx = s->x, hy = s->y;
-        for (int k = 1; k <= n && e->hp > 0; k++) {
+        for (int k = 1; k <= n && e->hp > 0 && !s->hover; k++) {
             hx = s->x + s->vx * dt * k / n;
             hy = s->y + s->vy * dt * k / n;
             if ((bone = hit_box(e, hx, hy, &cls)) >= 0)
@@ -1016,13 +1303,22 @@ void battle_sim_step(Battle *b, float dt)
         }
         s->x += s->vx * dt;
         s->y += s->vy * dt;
-        s->life -= dt;
         s->age += dt;
+        if (s->drag > 0.0f) {
+            float v = hypotf(s->vx, s->vy), nv = fmaxf(v - s->drag * dt, s->min_speed);
+            if (v > 0.0f && nv < v) {
+                s->vx *= nv / v;
+                s->vy *= nv / v;
+            }
+        }
         if (bone >= 0) {
             receive_hit(e, s, bone < OKE_BONES ? bone : -1, cls, hx, hy);
             b->oke[s->owner].hits++;
             s->live = false;
-        } else if (s->life <= 0.0f || outside_field(s->x, s->y)) {
+        } else if (fabsf(s->x - FIELD * 0.5f) > 500.0f || fabsf(s->y - FIELD * 0.5f) > 500.0f) {
+            /* The game frees a bullet once it is 500 units from the centre on any
+             * axis; there's no time limit (the fuse at +0x1c / +0x20 is off for
+             * every bullet). Hitting the ground isn't simulated. */
             s->live = false;
         }
     }
