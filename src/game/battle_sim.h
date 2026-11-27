@@ -20,7 +20,6 @@
 #define MOVE_SPEED 50.0f    /* units per second */
 #define QUICK_SPEED 160.0f
 #define TURN_SPEED 180.0f   /* degrees per second */
-#define SHOT_REACH 700.0f   /* stand-in: shots fly this far */
 #define BURST_GAP 0.1f      /* stand-in: seconds between the shots of a burst */
 #define MELEE_RANGE 36.0f
 #define MELEE_DAMAGE 10     /* stand-in: % of max HP */
@@ -90,7 +89,8 @@ typedef struct Oke {
 typedef struct Shot {
     bool live;
     int owner;
-    float x, y, vx, vy, life;
+    float x, y, vx, vy;
+    float drag, min_speed;    /* ballistic bullets slow by drag/s down to min_speed */
     float age, falloff_after; /* attack fades after this many seconds */
     int attack, heat, flags;  /* the hit record CBattleBulletManager passes on */
 } Shot;

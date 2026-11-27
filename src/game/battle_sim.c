@@ -83,8 +83,9 @@ static float bearing(const Oke *o, float px, float py)
     return wrap180(a - o->heading);
 }
 
-/* PGCHIP::tagRANGE: b2 bits 1-7 inner step, b3 half-width, b4 outer step, b5 the arc
- * direction in 2-degree units (values above 180 degrees wrap negative). */
+/* PGCHIP::tagRANGE, sector mode (b2 bit 0 clear): b2 bits 1-7 inner step, b3
+ * half-width, b4 outer step, b5 the arc direction in 2-degree units (values above
+ * 180 degrees wrap negative). */
 static void range_bounds(PgChipRange r, float *inner, float *outer)
 {
     float a = (float)battle_range_distance(r.b[0] >> 1), b = (float)battle_range_distance(r.b[2]);
@@ -95,6 +96,18 @@ static void range_bounds(PgChipRange r, float *inner, float *outer)
 
 static bool in_range(const Oke *o, PgChipRange r, float px, float py)
 {
+    if (r.b[0] & 1) {
+        /* Rectangle mode (FUN_08841bd8 -> FUN_08860408 -> FUN_0887eab8): a box in
+         * the OKE's frame centred dist(b4) to the right and dist(b5) ahead (both
+         * signed), dist(b3) wide and dist(b2 bits 1-7) deep. */
+        float cx = (float)battle_range_distance((int8_t)r.b[2]);
+        float cz = (float)battle_range_distance((int8_t)r.b[3]);
+        float w = (float)battle_range_distance(r.b[1]);
+        float dpt = (float)battle_range_distance((r.b[0] & 0xFE) >> 1);
+        float h = o->heading * DEG, dx = px - o->x, dy = py - o->y;
+        float right = dx * cosf(h) + dy * sinf(h), ahead = dx * sinf(h) - dy * cosf(h);
+        return fabsf(right - cx) <= w * 0.5f && fabsf(ahead - cz) <= dpt * 0.5f;
+    }
     float inner, outer;
     range_bounds(r, &inner, &outer);
     float half = (float)r.b[1], dir = (float)(r.b[3] * 2);
@@ -393,14 +406,20 @@ static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float s
             float falloff = bullet >= 0 && bullet < NO_BULLET
                                 ? float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f) /* +0x2c */
                                 : 3.4e38f;
-            /* +0x28: lifetime in seconds, where the bullet has one. */
-            float life = bullet >= 0 && bullet < NO_BULLET
-                             ? float_at(0x00465C9Cu + (uint32_t)bullet * 0x34, 3.4e38f)
-                             : 3.4e38f;
-            if (!(life > 0.0f && life < 1e30f))
-                life = SHOT_REACH / speed;
+            /* +0x28 finite: a ballistic bullet (the bullet update, FUN_08812xxx,
+             * sets its flag from that alone). It slows by +0x18 a second down to
+             * half its base speed (+0xc) and falls by +0x30 x gravity (no height
+             * here), and homes by +0x24 (0 for every bullet). */
+            float drag = 0.0f, min_speed = 0.0f;
+            if (bullet >= 0 && bullet < NO_BULLET &&
+                float_at(0x00465C9Cu + (uint32_t)bullet * 0x34, 3.4e38f) < 3.4e38f) {
+                drag = float_at(0x00465C8Cu + (uint32_t)bullet * 0x34, 0.0f);
+                min_speed = float_at(0x00465C80u + (uint32_t)bullet * 0x34, 0.0f) * 0.5f;
+                if (!(drag > 0.0f && drag < 1000.0f))
+                    drag = 0.0f;
+            }
             b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * speed,
-                                 (ux * s + uy * c) * speed, life, 0.0f, falloff,
+                                 (ux * s + uy * c) * speed, drag, min_speed, 0.0f, falloff,
                                  weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2)};
             o->shots_fired++;
             return;
@@ -1212,13 +1231,22 @@ void battle_sim_step(Battle *b, float dt)
         }
         s->x += s->vx * dt;
         s->y += s->vy * dt;
-        s->life -= dt;
         s->age += dt;
+        if (s->drag > 0.0f) {
+            float v = hypotf(s->vx, s->vy), nv = fmaxf(v - s->drag * dt, s->min_speed);
+            if (v > 0.0f && nv < v) {
+                s->vx *= nv / v;
+                s->vy *= nv / v;
+            }
+        }
         if (bone >= 0) {
             receive_hit(e, s, bone < OKE_BONES ? bone : -1, cls, hx, hy);
             b->oke[s->owner].hits++;
             s->live = false;
-        } else if (s->life <= 0.0f || outside_field(s->x, s->y)) {
+        } else if (fabsf(s->x - FIELD * 0.5f) > 500.0f || fabsf(s->y - FIELD * 0.5f) > 500.0f) {
+            /* The game frees a bullet once it is 500 units from the centre on any
+             * axis; there's no time limit (the fuse at +0x1c / +0x20 is off for
+             * every bullet). Hitting the ground isn't simulated. */
             s->live = false;
         }
     }
