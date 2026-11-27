@@ -93,6 +93,11 @@ typedef struct Shot {
     float drag, min_speed;    /* ballistic bullets slow by drag/s down to min_speed */
     float age, falloff_after; /* attack fades after this many seconds */
     int attack, heat, flags;  /* the hit record CBattleBulletManager passes on */
+    /* A mine (CBattleDispenser): its dispenser row, volleys left, the volley timer,
+     * the 30 Hz clock it steps on; aerial mines hover out of reach. */
+    int mine, rounds;
+    float cool, clock;
+    bool hover;
 } Shot;
 
 typedef struct Battle {

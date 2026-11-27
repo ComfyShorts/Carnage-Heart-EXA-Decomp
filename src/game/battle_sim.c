@@ -385,6 +385,57 @@ static void add_heat(Oke *o, int amount)
         o->heat = o->heat_max * 120 / 100;
 }
 
+/* A mine's volley (FUN_08811940 from CBattleDispenser::Update): `count` of the
+ * child bullet from (x, y) at the target. */
+static void fire_child(Battle *b, int side, float x, float y, float tx, float ty, int bullet)
+{
+    if (bullet < 0 || bullet >= NO_BULLET)
+        return;
+    for (int i = 0; i < MAX_SHOTS; i++)
+        if (!b->shots[i].live) {
+            float d = fmaxf(hypotf(tx - x, ty - y), 1.0f);
+            float speed = float_at(0x00465C80u + (uint32_t)bullet * 0x34, 100.0f);
+            if (!(speed > 1.0f && speed < 10000.0f))
+                speed = 100.0f;
+            b->shots[i] = (Shot){true, side, x, y, (tx - x) / d * speed, (ty - y) / d * speed, 0.0f, 0.0f,
+                                 0.0f, float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f),
+                                 bullet_stat(bullet, 0), bullet_stat(bullet, 1), bullet_stat(bullet, 2),
+                                 -1, 0, 0.0f, 0.0f, false};
+            return;
+        }
+}
+
+/* One 30 Hz frame of a mine (CBattleDispenser::Update, FUN_088167a8). It moves by
+ * its velocity each frame, damped x0.95. The search (FUN_088151f8) finds the
+ * nearest enemy within +0x30 across the ground. With +0x20 = 0 the mine rolls at
+ * it, 1.5 a frame-second of push; otherwise it fires +0x10 of its child bullet
+ * (+0x0c) at it every 0.5 s, +0x14 times, then is spent. */
+static void mine_tick(Battle *b, Shot *s)
+{
+    uint32_t row = 0x003C78DCu + (uint32_t)s->mine * 0x34;
+    Oke *e = &b->oke[s->owner ^ 1];
+    float dx = e->x - s->x, dy = e->y - s->y, d = hypotf(dx, dy);
+    bool found = e->hp > 0 && d <= float_at(row + 0x30, 40.0f);
+    if (word_at(row + 0x20, 0) == 0) {
+        if (found && d > 0.0f) {
+            s->vx += dx / d * 1.5f;
+            s->vy += dy / d * 1.5f;
+        }
+    } else if (s->rounds > 0) {
+        s->cool = fmaxf(0.0f, s->cool - 1.0f / 30.0f);
+        if (found && s->cool == 0.0f) {
+            int n = word_at(row + 0x10, 1);
+            for (int k = 0; k < n && k < 8; k++)
+                fire_child(b, s->owner, s->x, s->y, e->x, e->y, word_at(row + 0x0c, NO_BULLET));
+            s->cool = 0.5f;
+            if (--s->rounds == 0)
+                s->live = false;
+        }
+    }
+    s->vx *= 0.95f;
+    s->vy *= 0.95f;
+}
+
 static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float spread_max)
 {
     Battle *b = o->battle;
@@ -420,7 +471,23 @@ static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float s
             }
             b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * speed,
                                  (ux * s + uy * c) * speed, drag, min_speed, 0.0f, falloff,
-                                 weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2)};
+                                 weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2),
+                                 -1, 0, 0.0f, 0.0f, false};
+            int disp = word_at(0x003D1580u + (uint32_t)weapon * 20, NO_DISPENSER);
+            if (disp != NO_DISPENSER && disp >= 0 && disp < 32) {
+                /* CBattleDispenser's launch (FUN_08815948): a velocity of +0x2c x
+                 * the muzzle direction, in units per frame, and +0x14 volleys. An
+                 * aerial mine (+0x18 = 14) rises 30-50 above the muzzle. */
+                uint32_t e = 0x003C78DCu + (uint32_t)disp * 0x34;
+                float v = float_at(e + 0x2c, 2.5f) * 30.0f;
+                Shot *m = &b->shots[i];
+                m->vx = ux * v;
+                m->vy = uy * v;
+                m->drag = m->min_speed = 0.0f;
+                m->mine = disp;
+                m->rounds = word_at(e + 0x14, 0);
+                m->hover = word_at(e + 0x18, 13) == 14;
+            }
             o->shots_fired++;
             return;
         }
@@ -1219,11 +1286,16 @@ void battle_sim_step(Battle *b, float dt)
         if (!s->live)
             continue;
         Oke *e = &b->oke[s->owner ^ 1];
+        if (s->mine >= 0)
+            for (s->clock += dt; s->clock >= 1.0f / 30.0f && s->live; s->clock -= 1.0f / 30.0f)
+                mine_tick(b, s);
+        if (!s->live)
+            continue;
         /* Sweep the step in half-unit samples so fast shots can't skip a box. */
         float step = hypotf(s->vx, s->vy) * dt;
         int n = (int)(step / 0.5f) + 1, bone = -1, cls = 0;
         float hx = s->x, hy = s->y;
-        for (int k = 1; k <= n && e->hp > 0; k++) {
+        for (int k = 1; k <= n && e->hp > 0 && !s->hover; k++) {
             hx = s->x + s->vx * dt * k / n;
             hy = s->y + s->vy * dt * k / n;
             if ((bone = hit_box(e, hx, hy, &cls)) >= 0)
