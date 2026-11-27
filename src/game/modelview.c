@@ -9,6 +9,7 @@
 #include "gmo.h"
 #include "gu.h"
 #include "okemodel.h"
+#include "terrain.h"
 #include "render.h"
 
 const char *g_modelview_path;
@@ -16,16 +17,45 @@ const char *g_modelview_textures;
 float g_modelview_angle;
 int g_modelview_oke = -1;
 int g_modelview_pose;
+int g_modelview_map = -1;
 
 static struct {
     Gmo *model, *tex;
     OkeModel *oke;
+    Terrain *land;
     float angle, bounds[6];
 } g_mv;
 
 static void draw(void *ctx)
 {
     (void)ctx;
+    if (g_mv.land) {
+        sceGuViewport(2048, 2048, 480, 272);
+        sceGumMatrixMode(GU_PROJECTION);
+        sceGumLoadIdentity();
+        sceGumPerspective(50.0f, 480.0f / 272.0f, 2.0f, 3000.0f);
+        sceGumMatrixMode(GU_VIEW);
+        sceGumLoadIdentity();
+        float a = g_mv.angle * 3.14159265f / 180.0f;
+        ScePspFVector3 eye = {sinf(a) * 600.0f, 260.0f, cosf(a) * 600.0f}, at = {0, 0, 0}, up = {0, 1, 0};
+        sceGumLookAt(&eye, &at, &up);
+        sceGuDisable(GU_CULL_FACE);
+        sceGuEnable(GU_DEPTH_TEST);
+        sceGuDepthFunc(7);
+        sceGuShadeModel(1);
+        sceGuTexFilter(1, 1);
+        terrain_draw(g_mv.land);
+        if (g_mv.oke) {
+            sceGumMatrixMode(GU_MODEL);
+            sceGumLoadIdentity();
+            ScePspFVector3 p = {0, terrain_height(g_mv.land, 0, 0), 0}, s = {6, 6, 6};
+            sceGumTranslate(&p);
+            sceGumScale(&s);
+            okemodel_draw(g_mv.oke, g_modelview_pose);
+        }
+        sceGuEnable(GU_CULL_FACE);
+        return;
+    }
     if (!g_mv.model && !g_mv.oke)
         return;
     const float *b = g_mv.bounds;
@@ -65,6 +95,8 @@ static void draw(void *ctx)
 
 void modelview_start(void)
 {
+    if (g_modelview_map >= 0)
+        g_mv.land = terrain_load(g_modelview_map);
     if (g_modelview_oke >= 0) {
         g_mv.oke = okemodel_load(g_modelview_oke, 0);
         float b[6] = {-3, 0, -3, 3, 8, 3};

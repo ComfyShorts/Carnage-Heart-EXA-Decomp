@@ -22,6 +22,7 @@
  *                     title (--gmo-tex FILE: take its textures from another model,
  *                     --gmo-angle DEG: starting turn)
  *   --oke ID          with --startup: show an assembled OKE body (--oke-pose N)
+ *   --map N           with --startup: show the generated terrain of map N
  *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)
  *   --scale N         window scale (default 2, i.e. 960x544)
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
@@ -131,6 +132,8 @@ int main(int argc, char **argv)
             g_modelview_textures = argv[++i];
         else if (!strcmp(argv[i], "--oke") && i + 1 < argc)
             g_modelview_oke = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--map") && i + 1 < argc)
+            g_modelview_map = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--oke-pose") && i + 1 < argc)
             g_modelview_pose = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gmo-angle") && i + 1 < argc)

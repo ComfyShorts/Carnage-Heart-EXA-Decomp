@@ -361,7 +361,7 @@ static void main_loop(void)
      * as its state-3 child. When that ends it would open the next screens. */
     render_set_clear_color(gfx, 0);
     int entrance_running = 1;
-    if (g_modelview_path || g_modelview_oke >= 0) {
+    if (g_modelview_path || g_modelview_oke >= 0 || g_modelview_map >= 0) {
         modelview_start();
         entrance_running = 3;
     } else {

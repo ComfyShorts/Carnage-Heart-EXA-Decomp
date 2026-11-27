@@ -9,6 +9,7 @@ extern const char *g_modelview_textures; /* optional: a model whose images it us
 extern float g_modelview_angle;          /* starting turn, degrees */
 extern int g_modelview_oke;              /* OKE body id to show instead, or -1 */
 extern int g_modelview_pose;             /* its pose */
+extern int g_modelview_map;              /* terrain to show (--map N), or -1 */
 
 void modelview_start(void);
 void modelview_update(float dt);
