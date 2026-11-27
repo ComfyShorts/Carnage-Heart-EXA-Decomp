@@ -138,6 +138,7 @@ static void battle_sound(void *user, int se, float x, float y);
 
 static bool start_battle(void)
 {
+    uint64_t perf_t0 = PERF_BEGIN();
     const BattleSetup *set = battle_menu_setup();
     memset(&g_b, 0, sizeof g_b);
     for (int side = 0; side < 2; side++)
@@ -170,7 +171,11 @@ static bool start_battle(void)
      * Battle Mode's don't, so the battle list (FUN_0888dfb0) */
     music_battle();
     g.watch = 0; /* your leader */
+    uint64_t perf_t1 = PERF_BEGIN();
     scene_load();
+    if (perf_t0)
+        SDL_Log("[perf] battle loaded in %.1f ms (field and models %.1f ms)",
+                (double)(psp_perf_now() - perf_t0) / 1e6, (double)(psp_perf_now() - perf_t1) / 1e6);
     SDL_Log("[battle] %s (%d) vs %s (%d) on map %02d, %.0f s", set->team_label[0], set->count[0],
             set->team_label[1], set->count[1], set->map, set->time_limit);
     return true;

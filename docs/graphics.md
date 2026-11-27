@@ -98,3 +98,65 @@ spline patches, DXT textures, mipmaps beyond level 0, color test, logic ops,
 dithering, texture projection and environment mapping.
 
 `chexa-gu-test` draws through the port's libgu and checks pixels.
+
+## Performance
+
+The port runs at the PSP's 60 Hz: the game thread builds a frame, waits for the
+vertical blank (`interval` 1, emulated by `sceDisplayWaitVblankStart`), then the GE
+draws the list into VRAM, and the main thread shows the displayed buffer with vsync.
+The game's time step is fixed per frame, so a slow frame runs late rather than skipping
+ahead, and screenshots at a given frame are the same in any build.
+
+`--perf` logs, every 120 frames, the game thread's frame rate, average and slowest
+frame and the frames that missed their vblank (`late`), the work in a frame (`busy`,
+with the slowest) split into the screens' update (`logic`, with the chip interpreter
+inside it as `chips`), building the GU list (`build`) and the GE (`commands`: list
+parsing and vertex transform; `raster`: drawing pixels), then the vblank wait,
+primitives and pixels per frame. When a window holds a frame over 14 ms it also logs
+that frame. The main thread logs presents per second and the time to convert and
+upload the picture (`present`) apart from waiting for the swap. Starting a battle logs
+its load time (`[perf] battle loaded in ...`).
+
+Measured on a Ryzen 7 7800X3D under WSL2 (WSLg window, SDL's software renderer), the
+title screen and a 3-on-3 battle (the test save's Team 01 against Olshguy):
+
+| | Debug build (before) | RelWithDebInfo + SSE2 | + faster rasterizer |
+|---|---|---|---|
+| Title: frame rate | 7.5 fps | 20.0 fps | 60 fps |
+| Title: raster per frame | 127 ms | 41 ms | 6.5 ms |
+| Battle: frame rate | 8.5 fps | | 60 fps, no late frames |
+| Battle: raster per frame | 107-112 ms | | 9.7 ms (busy 10.5 ms) |
+| Battle: logic + chips | 0.03-0.10 ms | | 0.02 ms |
+| Battle: GE commands | 1.5 ms | | 0.65 ms |
+| Present (main thread) | 0.65 ms | | 0.23 ms |
+| Battle load | 200 ms | | 190-200 ms (field and models 130 ms) |
+
+Almost all the time was the rasterizer. What changed:
+
+- **Build flags.** The presets now build `RelWithDebInfo` (`-O2 -g`) instead of an
+  unoptimized Debug build (`m32-debug` keeps one), and the 32-bit targets use
+  `-msse2 -mfpmath=sse`: i386 defaults to x87 floating point, slower, and its excess
+  precision makes results depend on register allocation (9 pixels of one battle frame
+  differ between the two by at most 9 in a channel).
+- **Per-primitive state.** `target()` decodes the registers once per primitive into a
+  `Target` (scissor within the buffer, tests, blend mode, texture layout and CLUT), so
+  `plot()` no longer reads and decodes ~15 registers per pixel. The CLUT is converted to
+  RGBA once per load and format, not per texel.
+- **SIMD.** Bilinear filtering weights the four texels in SSE float lanes; the usual
+  blend (source alpha, one minus source alpha) and the modulate texture function divide
+  by 255 in 16-bit lanes with `(x + 1 + (x >> 8)) >> 8`, exact for the sums they make
+  (at most 65025).
+- **Less visiting.** Triangles estimate each row's span from the edge equations and
+  test only around it (growing it while pixels are covered) instead of the whole
+  bounding box; z, texture coordinates and colour are interpolated only when used.
+  Sprites stop at the scissor; clear-mode sprites fill rows directly. Lines step only
+  where they are on screen (found by binary search on the same expression), which
+  removed 30-70 ms frames in battles where a line ended far off screen.
+- **Presenting.** The screen texture is copied without blending (the PSP's display
+  ignores the frame buffer's alpha, which holds the stencil).
+
+Every change keeps the same float operations in the same order, so the pictures are
+identical: screenshots of ten scenes (title, Battle Mode menu, team screen, four battle
+frames, OKE Configuration, map, sky) match the unchanged rasterizer's pixel for pixel
+(`tools/png_diff.py A.png B.png`). The software renderer now has about 6 ms of headroom
+in a battle, so the GPU path through SDL3 wasn't needed.

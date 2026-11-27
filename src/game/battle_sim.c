@@ -7,6 +7,7 @@
 #include <SDL3/SDL.h>
 
 #include "gamedata.h"
+#include "psp_shim.h"
 
 #define DEG (3.14159265f / 180.0f)
 
@@ -1376,9 +1377,11 @@ void battle_sim_step(Battle *b, float dt)
 {
     b->tick++;
     b->time += dt;
+    uint64_t perf_t0 = PERF_BEGIN();
     for (int i = 0; i < b->count; i++)
         if (b->oke[i].hp > 0)
             pgchip_update(&b->oke[i].vm, dt, &b->oke[i].base, b->history[i]);
+    psp_perf_end(PERF_CHIPS, perf_t0);
     for (int i = 0; i < b->count; i++)
         oke_step(&b->oke[i], dt);
     /* No two can overlap. */

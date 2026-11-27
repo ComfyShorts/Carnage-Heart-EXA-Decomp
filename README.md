@@ -56,12 +56,14 @@ in `src/game/` are exercised by the tests.
 | `tests/` | `chexa-io-test` (file shim), `chexa-gu-test` (renderer pixels), `chexa-pgchip-test` (loads robot records from the pack and steps them) and `chexa-battle-test` (headless battles between preset designs) and `chexa-oke-parts-test` (OKE Configuration's hardware rules against the preset designs) |
 
 The default build is 32-bit (`-m32`) so pointers and `long` are 4 bytes and decompiled
-structs keep their PSP layout.
+structs keep their PSP layout. It is optimized (`-O2 -g`, SSE2 floating point) and runs at the
+PSP's 60 frames a second; see "Performance" in `docs/graphics.md`.
 
 ```sh
 tools/setup_pc_deps.sh                         # no root: multilib sysroot + 32-bit SDL3 in .deps/
-cmake --preset m32 && cmake --build --preset m32
+cmake --preset m32 && cmake --build --preset m32   # optimized (RelWithDebInfo); m32-debug for -O0
 build/pc-m32/chexa-pc --disc /path/to/disc     # also --ms DIR, --saves DIR, --frames N, --scale N
+build/pc-m32/chexa-pc --disc /path/to/disc --startup --perf   # log frame time and where it goes
 build/pc-m32/chexa-pc --disc /path/to/disc --startup   # run the game's start-up path (--trace: log every import call)
 build/pc-m32/chexa-pc --disc /path/to/disc --startup --gu-trace 3 --screenshot   # sceGu calls of 3 frames, first frame to orig/
 build/pc-m32/chexa-pc --disc /path/to/disc --startup --shot 60 orig/title.png --press 70 circle --shot 100 orig/menu.png

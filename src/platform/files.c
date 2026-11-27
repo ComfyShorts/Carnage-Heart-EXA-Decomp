@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -762,7 +763,8 @@ static bool is_dir(const char *path)
 
 bool psp_io_mount_disc(const char *dir)
 {
-    char real[1024], probe[1100];
+    /* realpath needs PATH_MAX bytes (the fortified glibc aborts with less). */
+    char real[PATH_MAX], probe[PATH_MAX + 16];
     if (!dir || !realpath(dir, real)) {
         SDL_Log("[io] disc folder %s not found", dir ? dir : "(null)");
         return false;

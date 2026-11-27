@@ -10,6 +10,7 @@
 #include "gu.h"
 #include "heap.h"
 #include "psp_imports.h"
+#include "psp_shim.h"
 
 #define PACKET_SIZE 0x80000
 
@@ -213,17 +214,21 @@ static void kick(Render *r, int frame)
 
 void render_end_frame(Render *r)
 {
+    uint64_t t0 = PERF_BEGIN();
     begin_packet(r, r->frame);
+    psp_perf_end(PERF_BUILD, t0);
     /* FUN_08b1f75c / FUN_08b1f784: CPU/GPU timers around the sync (not ported). */
     sceGuSync(0, 0);
     /* FUN_08b25a98: utility dialogs (save data etc.), not ported. */
     if (!r->paused) {
         /* FUN_08b37dd8 / 37d5c / 37bcc: movie playback hooks, not ported. */
         int vc;
+        t0 = PERF_BEGIN();
         do {
             sceDisplayWaitVblankStartCB();
             vc = sceDisplayGetVcount();
         } while (vc < r->last_vcount + r->interval);
+        psp_perf_end(PERF_WAIT, t0);
         r->vblanks = sceDisplayGetVcount() - r->last_vcount;
         r->step = r->vblanks <= r->max_step ? r->vblanks : r->max_step;
         r->last_vcount = sceDisplayGetVcount();
@@ -242,6 +247,7 @@ void render_end_frame(Render *r)
         r->frame ^= 1;
     }
     r->frame_count++;
+    psp_perf_frame(r->vblanks, r->interval);
 }
 
 int render_interval(const Render *r)
