@@ -19,10 +19,19 @@
 #include <stdbool.h>
 
 /* What the screens hand to the battle. */
+#define SETUP_TEAM_MAX 3 /* CTeamDataBase's three members */
+
+typedef struct BattleOke {
+    int card;             /* a saved card (0-31), */
+    char path[64];        /* or -1 and a record in the pack */
+    char label[48];
+    int spot;             /* formation spot 0-8 (CFormationDataBase +0x24), -1 by order */
+} BattleOke;
+
 typedef struct BattleSetup {
-    int oke_card[2];      /* [0] the player's side, [1] the enemy's: a saved card (0-31), */
-    char oke_path[2][64]; /* or -1 and a record in the pack */
-    char oke_label[2][48];
+    BattleOke oke[2][SETUP_TEAM_MAX]; /* [0] the player's team, [1] the enemy's */
+    int count[2];         /* members per team, 1-3 */
+    char team_label[2][48];
     int stage;            /* CPresetStage index (0xAF entries) */
     int map;              /* land/mapNN */
     float time_limit;     /* seconds */

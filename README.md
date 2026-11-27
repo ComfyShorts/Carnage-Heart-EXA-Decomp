@@ -41,15 +41,16 @@ game is included. It reads the game's files from your own dump at runtime. With
 `--startup` it runs the game's own start-up code (entry point, C runtime start-up, `main`,
 `CApplication::Init`) and the graphics side of its main loop, drawing through a
 software GE renderer, up to the title screen and its Story Mode / Battle Mode menu.
-Battle Mode leads to a simple playable battle between two shipped preset robots
-running their chip programs. See `docs/startup.md`, `docs/graphics.md`,
+Battle Mode leads to the game's Battle Mode screens (Team Formation, the Test
+Program, the Battle Arena) and a battle between teams of up to three robots running
+their chip programs. See `docs/startup.md`, `docs/graphics.md`,
 `docs/screens.md` and `docs/battle.md`. Without
 it, it opens a window and runs an empty frame loop. The chip interpreter and pack reader
 in `src/game/` are exercised by the tests.
 
 | Path | Contents |
 |---|---|
-| `src/game/` | hand-written game C: start-up path (`startup.c`), CRender frame loop (`render.c`), the title screens (`entrance.c`), Battle Mode (`battle.c`, `battle_sim.c`), GIM textures and sprites (`picture.c`), bitmap text (`font.c`), pad (`pad.c`), strings read from your EBOOT (`gamedata.c`), the game's file layer and file sets (`fileio.c`), heap allocator stand-in (`heap.c`), chip program interpreter (`pgchip.c`), robot record layout (`okedb.h`), pack index and ARZ reader (`packfile.c`, `lz.c`) |
+| `src/game/` | hand-written game C: start-up path (`startup.c`), CRender frame loop (`render.c`), the title screens (`entrance.c`), Battle Mode (`battle.c`, `battle_menu.c`, `team_menu.c`, `battle_sim.c`), GIM textures and sprites (`picture.c`), bitmap text (`font.c`), pad (`pad.c`), strings read from your EBOOT (`gamedata.c`), the game's file layer and file sets (`fileio.c`), heap allocator stand-in (`heap.c`), chip program interpreter (`pgchip.c`), robot record layout (`okedb.h`), pack index and ARZ reader (`packfile.c`, `lz.c`) |
 | `src/platform/` | PSP shim: one file per subsystem (`files`, `input`, `threads`, `graphics`, `audio`, `video`, `net`, `system`) with a stub for each of the 299 imports in `docs/imports.md`, the implemented kernel imports (`kernel.c`), libgu (`gu.c`), the GE interpreter and software renderer (`ge.c`), the display (`display.c`), plus the SDL3 window layer |
 | `src/pc/` | entry point |
 | `tests/` | `chexa-io-test` (file shim), `chexa-gu-test` (renderer pixels), `chexa-pgchip-test` (loads robot records from the pack and steps them) and `chexa-battle-test` (headless battles between preset designs) |
@@ -73,8 +74,8 @@ CHEXA_DISC=/path/to/disc ctest --test-dir build/pc-m32
 writable folder as the memory stick (`ms0:`). Without it the game is told no memory
 stick is inserted. Save data (`sceUtilitySavedata*`) goes in the folder given with
 `--saves DIR`, default `saves/` (gitignored), one directory per save as on a memory
-stick; `--make-test-save` writes a Battle Data save holding a few of the shipped preset
-OKEs (see "Save data" in `docs/screens.md`). The file and UMD imports are implemented (sync and async open, read,
+stick; `--make-test-save` writes a Battle Data save holding twelve of the shipped preset
+OKEs and two teams of them (see "Save data" in `docs/screens.md`). The file and UMD imports are implemented (sync and async open, read,
 write, seek, close, directory listing, stat, mkdir, rename). The tests skip themselves
 (exit 77) when the game files aren't found; they default to `$CHEXA_DISC`, then
 `/mnt/c/psp/chexa`.

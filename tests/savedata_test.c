@@ -71,6 +71,12 @@ int main(int argc, char **argv)
         c->software.width[0] = 7 + i;
     }
     memcpy(g_save.battle, "PLAYER", 6);
+    /* A team card: team 3 with cards 6 and 1 on spots 4 and 0. */
+    savedata_team_create(2, "Squad", "Owner");
+    savedata_team_set_member(2, 0, 5, 4);
+    savedata_team_set_member(2, 1, 0, 0);
+    CHECK(savedata_team_status(2) == 1 && savedata_team_count(2) == 2, "team 3 made with two members");
+    CHECK(savedata_team_member(2, 2) == -1 && savedata_team_spot(2, 2) == -1, "its third slot is empty");
     savedata_save_start("UNIT.CHE");
     CHECK(savedata_run(savedata_io_update) == 0, "save UNIT.CHE (new: MAKEDATA)");
     snprintf(path, sizeof path, "%s/ULJM05698B/UNIT.CHE", root);
@@ -115,6 +121,17 @@ int main(int argc, char **argv)
     CHECK(!strcmp(name, "Unit 1"), "card 6 is named \"%s\"", name);
     CHECK(savedata_card(5)->software.width[0] == 8, "card 6's program came back");
     CHECK(!strcmp(g_save.battle_file, "UNIT.CHE"), "the loaded file is remembered");
+    char team[TEAM_NAME_MAX + 1];
+    savedata_team_name(2, team, sizeof team);
+    CHECK(!strcmp(team, "Squad") && savedata_team_member(2, 0) == 5 && savedata_team_spot(2, 0) == 4 &&
+              savedata_team_member(2, 1) == 0 && savedata_team_spot(2, 1) == 0,
+          "team 3 came back (\"%s\", cards %d/%d)", team, savedata_team_member(2, 0), savedata_team_member(2, 1));
+    CHECK(savedata_team_status(0) == 0, "team 1 still unused");
+    savedata_team_set_member(2, 0, -1, 4);
+    CHECK(savedata_team_member(2, 0) == -1 && savedata_team_spot(2, 0) == -1 && savedata_team_count(2) == 1,
+          "unregistering clears the card and the spot");
+    savedata_team_delete(2);
+    CHECK(savedata_team_status(2) == 0, "a deleted team is unused");
 
     savedata_load_start("SHORT.CHE");
     CHECK(savedata_run(savedata_io_update) != 0, "loading SHORT.CHE fails");

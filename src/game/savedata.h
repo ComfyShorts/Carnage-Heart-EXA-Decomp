@@ -64,6 +64,30 @@ void savedata_card_name(int card, char *out, size_t n);
 /* System data +0x74 (FUN_0889c400): Story Mode was completed. */
 bool savedata_story_completed(void);
 
+/* ---- the team cards (CTeamDataBase, 0x340 bytes; FUN_0889cb10) ----
+ *   +0x000 status: 0 unused, 1 the player's, 2 / 3 installed from others (FUN_089eea18)
+ *   +0x010 emblem: 32 x 32 4-bit pixels, then 16 palette words (0x240 bytes)
+ *   +0x250 team name; +0x269 the owner's name
+ *   +0x290 three CFormationDataBase entries of 0x30: two vectors, +0x20 the member's
+ *          OKE card (-1 none, FUN_08ad3204), +0x24 its formation spot (FUN_08ad320c)
+ *   +0x320 the date it was made; +0x330, +0x334 counters; +0x338 1000 */
+#define TEAM_MEMBERS 3
+#define TEAM_NAME_MAX 0x19
+
+int savedata_team_status(int team);
+int savedata_team_member(int team, int m);
+int savedata_team_spot(int team, int m);
+int savedata_team_count(int team); /* registered members */
+void savedata_team_name(int team, char *out, size_t n);
+const uint8_t *savedata_team_emblem(int team);
+/* CTeamFormationMngr::createTeam (FUN_08ac42f4 with FUN_089f38a0): a new team of the
+ * player's, named `name`, owned by `owner`, with no members and the default emblem
+ * (blank pixels, the palette at 0x08c83db8). */
+void savedata_team_create(int team, const char *name, const char *owner);
+void savedata_team_delete(int team);
+/* Registers card (or -1 to unregister) as member m, on formation spot `spot`. */
+void savedata_team_set_member(int team, int m, int card, int spot);
+
 /* ---- the sequences ---- */
 
 /* The start-up check (CSystemMngr mode 0x17, CSaveMngr type 4 exec 3). */

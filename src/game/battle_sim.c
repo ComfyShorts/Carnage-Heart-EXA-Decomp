@@ -48,7 +48,38 @@ int battle_range_distance(int step)
 
 
 #define O(t) ((Oke *)(t))
-#define ENEMY(o) (&(o)->battle->oke[(o)->side ^ 1])
+
+/* Which enemy a chip means. CBattleOke keeps the target its search chips found
+ * (FUN_08841bd8); the port keeps the last one found or locked, else takes the
+ * nearest live enemy. With one OKE a side that is always the other one. */
+static Oke *nearest_enemy(const Oke *o, bool live)
+{
+    Battle *b = o->battle;
+    Oke *best = NULL;
+    float bd = 0.0f;
+    for (int i = 0; i < b->count; i++) {
+        Oke *e = &b->oke[i];
+        if (e->side == o->side || (live && e->hp <= 0))
+            continue;
+        float d = hypotf(e->x - o->x, e->y - o->y);
+        if (!best || d < bd) {
+            best = e;
+            bd = d;
+        }
+    }
+    return best;
+}
+
+static Oke *target_of(Oke *o)
+{
+    Battle *b = o->battle;
+    if (o->target >= 0 && o->target < b->count && b->oke[o->target].hp > 0)
+        return &b->oke[o->target];
+    Oke *e = nearest_enemy(o, true);
+    return e ? e : nearest_enemy(o, false);
+}
+
+#define ENEMY(o) target_of(o)
 
 static void setup_parts(Oke *o);
 static bool weapon_lost(const Oke *o, int slot);
@@ -117,6 +148,28 @@ static bool in_range(const Oke *o, PgChipRange r, float px, float py)
     if (d < inner || d > outer)
         return false;
     return half >= 180.0f || fabsf(wrap180(bearing(o, px, py) - dir)) <= half;
+}
+
+/* The nearest live enemy inside a chip's range, which becomes the OKE's target;
+ * NULL when none is. */
+static Oke *enemy_in_range(Oke *o, PgChipRange r)
+{
+    Battle *b = o->battle;
+    Oke *best = NULL;
+    float bd = 0.0f;
+    for (int i = 0; i < b->count; i++) {
+        Oke *e = &b->oke[i];
+        if (e->side == o->side || e->hp <= 0 || !in_range(o, r, e->x, e->y))
+            continue;
+        float d = hypotf(e->x - o->x, e->y - o->y);
+        if (!best || d < bd) {
+            best = e;
+            bd = d;
+        }
+    }
+    if (best)
+        o->target = best->index;
+    return best;
 }
 
 static bool outside_field(float x, float y)
@@ -387,7 +440,7 @@ static void add_heat(Oke *o, int amount)
 
 /* A mine's volley (FUN_08811940 from CBattleDispenser::Update): `count` of the
  * child bullet from (x, y) at the target. */
-static void fire_child(Battle *b, int side, float x, float y, float tx, float ty, int bullet)
+static void fire_child(Battle *b, int from, float x, float y, float tx, float ty, int bullet)
 {
     if (bullet < 0 || bullet >= NO_BULLET)
         return;
@@ -397,10 +450,10 @@ static void fire_child(Battle *b, int side, float x, float y, float tx, float ty
             float speed = float_at(0x00465C80u + (uint32_t)bullet * 0x34, 100.0f);
             if (!(speed > 1.0f && speed < 10000.0f))
                 speed = 100.0f;
-            b->shots[i] = (Shot){true, side, x, y, (tx - x) / d * speed, (ty - y) / d * speed, 0.0f, 0.0f,
-                                 0.0f, float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f),
+            b->shots[i] = (Shot){true, b->oke[from].side, x, y, (tx - x) / d * speed, (ty - y) / d * speed,
+                                 0.0f, 0.0f, 0.0f, float_at(0x00465CA0u + (uint32_t)bullet * 0x34, 3.4e38f),
                                  bullet_stat(bullet, 0), bullet_stat(bullet, 1), bullet_stat(bullet, 2),
-                                 -1, 0, 0.0f, 0.0f, false};
+                                 -1, 0, 0.0f, 0.0f, false, from};
             return;
         }
 }
@@ -413,9 +466,21 @@ static void fire_child(Battle *b, int side, float x, float y, float tx, float ty
 static void mine_tick(Battle *b, Shot *s)
 {
     uint32_t row = 0x003C78DCu + (uint32_t)s->mine * 0x34;
-    Oke *e = &b->oke[s->owner ^ 1];
-    float dx = e->x - s->x, dy = e->y - s->y, d = hypotf(dx, dy);
-    bool found = e->hp > 0 && d <= float_at(row + 0x30, 40.0f);
+    Oke *e = NULL;
+    float dx = 0.0f, dy = 0.0f, d = 0.0f;
+    for (int i = 0; i < b->count; i++) { /* the nearest live enemy of its side */
+        Oke *c = &b->oke[i];
+        float cd = hypotf(c->x - s->x, c->y - s->y);
+        if (c->side != s->owner && c->hp > 0 && (!e || cd < d)) {
+            e = c;
+            d = cd;
+        }
+    }
+    if (e) {
+        dx = e->x - s->x;
+        dy = e->y - s->y;
+    }
+    bool found = e && d <= float_at(row + 0x30, 40.0f);
     if (word_at(row + 0x20, 0) == 0) {
         if (found && d > 0.0f) {
             s->vx += dx / d * 1.5f;
@@ -426,7 +491,7 @@ static void mine_tick(Battle *b, Shot *s)
         if (found && s->cool == 0.0f) {
             int n = word_at(row + 0x10, 1);
             for (int k = 0; k < n && k < 8; k++)
-                fire_child(b, s->owner, s->x, s->y, e->x, e->y, word_at(row + 0x0c, NO_BULLET));
+                fire_child(b, s->from, s->x, s->y, e->x, e->y, word_at(row + 0x0c, NO_BULLET));
             s->cool = 0.5f;
             if (--s->rounds == 0)
                 s->live = false;
@@ -472,7 +537,7 @@ static void fire_at(Oke *o, float tx, float ty, float speed, int weapon, float s
             b->shots[i] = (Shot){true, o->side, o->x, o->y, (ux * c - uy * s) * speed,
                                  (ux * s + uy * c) * speed, drag, min_speed, 0.0f, falloff,
                                  weapon_stat(weapon, 0), weapon_stat(weapon, 1), weapon_stat(weapon, 2),
-                                 -1, 0, 0.0f, 0.0f, false};
+                                 -1, 0, 0.0f, 0.0f, false, o->index};
             int disp = word_at(0x003D1580u + (uint32_t)weapon * 20, NO_DISPENSER);
             if (disp != NO_DISPENSER && disp >= 0 && disp < 32) {
                 /* CBattleDispenser's launch (FUN_08815948): a velocity of +0x2c x
@@ -611,8 +676,8 @@ static int t_shoot_reticle(PgChipTarget *t, int which, int spread, int count, in
 static int t_select_fire(PgChipTarget *t, PgChipRange r, int a, int b, int c, int one)
 {
     (void)c; (void)one;
-    Oke *o = O(t), *e = ENEMY(o);
-    if (!in_range(o, r, e->x, e->y))
+    Oke *o = O(t), *e = enemy_in_range(o, r);
+    if (!e)
         return 0xd; /* no target (FUN_08841bd8 == -1) */
     int res = start_fire(o, a, b);
     if (res == 0) /* FUN_0883bfd0 */
@@ -776,8 +841,7 @@ static void fire_step(Oke *o, float dt)
 static int t_scan_oke(PgChipTarget *t, PgChipRange r, int a, int b, int c, int d)
 {
     (void)a; (void)b; (void)c; (void)d;
-    Oke *o = O(t), *e = ENEMY(o);
-    return e->hp > 0 && in_range(o, r, e->x, e->y);
+    return enemy_in_range(O(t), r) != NULL;
 }
 
 static int t_judge_area(PgChipTarget *t, PgChipRange r) { return wall_in_range(O(t), r); }
@@ -843,10 +907,10 @@ static int t_judge_time(PgChipTarget *t, int secs, int b4, int b5)
 static int t_lock_on(PgChipTarget *t, PgChipRange r, int a, int b, int c)
 {
     (void)a; (void)b; (void)c;
-    Oke *o = O(t), *e = ENEMY(o);
+    Oke *o = O(t);
     /* FUN_088464b0: a target found in range becomes the lock; otherwise the old
      * lock stays. Always accepted. */
-    if (e->hp > 0 && in_range(o, r, e->x, e->y))
+    if (enemy_in_range(o, r))
         o->locked = true;
     return 0;
 }
@@ -869,8 +933,8 @@ static int t_judge_location_from_target(PgChipTarget *t, PgChipRange r, int b6)
 static int t_auto_rotate(PgChipTarget *t, PgChipRange r, int b6)
 {
     (void)b6;
-    Oke *o = O(t), *e = ENEMY(o);
-    if (!in_range(o, r, e->x, e->y))
+    Oke *o = O(t), *e = enemy_in_range(o, r);
+    if (!e)
         return 2;
     float turn = bearing(o, e->x, e->y);
     o->turn_rate = turn >= 0 ? TURN_SPEED : -TURN_SPEED;
@@ -1268,24 +1332,26 @@ void battle_sim_step(Battle *b, float dt)
 {
     b->tick++;
     b->time += dt;
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < b->count; i++)
         if (b->oke[i].hp > 0)
             pgchip_update(&b->oke[i].vm, dt, &b->oke[i].base, b->history[i]);
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < b->count; i++)
         oke_step(&b->oke[i], dt);
-    /* The two can't overlap. */
-    Oke *a = &b->oke[0], *c = &b->oke[1];
-    float dx = c->x - a->x, dy = c->y - a->y, d = hypotf(dx, dy);
-    if (d < 2 * OKE_RADIUS && d > 0.01f) {
-        float push = (2 * OKE_RADIUS - d) / 2;
-        a->x -= dx / d * push; a->y -= dy / d * push;
-        c->x += dx / d * push; c->y += dy / d * push;
-    }
+    /* No two can overlap. */
+    for (int i = 0; i < b->count; i++)
+        for (int j = i + 1; j < b->count; j++) {
+            Oke *a = &b->oke[i], *c = &b->oke[j];
+            float dx = c->x - a->x, dy = c->y - a->y, d = hypotf(dx, dy);
+            if (d < 2 * OKE_RADIUS && d > 0.01f) {
+                float push = (2 * OKE_RADIUS - d) / 2;
+                a->x -= dx / d * push; a->y -= dy / d * push;
+                c->x += dx / d * push; c->y += dy / d * push;
+            }
+        }
     for (int i = 0; i < MAX_SHOTS; i++) {
         Shot *s = &b->shots[i];
         if (!s->live)
             continue;
-        Oke *e = &b->oke[s->owner ^ 1];
         if (s->mine >= 0)
             for (s->clock += dt; s->clock >= 1.0f / 30.0f && s->live; s->clock -= 1.0f / 30.0f)
                 mine_tick(b, s);
@@ -1295,11 +1361,15 @@ void battle_sim_step(Battle *b, float dt)
         float step = hypotf(s->vx, s->vy) * dt;
         int n = (int)(step / 0.5f) + 1, bone = -1, cls = 0;
         float hx = s->x, hy = s->y;
-        for (int k = 1; k <= n && e->hp > 0 && !s->hover; k++) {
+        Oke *e = NULL; /* the first enemy of the shooter's side it meets */
+        for (int k = 1; k <= n && bone < 0 && !s->hover; k++) {
             hx = s->x + s->vx * dt * k / n;
             hy = s->y + s->vy * dt * k / n;
-            if ((bone = hit_box(e, hx, hy, &cls)) >= 0)
-                break;
+            for (int m = 0; m < b->count && bone < 0; m++) {
+                e = &b->oke[m];
+                if (e->side != s->owner && e->hp > 0)
+                    bone = hit_box(e, hx, hy, &cls);
+            }
         }
         s->x += s->vx * dt;
         s->y += s->vy * dt;
@@ -1313,7 +1383,8 @@ void battle_sim_step(Battle *b, float dt)
         }
         if (bone >= 0) {
             receive_hit(e, s, bone < OKE_BONES ? bone : -1, cls, hx, hy);
-            b->oke[s->owner].hits++;
+            if (s->from >= 0 && s->from < b->count)
+                b->oke[s->from].hits++;
             s->live = false;
         } else if (fabsf(s->x - FIELD * 0.5f) > 500.0f || fabsf(s->y - FIELD * 0.5f) > 500.0f) {
             /* The game frees a bullet once it is 500 units from the centre on any
@@ -1322,19 +1393,50 @@ void battle_sim_step(Battle *b, float dt)
             s->live = false;
         }
     }
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < b->count; i++)
         if (b->oke[i].hp < 0)
             b->oke[i].hp = 0;
-    for (int i = 0; i < 2; i++) { /* stand-in cooling */
+    for (int i = 0; i < b->count; i++) { /* stand-in cooling */
         Oke *o = &b->oke[i];
         o->heat -= (int)ceilf(o->heat_max * COOLING * dt);
         if (o->heat < 0)
             o->heat = 0;
     }
-    int pa = oke_hp_percent(a), pc = oke_hp_percent(c);
-    if (a->hp <= 0 || c->hp <= 0 || b->time >= battle_time_limit(b))
-        b->result = pa > pc ? 0 : pa < pc ? 1 : 2;
+    /* The judge (CBattleScene FUN_088689c8): the battle is over once a team has no
+     * live OKE (FUN_0881f908), or at the time limit. The winner by the Test Program's
+     * default condition (CBattleParam +0x14 = 0, "Durability Left %"): the team with
+     * the higher durability; a team with none left loses. */
+    int alive0 = battle_team_alive(b, 0), alive1 = battle_team_alive(b, 1);
+    if (alive0 == 0 || alive1 == 0 || b->time >= battle_time_limit(b)) {
+        int pa = battle_team_percent(b, 0), pc = battle_team_percent(b, 1);
+        if (alive0 == 0 && alive1 > 0)
+            b->result = 1;
+        else if (alive1 == 0 && alive0 > 0)
+            b->result = 0;
+        else
+            b->result = pa > pc ? 0 : pa < pc ? 1 : 2;
+    }
 }
+
+int battle_team_alive(const Battle *b, int side)
+{
+    int n = 0;
+    for (int i = 0; i < b->count; i++)
+        n += b->oke[i].side == side && b->oke[i].hp > 0;
+    return n;
+}
+
+int battle_team_percent(const Battle *b, int side)
+{
+    int sum = 0, n = 0;
+    for (int i = 0; i < b->count; i++)
+        if (b->oke[i].side == side) {
+            sum += b->oke[i].hp > 0 ? oke_hp_percent(&b->oke[i]) : 0;
+            n++;
+        }
+    return n ? sum / n : 0;
+}
+
 
 float battle_time_limit(const Battle *b)
 {
@@ -1348,6 +1450,38 @@ void battle_sim_start(Battle *b, uint32_t seed)
     b->tick = 0;
     b->rng = seed;
     b->result = -1;
-    oke_init(&b->oke[0], b, 0, FIELD * 0.5f, FIELD * 0.7f, 0.0f);
-    oke_init(&b->oke[1], b, 1, FIELD * 0.5f, FIELD * 0.3f, 180.0f);
+    if (b->count <= 0) { /* the 1-on-1 form: oke[0] yours, oke[1] theirs */
+        b->count = 2;
+        b->oke[0].side = 0;
+        b->oke[1].side = 1;
+        b->oke[0].member = b->oke[1].member = 0;
+        b->oke[0].spot = b->oke[1].spot = -1;
+    }
+    if (b->count > MAX_OKES)
+        b->count = MAX_OKES;
+    /* CBattleScene's placement (FUN_08869a28): each member stands on its formation
+     * spot, a point of the 3 x 3 grid at 0x08bd7d10 scaled by the map size / 540.
+     * The game's team 0 (the enemy) keeps the point and faces +z; team 1 (yours)
+     * takes it mirrored (-x, -z) and turned round. A member without a spot takes the
+     * free ones in the order at 0x08c3e228 (FUN_08ac8eec): the middle of the second
+     * row, then its right and left. */
+    float scale = (b->map_size >= 180.0f && b->map_size <= 540.0f ? b->map_size : 540.0f) / 540.0f;
+    for (int i = 0; i < b->count; i++) {
+        Oke *o = &b->oke[i];
+        int spot = o->spot;
+        if (spot < 0 || spot >= FORMATION_SPOTS)
+            spot = word_at(0x0043A228u + 4u * (uint32_t)(o->member % FORMATION_SPOTS), (int[]){4, 3, 5, 1, 0, 2, 7, 6, 8}[o->member % FORMATION_SPOTS]);
+        if (spot < 0 || spot >= FORMATION_SPOTS)
+            spot = 4;
+        static const float k_grid[3] = {60.0f, 0.0f, -60.0f};
+        uint32_t at = 0x003D3D10u + (uint32_t)spot * 16;
+        float fx = float_at(at, k_grid[spot % 3]) * scale;
+        float fz = float_at(at + 8, -60.0f * (float)(spot / 3 + 1)) * scale;
+        o->index = i;
+        o->target = -1;
+        if (o->side == 0)
+            oke_init(o, b, 0, FIELD * 0.5f - fx, FIELD * 0.5f - fz, 0.0f);
+        else
+            oke_init(o, b, 1, FIELD * 0.5f + fx, FIELD * 0.5f + fz, 180.0f);
+    }
 }

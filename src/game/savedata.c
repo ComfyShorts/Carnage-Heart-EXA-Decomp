@@ -39,6 +39,8 @@ SaveState g_save;
 #define ARENA_NAMES 0x0044D8F0u         /* as battle_menu.c */
 #define ARENA_RECORDS 0x0044DC10u
 #define ARENA_STRIDE 0x3C0u
+#define TEAM_NAMES 0x00487A08u          /* "Team 01".. (PTR_s_Team_01_08c8ba08), 16 */
+#define TEAM_STRINGS 0x00487A60u        /* CTeamFormationString (FUN_08ac7d54), 0x4B */
 
 enum { SAVE_TYPE_BATTLE = 2, SAVE_TYPE_SYSTEM = 4 };
 
@@ -120,6 +122,116 @@ void savedata_card_name(int card, char *out, size_t n)
     for (size_t i = 0; i < len; i++) /* the presets fill unused bytes with 0xCD/0xFF */
         out[i] = (unsigned char)name[i] < 0x20 || (unsigned char)name[i] >= 0x7F ? '?' : name[i];
     out[len] = 0;
+}
+
+/* ---- team cards ---- */
+
+#define EMBLEM_PALETTE 0x0047FDB8u /* DAT_08c83db8, 16 words (FUN_089ed05c) */
+
+static uint8_t *team_card(int team)
+{
+    return team >= 0 && team < SAVE_TEAMS ? g_save.db.team[team] : NULL;
+}
+
+int savedata_team_status(int team)
+{
+    uint8_t *t = team_card(team);
+    return t ? (int)get_word(t) : 0;
+}
+
+int savedata_team_member(int team, int m)
+{
+    uint8_t *t = team_card(team);
+    if (!t || m < 0 || m >= TEAM_MEMBERS || get_word(t) == 0)
+        return -1;
+    int card = (int)get_word(t + 0x290 + 0x30 * m + 0x20);
+    return card >= 0 && card < SAVE_CARDS ? card : -1;
+}
+
+int savedata_team_spot(int team, int m)
+{
+    uint8_t *t = team_card(team);
+    if (!t || m < 0 || m >= TEAM_MEMBERS)
+        return -1;
+    int spot = (int)get_word(t + 0x290 + 0x30 * m + 0x24);
+    return spot >= 0 && spot < 9 ? spot : -1;
+}
+
+int savedata_team_count(int team)
+{
+    int n = 0;
+    for (int m = 0; m < TEAM_MEMBERS; m++)
+        n += savedata_team_member(team, m) >= 0;
+    return n;
+}
+
+static void copy_text(char *out, size_t n, const uint8_t *src, size_t max)
+{
+    if (!n)
+        return;
+    size_t len = strnlen((const char *)src, max);
+    if (len >= n)
+        len = n - 1;
+    for (size_t i = 0; i < len; i++)
+        out[i] = src[i] < 0x20 || src[i] >= 0x7F ? '?' : (char)src[i];
+    out[len] = 0;
+}
+
+void savedata_team_name(int team, char *out, size_t n)
+{
+    uint8_t *t = team_card(team);
+    if (!t) {
+        if (n)
+            out[0] = 0;
+        return;
+    }
+    copy_text(out, n, t + 0x250, TEAM_NAME_MAX);
+}
+
+const uint8_t *savedata_team_emblem(int team)
+{
+    uint8_t *t = team_card(team);
+    return t ? t + 0x10 : NULL;
+}
+
+void savedata_team_create(int team, const char *name, const char *owner)
+{
+    uint8_t *t = team_card(team);
+    if (!t)
+        return;
+    new_team_card(t);
+    put_word(t, 1);
+    snprintf((char *)t + 0x250, TEAM_NAME_MAX, "%s", name ? name : "");
+    snprintf((char *)t + 0x269, 0x290 - 0x269, "%s", owner ? owner : "");
+    ScePspDateTime now;
+    memset(&now, 0, sizeof now);
+    int tz = 0; /* FUN_089f38a0: the clock in the system's time zone (param 6) */
+    sceUtilityGetSystemParamInt(6, &tz);
+    sceRtcGetCurrentClock(&now, tz);
+    memcpy(t + 0x320, &now, 16);
+    put_word(t + 0x338, 1000);
+    for (int m = 0; m < TEAM_MEMBERS; m++) { /* FUN_08ad3188(-1, -1, 0, 0) */
+        put_word(t + 0x290 + 0x30 * m + 0x20, 0xFFFFFFFF);
+        put_word(t + 0x290 + 0x30 * m + 0x24, 0xFFFFFFFF);
+    }
+    for (int i = 0; i < 16; i++)
+        put_word(t + 0x10 + 0x200 + 4 * i, gamedata_word(EMBLEM_PALETTE + 4u * (uint32_t)i, 0));
+}
+
+void savedata_team_delete(int team)
+{
+    uint8_t *t = team_card(team);
+    if (t)
+        new_team_card(t);
+}
+
+void savedata_team_set_member(int team, int m, int card, int spot)
+{
+    uint8_t *t = team_card(team);
+    if (!t || m < 0 || m >= TEAM_MEMBERS)
+        return;
+    put_word(t + 0x290 + 0x30 * m + 0x20, card >= 0 ? (uint32_t)card : 0xFFFFFFFFu);
+    put_word(t + 0x290 + 0x30 * m + 0x24, card >= 0 && spot >= 0 ? (uint32_t)spot : 0xFFFFFFFFu);
 }
 
 bool savedata_story_completed(void)
@@ -676,7 +788,7 @@ bool savedata_make_test_save(const char *file)
     savedata_new_game();
     memcpy(g_save.battle, "TESTER", 6); /* the player name */
     int n = 0;
-    /* The two simulation OKEs, then the leaders of the first four arena teams. */
+    /* The two simulation OKEs, then the leaders of the first ten arena teams. */
     static const char *const k_sim[2] = {"preset/oke_t01_1.bin", "preset/oke_t01_2.bin"};
     for (int i = 0; i < 2; i++)
         if (read_preset(&pack, k_sim[i], &g_save.db.card[n])) {
@@ -684,20 +796,36 @@ bool savedata_make_test_save(const char *file)
             snprintf(name, sizeof name, "Simulation %d", i + 1);
             set_card_name(&g_save.db.card[n++], name);
         }
-    for (int i = 0; i < 4; i++) {
+    int first_arena = n;
+    for (int i = 0; i < 10 && n < SAVE_CARDS; i++) {
         const char *path = gamedata_string(ARENA_RECORDS + (uint32_t)i * ARENA_STRIDE + 0x14u);
         if (!read_preset(&pack, path, &g_save.db.card[n]))
             continue;
         const char *name = ptr_string(ARENA_NAMES + 4u * (uint32_t)i);
         set_card_name(&g_save.db.card[n++], name ? name : "Arena OKE");
     }
-    pack_close(&pack);
+    /* Two teams, named and owned as createTeam names them (the "Team 01" table at
+     * 0x08c8ba08, CTeamFormationString 0x19): three arena OKEs, and the two
+     * simulation OKEs. Members take the free spots in the game's order. */
+    const char *owner = ptr_string(TEAM_STRINGS + 4u * 0x19);
+    static const int k_spots[3] = {4, 3, 5};
+    if (n - first_arena >= 3) {
+        savedata_team_create(0, ptr_string(TEAM_NAMES), owner);
+        for (int m = 0; m < 3; m++)
+            savedata_team_set_member(0, m, first_arena + m, k_spots[m]);
+    }
+    if (first_arena >= 2) {
+        savedata_team_create(1, ptr_string(TEAM_NAMES + 4u), owner);
+        for (int m = 0; m < 2; m++)
+            savedata_team_set_member(1, m, m, k_spots[m]);
+    }    pack_close(&pack);
     if (n == 0) {
         SDL_Log("[save] test save: no preset OKEs could be read");
         return false;
     }
     savedata_save_start(file);
     int32_t r = savedata_run(savedata_io_update);
-    SDL_Log("[save] test save %s with %d preset OKE card(s): %s", file, n, r == 0 ? "written" : "failed");
+    SDL_Log("[save] test save %s with %d preset OKE card(s) and %d team(s): %s", file, n,
+            (savedata_team_status(0) != 0) + (savedata_team_status(1) != 0), r == 0 ? "written" : "failed");
     return r == 0;
 }

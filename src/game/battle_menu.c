@@ -15,6 +15,7 @@
 #include "pad.h"
 #include "psp_shim.h"
 #include "savedata.h"
+#include "team_menu.h"
 #include "ui.h"
 
 /* ---- data in the EBOOT (splat addresses) ---- */
@@ -135,12 +136,17 @@ static int first_card(void)
     return PLAYER_CARDS;
 }
 
-/* Hands a card to the battle: a saved card by index, a simulation OKE by path. */
-static void setup_card(BattleSetup *s, int side, int card)
+/* Hands a card to the battle as member m of a side: a saved card by index, a
+ * simulation OKE by path. */
+static void setup_card(BattleSetup *s, int side, int m, int card, int spot)
 {
-    s->oke_card[side] = card < PLAYER_CARDS ? card : -1;
-    snprintf(s->oke_path[side], sizeof s->oke_path[side], "%s", card < PLAYER_CARDS ? "" : card_path(card));
-    card_label(card, s->oke_label[side], sizeof s->oke_label[side]);
+    BattleOke *o = &s->oke[side][m];
+    o->card = card < PLAYER_CARDS ? card : -1;
+    snprintf(o->path, sizeof o->path, "%s", card < PLAYER_CARDS ? "" : card_path(card));
+    card_label(card, o->label, sizeof o->label);
+    o->spot = spot;
+    if (s->count[side] < m + 1)
+        s->count[side] = m + 1;
 }
 
 /* ---- screens ---- */
@@ -156,6 +162,8 @@ typedef enum {
     SCR_ARENA,      /* CBattleArenaMngr top menu */
     SCR_OPPONENTS,  /* CBattleArenaSelectWnd */
     SCR_ASK,        /* the Yes/No before the battle */
+    SCR_TEAMFORM,   /* Team Formation (team_menu.c) */
+    SCR_TEAMS,      /* the arena's Select Team: the team cards */
 } ScreenId;
 
 enum { TEAM_ENEMY, TEAM_FRIEND };
@@ -165,16 +173,17 @@ static struct {
     int depth;
     UiMenu mode, select, test, field, arena;
     int team_side;          /* Select OKE to Test: 0 Enemy, 1 Friend */
-    int team[2];            /* the registered card per team, -1 none */
+    int team_slot;          /* and the member slot, 0-2 */
+    int team[2][SETUP_TEAM_MAX]; /* the registered cards per team, packed, -1 none */
     int card_cursor, card_scroll;
-    int card_for;           /* SCR_TEST_TEAM or SCR_ARENA */
     int stage;              /* the Test Program's stage, 0-25 */
     int stage_cursor, stage_scroll;
     int map_size;           /* 0-2: 180 / 360 / 540 m */
     int barricade;          /* 0-2 */
     int test_time;          /* seconds, 30-300 */
     int opponent, opp_scroll;
-    int arena_card;         /* the arena team's card, -1 none */
+    int arena_team;         /* the arena team: a team card 0-15, -1 none */
+    int team_cursor, team_scroll;
     UiAsk ask;
     int ask_kind;           /* what the question is for */
     bool saving;            /* the System Menu's save is running */
@@ -296,8 +305,10 @@ void battle_menu_start(void)
     build_test_menu();
     build_field_menu();
     build_arena_menu();
-    g.team[0] = g.team[1] = -1;
-    g.arena_card = -1;
+    for (int t = 0; t < 2; t++)
+        for (int m = 0; m < SETUP_TEAM_MAX; m++)
+            g.team[t][m] = -1;
+    g.arena_team = -1;
     g.stage = 2;         /* normalizeDataBase (FUN_08824084): stage 2 if none is set */
     g.map_size = 2;      /* CBattleParam's reset (FUN_0887e190): 540 m */
     g.barricade = 1;     /* +0x10 = 1 */
@@ -340,27 +351,58 @@ static void build_test_battle(void)
     static const float k_size[3] = {180.0f, 360.0f, 540.0f};
     BattleSetup *s = &g.setup;
     memset(s, 0, sizeof *s);
-    setup_card(s, 0, g.team[TEAM_FRIEND]);
-    setup_card(s, 1, g.team[TEAM_ENEMY]);
+    /* CTeamDataBase2Use: the Friend team fights as yours, the Enemy team against it;
+     * the members take the free spots in order (FUN_08ac8eec). */
+    static const int k_team[2] = {TEAM_FRIEND, TEAM_ENEMY};
+    for (int side = 0; side < 2; side++) {
+        for (int m = 0; m < SETUP_TEAM_MAX; m++)
+            if (g.team[k_team[side]][m] >= 0)
+                setup_card(s, side, s->count[side], g.team[k_team[side]][m], -1);
+        if (s->count[side] == 1)
+            snprintf(s->team_label[side], sizeof s->team_label[side], "%s", s->oke[side][0].label);
+        else
+            snprintf(s->team_label[side], sizeof s->team_label[side], "%s", s_test(k_team[side] == TEAM_ENEMY ? 9 : 10));
+    }
     s->stage = g.stage;
     s->map = resolve_map(g.stage);
     s->time_limit = (float)g.test_time;
     s->map_size = k_size[g.map_size];
     s->barricade = g.barricade;
-    SDL_Log("[battle-menu] Test Program: %s vs %s on stage %d (map %02d), %d s", s->oke_label[0],
-            s->oke_label[1], s->stage, s->map, g.test_time);
+    SDL_Log("[battle-menu] Test Program: %s (%d) vs %s (%d) on stage %d (map %02d), %d s", s->team_label[0],
+            s->count[0], s->team_label[1], s->count[1], s->stage, s->map, g.test_time);
 }
 
+/* The arena: your team card's members on their formation spots, against the
+ * opponent's OKEs (CBattleSettingInfo: the count at +4, the records at +0x14 + 0x40 n,
+ * GetEnemyOke FUN_08886384, and their spots at +0xD4 + 4 n). */
 static void build_arena_battle(void)
 {
     BattleSetup *s = &g.setup;
     memset(s, 0, sizeof *s);
-    setup_card(s, 0, g.arena_card);
-    s->oke_card[1] = -1;
-    const char *oke = arena_oke(g.opponent, 0);
-    snprintf(s->oke_path[1], sizeof s->oke_path[1], "%s", oke ? oke : "");
+    for (int m = 0; m < TEAM_MEMBERS; m++) {
+        int card = savedata_team_member(g.arena_team, m);
+        if (card >= 0)
+            setup_card(s, 0, s->count[0], card, savedata_team_spot(g.arena_team, m));
+    }
+    savedata_team_name(g.arena_team, s->team_label[0], sizeof s->team_label[0]);
     const char *name = arena_name(g.opponent);
-    snprintf(s->oke_label[1], sizeof s->oke_label[1], "%s", name ? name : "?");
+    snprintf(s->team_label[1], sizeof s->team_label[1], "%s", name ? name : "?");
+    int n = SDL_clamp(arena_word(g.opponent, 4, 1), 1, SETUP_TEAM_MAX);
+    for (int m = 0; m < n; m++) {
+        BattleOke *o = &s->oke[1][s->count[1]];
+        const char *oke = arena_oke(g.opponent, m);
+        if (!oke || !*oke)
+            continue;
+        o->card = -1;
+        snprintf(o->path, sizeof o->path, "%s", oke);
+        if (n > 1)
+            snprintf(o->label, sizeof o->label, "%.40s %c", name ? name : "?", '1' + m);
+        else
+            snprintf(o->label, sizeof o->label, "%.40s", name ? name : "?");
+        int spot = arena_word(g.opponent, 0xD4u + 4u * (uint32_t)m, (uint32_t)-1);
+        o->spot = spot >= 0 && spot < 9 ? spot : -1;
+        s->count[1]++;
+    }
     s->stage = arena_word(g.opponent, 0, 75);
     s->map = resolve_map(s->stage);
     float t = arena_float(g.opponent, 0x114); /* -> CBattleParam +8 (FUN_0887e2f8: 30-300) */
@@ -368,8 +410,8 @@ static void build_arena_battle(void)
     s->map_size = 540.0f;
     s->barricade = 1;
     s->arena = true;
-    SDL_Log("[battle-menu] Battle Arena: %s vs %s (%d OKE, the leader fights) on stage %d (map %02d), %.0f s",
-            s->oke_label[0], s->oke_label[1], arena_word(g.opponent, 4, 1), s->stage, s->map, s->time_limit);
+    SDL_Log("[battle-menu] Battle Arena: %s (%d) vs %s (%d) on stage %d (map %02d), %.0f s", s->team_label[0],
+            s->count[0], s->team_label[1], s->count[1], s->stage, s->map, s->time_limit);
 }
 
 /* ---- per-screen input ---- */
@@ -388,6 +430,9 @@ static int update_mode(void)
             ui_menu_open(&g.select);
         } else if (it->id == 5) {
             open_save_ask();
+        } else if (it->id == 2) { /* eTOP_MENU_TYPE 1: CTeamFormationFlow */
+            team_menu_open();
+            push(SCR_TEAMFORM);
         } else {
             SDL_Log("[battle-menu] \"%s\" chosen: that flow isn't ported", it->text ? it->text : "?");
             g.message = it->text;
@@ -470,9 +515,9 @@ static int update_test(void)
             ui_menu_open(&g.field);
             break;
         case 5: /* Start Test: the checks of procPopUiSynchronizerMode, then the question */
-            if (g.team[TEAM_ENEMY] < 0)
+            if (g.team[TEAM_ENEMY][0] < 0)
                 g.message = s_test(84);
-            else if (g.team[TEAM_FRIEND] < 0)
+            else if (g.team[TEAM_FRIEND][0] < 0)
                 g.message = s_test(85);
             else
                 open_ask(false);
@@ -498,18 +543,41 @@ static int update_test(void)
     return 1;
 }
 
+static int team_count(int side)
+{
+    int n = 0;
+    while (n < SETUP_TEAM_MAX && g.team[side][n] >= 0)
+        n++;
+    return n;
+}
+
+/* Select OKE to Test: two team windows of three slots. The slots fill in order (the
+ * game refuses a later member before the earlier ones, string 38), so the cursor
+ * goes no further than the first empty one. */
 static int update_test_team(void)
 {
+    int *team = g.team[g.team_side];
+    int last = SDL_min(team_count(g.team_side), SETUP_TEAM_MAX - 1);
     if (pad_pressed(PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) {
         g.team_side ^= 1; /* string 47: "Change Team" */
+        g.team_slot = SDL_min(g.team_slot, SDL_min(team_count(g.team_side), SETUP_TEAM_MAX - 1));
+        g.message = NULL;
+    } else if (pad_repeat(PSP_CTRL_UP)) {
+        g.team_slot = g.team_slot > 0 ? g.team_slot - 1 : last;
+        g.message = NULL;
+    } else if (pad_repeat(PSP_CTRL_DOWN)) {
+        g.team_slot = g.team_slot < last ? g.team_slot + 1 : 0;
         g.message = NULL;
     } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
-        g.card_for = SCR_TEST_TEAM;
-        int cur = g.team[g.team_side];
+        int cur = team[g.team_slot];
         g.card_cursor = cur >= 0 ? cur : first_card();
         push(SCR_CARDS);
-    } else if (pad_pressed(PSP_CTRL_SQUARE) && g.team[g.team_side] >= 0) {
-        g.team[g.team_side] = -1; /* string 48: "Unregister" */
+    } else if (pad_pressed(PSP_CTRL_SQUARE) && team[g.team_slot] >= 0) {
+        /* string 48: "Unregister"; the members after it move up */
+        for (int m = g.team_slot; m < SETUP_TEAM_MAX - 1; m++)
+            team[m] = team[m + 1];
+        team[SETUP_TEAM_MAX - 1] = -1;
+        g.team_slot = SDL_min(g.team_slot, SDL_min(team_count(g.team_side), SETUP_TEAM_MAX - 1));
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         pop();
     }
@@ -539,12 +607,9 @@ static int update_cards(void)
         g.card_scroll = g.card_cursor - CARD_ROWS + 1;
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         if (!card_used(g.card_cursor)) {
-            g.message = g.card_for == SCR_ARENA ? s_arena(49) : s_test(44);
+            g.message = s_test(44);
         } else {
-            if (g.card_for == SCR_ARENA)
-                g.arena_card = g.card_cursor;
-            else
-                g.team[g.team_side] = g.card_cursor;
+            g.team[g.team_side][g.team_slot] = g.card_cursor;
             refresh_values();
             pop();
         }
@@ -619,13 +684,12 @@ static int update_arena(void)
         case 0:
             push(SCR_OPPONENTS);
             break;
-        case 1: /* the game lists the Team Formation teams; the port takes one card */
-            g.card_for = SCR_ARENA;
-            g.card_cursor = g.arena_card >= 0 ? g.arena_card : first_card();
-            push(SCR_CARDS);
+        case 1: /* the Team Formation teams */
+            g.team_cursor = g.arena_team >= 0 ? g.arena_team : SDL_max(team_menu_selected(), 0);
+            push(SCR_TEAMS);
             break;
         default:
-            if (g.arena_card < 0)
+            if (g.arena_team < 0 || savedata_team_count(g.arena_team) == 0)
                 g.message = s_arena(48);
             else
                 open_ask(true);
@@ -634,6 +698,39 @@ static int update_arena(void)
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         pop();
         ui_menu_open(&g.select);
+    }
+    return 1;
+}
+
+#define TEAM_ROWS 8
+
+/* The arena's Select Team: the 16 team cards. A team must be the player's (status
+ * 1) and have an OKE registered (team strings 0x1F and 0x49). */
+static int update_teams(void)
+{
+    if (pad_repeat(PSP_CTRL_UP)) {
+        g.team_cursor = g.team_cursor > 0 ? g.team_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? SAVE_TEAMS - 1 : 0;
+        g.message = NULL;
+    } else if (pad_repeat(PSP_CTRL_DOWN)) {
+        g.team_cursor = g.team_cursor < SAVE_TEAMS - 1 ? g.team_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.team_cursor;
+        g.message = NULL;
+    }
+    if (g.team_cursor < g.team_scroll)
+        g.team_scroll = g.team_cursor;
+    if (g.team_cursor >= g.team_scroll + TEAM_ROWS)
+        g.team_scroll = g.team_cursor - TEAM_ROWS + 1;
+    if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        int status = savedata_team_status(g.team_cursor);
+        if (status != 1)
+            g.message = status == 0 ? s_arena(37) : team_string(0x1F);
+        else if (savedata_team_count(g.team_cursor) == 0)
+            g.message = team_string(0x49);
+        else {
+            g.arena_team = g.team_cursor;
+            pop();
+        }
+    } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        pop();
     }
     return 1;
 }
@@ -721,6 +818,13 @@ int battle_menu_update(float dt)
     case SCR_ARENA: r = update_arena(); break;
     case SCR_OPPONENTS: r = update_opponents(); break;
     case SCR_ASK: r = update_ask(dt); break;
+    case SCR_TEAMS: r = update_teams(); break;
+    case SCR_TEAMFORM:
+        if (!team_menu_update(dt)) {
+            pop();
+            ui_menu_open(&g.mode);
+        }
+        break;
     }
     for (int i = 0; i < g.depth - 1; i++) { /* only the top menu takes input */
         UiMenu *under = menu_of(g.stack[i]);
@@ -767,6 +871,7 @@ static const char *help_text(void)
     case SCR_CARDS: return s_test(67);
     case SCR_STAGES: return s_test(68);
     case SCR_OPPONENTS: return s_arena(45);
+    case SCR_TEAMS: return team_string(0x41);
     default: return NULL;
     }
 }
@@ -774,20 +879,25 @@ static const char *help_text(void)
 static void draw_team_box(int x, int y, int side, bool selected)
 {
     Picture *frame = ui_part(PART_BF_SWND4);
-    ui_frame(frame, x, y, 150, 50, 8, 1.0f);
-    if (selected)
-        ui_frame(ui_part(PART_BF_CUR0), x - 2, y - 2, 154, 54, 8, ui_pulse(SDL_GetTicks() / 1000.0f));
-    ui_text(s_test(side == TEAM_ENEMY ? 9 : 10), style_dark(), x + 10, y + 6, 1.0f);
-    int card = g.team[side];
-    if (card < 0) {
+    ui_frame(frame, x, y, 160, 74, 8, 1.0f);
+    ui_text(s_test(side == TEAM_ENEMY ? 9 : 10), style_dark(), x + 10, y + 5, 1.0f);
+    TextStyle small = text_style(0, 5, 10, 10, 0, 4, 0xFF303030, 0);
+    bool empty = g.team[side][0] < 0;
+    if (empty && !selected) {
         Picture *none = ui_part(PART_BF_NOENTRY0);
         if (none)
-            picture_draw_ex(none, x + 50, y + 20, 0, 50, 26, 0, 0, picture_width(none), picture_height(none),
+            picture_draw_ex(none, x + 55, y + 28, 0, 50, 26, 0, 0, picture_width(none), picture_height(none),
                             BLEND_ALPHA, 0xFFFFFFFF, 0, 0, 0, 0);
-    } else {
-        char label[48];
-        card_label(card, label, sizeof label);
-        ui_text(label, style_dark(), x + 14, y + 26, 1.0f);
+        return;
+    }
+    for (int m = 0; m < SETUP_TEAM_MAX; m++) {
+        int ry = y + 22 + m * 16;
+        if (selected && m == g.team_slot)
+            ui_frame(ui_part(PART_BF_CUR0), x + 4, ry - 2, 152, 16, 6, ui_pulse(SDL_GetTicks() / 1000.0f));
+        char label[48] = "-";
+        if (g.team[side][m] >= 0)
+            card_label(g.team[side][m], label, sizeof label);
+        ui_text(label, &small, x + 12, ry, 1.0f);
     }
 }
 
@@ -825,9 +935,10 @@ static void draw_test_side(void)
         draw_stage_panel(330, 120, st, NULL);
         return;
     }
-    draw_team_box(310, 30, TEAM_ENEMY, top() == SCR_TEST_TEAM && g.team_side == TEAM_ENEMY);
-    draw_team_box(310, 84, TEAM_FRIEND, top() == SCR_TEST_TEAM && g.team_side == TEAM_FRIEND);
-    draw_stage_panel(326, 142, g.stage, NULL);
+    draw_team_box(306, 26, TEAM_ENEMY, top() == SCR_TEST_TEAM && g.team_side == TEAM_ENEMY);
+    draw_team_box(306, 102, TEAM_FRIEND, top() == SCR_TEST_TEAM && g.team_side == TEAM_FRIEND);
+    if (top() != SCR_TEST_TEAM && top() != SCR_CARDS)
+        draw_stage_panel(326, 186, g.stage, NULL);
 }
 
 static void draw_list_window(int x, int y, int w, int rows, int first, int count, int cursor,
@@ -866,8 +977,8 @@ static void draw_opponent_info(int x, int y)
     char line[64];
     snprintf(line, sizeof line, "%s  %s", name ? name : "?", s_arena(22 + arena_word(g.opponent, 4, 1)));
     ui_text(line, style_dark(), x + 14, y + 24, 1.0f);
-    if (g.arena_card >= 0) {
-        card_label(g.arena_card, line, sizeof line);
+    if (g.arena_team >= 0) {
+        team_label(g.arena_team, line, sizeof line);
         ui_text(line, style_dark(), x + 14, y + 44, 1.0f);
     } else {
         TextStyle small = text_style(0, 5, 10, 10, 0, 0, 0xFF303030, 0);
@@ -901,8 +1012,8 @@ static void draw_screen(ScreenId s, bool is_top)
     case SCR_TEST_TEAM:
         break; /* drawn by SCR_TEST's side panel with its cursor */
     case SCR_CARDS:
-        draw_list_window(150, 30, 150, CARD_ROWS, g.card_scroll, CARD_COUNT, g.card_cursor, card_label,
-                         g.card_for == SCR_ARENA ? s_arena(4) : s_test(g.team_side == TEAM_ENEMY ? 9 : 10));
+        draw_list_window(140, 30, 160, CARD_ROWS, g.card_scroll, CARD_COUNT, g.card_cursor, card_label,
+                         s_test(g.team_side == TEAM_ENEMY ? 9 : 10));
         break;
     case SCR_FIELD:
         ui_menu_draw(&g.field);
@@ -923,11 +1034,20 @@ static void draw_screen(ScreenId s, bool is_top)
     case SCR_ASK:
         ui_ask_draw(&g.ask);
         break;
+    case SCR_TEAMS:
+        draw_list_window(130, 30, 170, TEAM_ROWS, g.team_scroll, SAVE_TEAMS, g.team_cursor, team_label, s_arena(4));
+        break;
+    case SCR_TEAMFORM:
+        break; /* drawn on its own */
     }
 }
 
 void battle_menu_draw(void)
 {
+    if (top() == SCR_TEAMFORM) {
+        team_menu_draw();
+        return;
+    }
     sceGuEnable(GU_BLEND);
     Picture *back = ui_part(PART_BF_BACK);
     if (back)

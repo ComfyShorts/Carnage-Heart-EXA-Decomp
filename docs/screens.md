@@ -57,13 +57,45 @@ over to the scene `FUN_0882fba4` (mode 4 of `FUN_088d3d80`), which runs
 |---|---|---|---|
 | Phase 9 question | `FUN_088d4c84` / `FUN_088d5eb8` | Text (design string 0x11, "Yes" 5), circle on Yes goes on, No or cross stays; skipped when the system data's `+0x74` (`FUN_0889c400`, Story Mode completed) is set | Dialog layout; "No" comes from `CBattleTestString` 32 (the dialog class `FUN_088c0ba0` isn't in the export) |
 | Phase 7 player name | `FUN_088d497c` / `FUN_088d5a70` (sceUtility OSK) | | Skipped: no on-screen keyboard; the name isn't taken |
-| Battle Mode top menu | `CBattleModeMngr::Initialize` `FUN_08838aa0`, help `FUN_088387a4` | Items from `0x08c76be0` (1-5), buttons `bf_scmb2-6` / `bf_scml2-6` (parts 0x87 + id, 0x8D + id), text id + 4 and help cursor + 0x10 from the table at `0x08c7a6b0`, menu at (-8, 48), 32 px pitch | Battle opens its flow. System Menu saves: the game opens `CSystemMngr` with its own menu (save, load, settings; `FUN_088b6cb0`), the port asks string 56 ("Save your progress?") and writes the Battle Data through `CSaveMngr`'s save path, to the file it was loaded from or `NEWDATA.CHE`. OKE Configuration, Team Formation and Shop log a line. The picture on the right (`bf_ttl(id+1)_pic`) and its place are the port's reading; the 3D scene behind the menus isn't drawn (`bf_back` instead). The game's "back to the title?" question on cross isn't ported |
+| Battle Mode top menu | `CBattleModeMngr::Initialize` `FUN_08838aa0`, help `FUN_088387a4` | Items from `0x08c76be0` (1-5), buttons `bf_scmb2-6` / `bf_scml2-6` (parts 0x87 + id, 0x8D + id), text id + 4 and help cursor + 0x10 from the table at `0x08c7a6b0`, menu at (-8, 48), 32 px pitch | Battle opens its flow. System Menu saves: the game opens `CSystemMngr` with its own menu (save, load, settings; `FUN_088b6cb0`), the port asks string 56 ("Save your progress?") and writes the Battle Data through `CSaveMngr`'s save path, to the file it was loaded from or `NEWDATA.CHE`. Team Formation opens its screen (below). OKE Configuration and Shop log a line. The picture on the right (`bf_ttl(id+1)_pic`) and its place are the port's reading; the 3D scene behind the menus isn't drawn (`bf_back` instead). The game's "back to the title?" question on cross isn't ported |
 | Battle (select) | `CBattleSelectMngr::setupTopMenu` `FUN_088838f8`, help `FUN_088832a0` | Test Program, Battle Arena, Matchmaking (Mission is left out in game mode 2), strings from `0x08c79410` | Matchmaking (`CMatchMakeFlow`, network) logs a line |
 | Test Program | `CBattleTestMngr` `FUN_08827c98`, `setupTopMenu` `FUN_08828db8` | Six items, text id + 3 and help id + 0x39 from `CBattleTestString` (`0x08c6ad50`); Start Test checks for an enemy and a friend (strings 84, 85) and asks "Start battle?" (33, Yes 31 / No 32) | Damage Settings and Conditions log a line. Test Time steps by 10 s with left/right (the game takes a typed number) within `CBattleParam`'s 30-300 s; it starts at the param's default of 30 s |
-| Select OKE to Test | team windows `CTeamCardListWnd`, cards `COkeCardSelectMngr` | Enemy / Friend, L/R or left/right changes team, square unregisters, a blank card gives string 44. The 32 cards are the save's (`CCarnageHeart + 0x3AE80`): blank for a new game (`CCarnageHeart::Reinitialize` `FUN_0889f260`), else the loaded Battle Data's; a card is in use when its first word is set. After them, the two simulation OKEs the game loads on every start (`preset/oke_t01_1.bin`, `_2.bin`, not saved) | One OKE per team (the battle is one against one), so no formation; card labels (number and the card's name at `+4`, "No Name" without one, "Simulation OKE 1"), the list opening on the first used card, and the windows' layout are the port's |
+| Select OKE to Test | team windows `CTeamCardListWnd`, cards `COkeCardSelectMngr` | Enemy / Friend, each up to three OKEs (`CTeamDataBase2Use`, two teams at `CCarnageHeart + 0x40C80`); L/R or left/right changes team, up/down the slot, square unregisters, a blank card gives string 44. Members stand on the free formation spots in the game's order (`FUN_08ac8eec`). The 32 cards are the save's (`CCarnageHeart + 0x3AE80`): blank for a new game (`CCarnageHeart::Reinitialize` `FUN_0889f260`), else the loaded Battle Data's; a card is in use when its first word is set. After them, the two simulation OKEs the game loads on every start (`preset/oke_t01_1.bin`, `_2.bin`, not saved) | The slots fill in order (the game refuses a later member first with string 38; the port's cursor stops at the first empty slot, and unregistering moves the later members up); the Formation key (triangle) isn't ported; card labels (number and the card's name at `+4`, "No Name" without one, "Simulation OKE 1"), the list opening on the first used card, and the windows' layout are the port's |
 | Map | `setupFieldMenu` `FUN_088291cc`, `CStageSelectWnd` | Select Map lists stages 0-25 in the game's order (`0x08c3902c`) with their names (`0x08c852f8`) and previews (`0x08c38fc4` → `bf_mpiNN`), "Select Randomly" picks a map at random; Map Size (180/360/540 m) and Barricade (strings 14-19), help 0x44-0x46; the default stage is 2 (`FUN_08824084`), the default size 540 m (`FUN_0887e190`) | One stage instead of the game's several (`+0x6c4` flags); locked stages aren't checked; size and barricade are kept but the simulation doesn't use them |
-| Battle Arena | `CBattleArenaMngr` `FUN_0880a310` / `setupTopMenu` `FUN_0880d424` | Select Opponent, Select Team, Start Battle Arena, strings from `0x08c69338`; the 100 opponents (names `0x08c518f0`, records of 0x3C0 bytes at `0x08c51c10`, read as `FUN_08807dbc` does): stage (`+0`), OKE count (`+4`), OKE files (`+0x14`, 0x40 each), time limit (`+0x114`, → `CBattleParam +8`); "Start Battle Arena?" (36) | Select Team picks one card instead of a Team Formation team (a new game has no teams and the game would refuse, string 26); all 100 opponents are offered (unlocks and Victory Points aren't read); the opponent's leader (its first OKE) fights alone; the rules (banned parts) aren't checked |
+| Battle Arena | `CBattleArenaMngr` `FUN_0880a310` / `setupTopMenu` `FUN_0880d424` | Select Opponent, Select Team, Start Battle Arena, strings from `0x08c69338`; the 100 opponents (names `0x08c518f0`, records of 0x3C0 bytes at `0x08c51c10`, read as `FUN_08807dbc` does): stage (`+0`), OKE count (`+4`), OKE files (`+0x14`, 0x40 each, `GetEnemyOke` `FUN_08886384`), their formation spots (`+0xD4`, a word each), time limit (`+0x114`, → `CBattleParam +8`); "Start Battle Arena?" (36). Select Team lists the 16 team cards: a team must be the player's (status 1; others give team string 0x1F, an unused one "Invalid team.", 37) and have an OKE (team string 0x49); Start without a team gives string 48. The whole team fights the opponent's whole team, each OKE on its spot | All 100 opponents are offered (unlocks and Victory Points aren't read); the rules (banned parts, the team size limit of string 28, the opponent's own victory condition) aren't checked; the team list's layout is the port's |
+| Team Formation | `CTeamFormationFlow` `FUN_08ac01b8`, `CTeamFormationMngr` (see below) | See below | See below |
 | Battle | `CBattleTestFlow::buildBattle` `FUN_08823774`, `CBattleArenaFlow::CImpl::buildBattle` `FUN_088098e0` | The battle starts with the chosen OKEs on the chosen stage's map (`CPresetStage` entries at `0x08c21854` (0x14 bytes each), field 0 = `land/mapNN`) and time limit. After it, circle returns to the screen it was started from | See `docs/battle.md` |
+
+### Team Formation
+
+`src/game/team_menu.c`, from `CTeamFormationMngr`: `Initialize` `FUN_08ac536c`,
+`setupTopMenu` `FUN_08ac58f0`, and the modes it switches between (enter `FUN_08ac10c0`,
+update `FUN_08ac1344`). Text is `CTeamFormationString` (`FUN_08ac7d54`, the table at
+`0x08c8ba60`).
+
+| Mode | Game | Real | Stand-in |
+|---|---|---|---|
+| 3, top menu | `FUN_08ac5d08` / `FUN_08ac6820` | Select Team, Register Member, Enter Team Name, Emblems, Transfer Team Data (text id + 4, help id + 0x33) on `bf_menb3` / `bf_menl3` / `bf_new00` (parts 10, 0xB, 0x85); the team window at (0xBE, 0x41) shows the selected team; Register Member without a selected team gives string 0x44; cross leaves | Enter Team Name (the on-screen keyboard), Emblems (`CEmblemEditor`) and Transfer Team Data log a line; the title banner (`bf_ttl2`) and the window's contents are the port's layout |
+| 4, Select Team | `FUN_08ac1710` / `FUN_08ac2964`, the list `FUN_08ac0b3c` | The 16 team cards (`FUN_0889cb10`, `CCarnageHeart + 0x3AE80 + 0x3D800`, 0x340 each). Circle on an unused card makes a team (`createTeam` `FUN_08ac42f4` with `FUN_089f38a0`: status 1, the name "Team NN" from `0x08c8ba08`, owner string 0x19, the date, `+0x338` = 1000, three empty members, the default emblem: blank pixels with the palette at `0x08c83db8`) and selects it (`setSelect` `FUN_08ac452c`); installed teams (status 2/3) give string 0x1E. Square asks "Delete this team?" (0x1A) and clears the card | The selection is kept for the session only, as the game does (`CCarnageHeart + 0xD0170` isn't saved); list layout |
+| 5, Register Member | `FUN_08ac5edc` / `FUN_08ac2ba4` | The team's three slots (First/Second/Third OKE, 0x16-0x18), circle picks a card, square asks "Unregister OKE?" (0x1D, `FUN_08ac854c`), triangle moves the member (Formation) | The window's layout (the game's is at (0xCD, 0xC)) |
+| 6, Select OKE Card | `FUN_08ac188c` / `FUN_08ac2dcc`, `CTeamMemberCardListWnd::regist` `FUN_08ac8144` | The 32 cards; a blank card gives string 0x24; a new member takes the first free spot in the order at `0x08c3e228` (`FUN_08ac8eec`) | The weight, manual-OKE and team-count rules (`FUN_08891fc8`, strings 0x20-0x23, 0x25) aren't checked |
+| 8, Formation | mode 8 (`+0x74`, `+0x68`) | Spots are 0-8 of the grid at `0x08bd7d10` (`CFormationDataBase +0x24`), which the battle uses | The port's grid: the member moves with the d-pad (front row at the top, the team's left on the left), a taken spot is swapped |
+
+The team card (`CTeamDataBase`, constructor `FUN_08ad321c`): `+0` status (0 unused, 1
+the player's, 2/3 installed), `+0x10` the emblem (32 x 32 4-bit pixels and 16 palette
+words, drawn from the save), `+0x250` name, `+0x269` owner, `+0x290` three
+`CFormationDataBase` of 0x30 (two vectors, `+0x20` card, `+0x24` spot), `+0x320` the
+date, `+0x330` / `+0x334` counters, `+0x338` 1000. They're read and written in
+`savedata.c` and saved with the Battle Data.
+
+```sh
+build/pc-m32/chexa-pc --disc DIR --saves orig/teamtest --make-test-save TESTDATA --frames 1
+C="--press 70 down --press 90 circle --press 110 circle"   # Continue -> top menu
+build/pc-m32/chexa-pc --disc DIR --saves orig/teamtest --startup $C --press 190 up \
+    --press 210 circle --shot 240 orig/tf_top.png --press 250 circle \
+    --shot 280 orig/tf_teams.png --press 290 circle --press 310 down --press 330 circle \
+    --shot 360 orig/tf_members.png --frames 370
+```
 
 Shared pieces (`ui.c`): `CTopMenuWnd` (update `FUN_08ad7248`, input `FUN_08ad75ec`, draw
 `FUN_08ad77ec`) with its `CBtnWnd` buttons (update `FUN_08896aec`, draw `FUN_08897248`,
@@ -142,8 +174,10 @@ build/pc-m32/chexa-pc --disc DIR --startup --press 70 down --press 90 circle \
 ```
 
 `--make-test-save [NAME]` builds a new game's blocks, puts the two simulation OKEs and
-the leaders of the first four arena teams (their records read from the pack, named
-after the team) in cards 1-6, sets the player name "TESTER" and saves it as
+the leaders of the first ten arena teams (their records read from the pack, named
+after the team) in cards 1-12, makes two team cards as `createTeam` makes them
+("Team 01" with cards 3-5, "Team 02" with cards 1-2; names from `0x08c8ba08`, the
+owner string 0x19, members on spots 4, 3, 5), sets the player name "TESTER" and saves it as
 `NAME.CHE` (default `TESTDATA`) through the same save path. Nothing of it is in the
 repository: it's built from your game files when you run it. `tests/savedata_test.c`
 checks the whole path without the game files.
