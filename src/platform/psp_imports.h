@@ -195,31 +195,61 @@ int32_t sceMp3ReserveMp3Handle(void);
 int32_t sceMp3SetLoopNum(void);
 
 /* video.c: MPEG movie playback */
-int32_t sceMpegAtracDecode(void);
-int32_t sceMpegAvcDecode(void);
-int32_t sceMpegAvcDecodeFlush(void);
-int32_t sceMpegAvcDecodeStop(void);
-int32_t sceMpegCreate(void);
-int32_t sceMpegDelete(void);
-int32_t sceMpegFinish(void);
-int32_t sceMpegFlushAllStream(void);
-int32_t sceMpegFreeAvcEsBuf(void);
-int32_t sceMpegGetAtracAu(void);
-int32_t sceMpegGetAvcAu(void);
+/* sceMpeg (src/platform/video.c). Handles are host pointers; the ring buffer and the
+ * access unit keep the library's field order. */
+typedef void *SceMpeg;
+typedef void *SceMpegStream;
+typedef int32_t (*SceMpegRingbufferCB)(void *data, int32_t packets, void *arg);
+typedef struct SceMpegRingbuffer {
+    int32_t packets;      /* capacity, in 2048-byte packets */
+    int32_t read;         /* next packet the demuxer takes */
+    int32_t write;        /* next packet the callback fills */
+    int32_t free;         /* packets the callback may fill */
+    int32_t packet_size;  /* 2048 */
+    void *data;
+    SceMpegRingbufferCB callback;
+    void *cb_arg;
+    int32_t eof;          /* port: the callback returned fewer packets than asked */
+    int32_t unk;
+    void *mpeg;
+} SceMpegRingbuffer;
+typedef struct SceMpegAu {
+    uint32_t pts_msb, pts; /* 90 kHz */
+    uint32_t dts_msb, dts;
+    uint32_t es_buffer;
+    uint32_t au_size;
+} SceMpegAu;
+#define SCE_MPEG_AVC_STREAM 0
+#define SCE_MPEG_ATRAC_STREAM 1
+#define SCE_MPEG_ERR_NO_DATA ((int32_t)0x80618001)
+
 int32_t sceMpegInit(void);
-int32_t sceMpegInitAu(void);
-int32_t sceMpegMallocAvcEsBuf(void);
-int32_t sceMpegQueryAtracEsSize(void);
-int32_t sceMpegQueryMemSize(void);
-int32_t sceMpegQueryStreamOffset(void);
-int32_t sceMpegQueryStreamSize(void);
-int32_t sceMpegRegistStream(void);
-int32_t sceMpegRingbufferAvailableSize(void);
-int32_t sceMpegRingbufferConstruct(void);
-int32_t sceMpegRingbufferDestruct(void);
-int32_t sceMpegRingbufferPut(void);
-int32_t sceMpegRingbufferQueryMemSize(void);
-int32_t sceMpegUnRegistStream(void);
+int32_t sceMpegFinish(void);
+int32_t sceMpegRingbufferQueryMemSize(int32_t packets);
+int32_t sceMpegRingbufferConstruct(SceMpegRingbuffer *rb, int32_t packets, void *data, int32_t size,
+                                   SceMpegRingbufferCB cb, void *arg);
+int32_t sceMpegRingbufferDestruct(SceMpegRingbuffer *rb);
+int32_t sceMpegRingbufferPut(SceMpegRingbuffer *rb, int32_t packets, int32_t available);
+int32_t sceMpegRingbufferAvailableSize(SceMpegRingbuffer *rb);
+int32_t sceMpegQueryMemSize(int32_t mode);
+int32_t sceMpegCreate(SceMpeg *mpeg, void *data, int32_t size, SceMpegRingbuffer *rb, int32_t frame_width,
+                      int32_t mode, int32_t ddr_top);
+int32_t sceMpegDelete(SceMpeg *mpeg);
+int32_t sceMpegQueryStreamOffset(SceMpeg *mpeg, const void *header, int32_t *offset);
+int32_t sceMpegQueryStreamSize(const void *header, int32_t *size);
+SceMpegStream sceMpegRegistStream(SceMpeg *mpeg, int32_t type, int32_t channel);
+int32_t sceMpegUnRegistStream(SceMpeg *mpeg, SceMpegStream stream);
+void *sceMpegMallocAvcEsBuf(SceMpeg *mpeg);
+int32_t sceMpegFreeAvcEsBuf(SceMpeg *mpeg, void *es);
+int32_t sceMpegQueryAtracEsSize(SceMpeg *mpeg, int32_t *es_size, int32_t *out_size);
+int32_t sceMpegInitAu(SceMpeg *mpeg, void *es, SceMpegAu *au);
+int32_t sceMpegGetAvcAu(SceMpeg *mpeg, SceMpegStream stream, SceMpegAu *au, int32_t *attr);
+int32_t sceMpegGetAtracAu(SceMpeg *mpeg, SceMpegStream stream, SceMpegAu *au, int32_t *attr);
+int32_t sceMpegAvcDecode(SceMpeg *mpeg, SceMpegAu *au, int32_t frame_width, void **buffer, int32_t *init);
+int32_t sceMpegAvcDecodeStop(SceMpeg *mpeg, int32_t frame_width, void **buffer, int32_t *status);
+int32_t sceMpegAvcDecodeFlush(SceMpeg *mpeg);
+int32_t sceMpegAtracDecode(SceMpeg *mpeg, SceMpegAu *au, void *buffer, int32_t init);
+int32_t sceMpegFlushAllStream(SceMpeg *mpeg);
 
 /* net.c: Ad hoc networking and WLAN */
 int32_t sceNetEtherNtostr(void);

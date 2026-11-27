@@ -18,6 +18,7 @@
 #include "pad.h"
 #include "sound.h"
 #include "music.h"
+#include "movie.h"
 #include "picture.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
@@ -558,8 +559,8 @@ static void mngr_update(EntranceMngr *m, float dt)
         mngr_pop_phase(m);
         mngr_open(m, PHASE_MOVIE, 0);
         break;
-    case PHASE_MOVIE: /* FUN_088d5c20 */
-        SDL_Log("[entrance] opening movie movie/che_op.pmf skipped (no MPEG player yet)");
+    case PHASE_MOVIE: /* FUN_088d5c20: plays it here, holding the game thread */
+        movie_play("movie/che_op.pmf", MOVIE_SKIP_ANY);
         mngr_pop_phase(m);
         mngr_open(m, PHASE_IDLE, 0);
         break;

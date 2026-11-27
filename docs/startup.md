@@ -116,5 +116,23 @@ display imports in `ge.c` and `display.c`.
 - Pointer fix-ups in the pack index and file sets are replaced by offsets plus bounds checks.
 - The file layer's retry loops, which wait forever for the disc on the PSP, give up after
   30 tries.
-- `sceUtilityLoadModule` succeeds without loading anything; the codecs will be part of the port.
+- `sceUtilityLoadModule` succeeds without loading anything. The codecs are part of the port:
+  `sceAtrac3plus` and `sceMpeg` (module 0x303, `PSP_MODULE_AV_MPEGBASE`) decode with the
+  system libavcodec.
+
+## Before the title: the logo and the opening movie
+
+After the start-up path, the root screen opens the entrance (`CEntranceMngr`,
+`src/game/entrance.c`). Its first update (`FUN_088d502c`) opens phase 3, the logo, once
+per run:
+
+| Phase | Game | What happens | Port |
+|---|---|---|---|
+| 3 | `FUN_088d4a10`, `FUN_088d5bec` | One update: the draw puts `title/logo_a.gim` (ARTDINK) at (112, 72) under an opaque black window, so the frame is black; then phase 4 | The same |
+| 4 | `FUN_088d4ae0`, `FUN_088d5c20` | The display off, CRender reset, then the movie player plays `movie/che_op.pmf` (`FUN_08b1d0ec`) on the game thread until it ends or a button stops it; then phase 0 | `movie_play` (`src/game/movie.c`) on the `sceMpeg` imports (`src/platform/video.c`); `--skip-movie` leaves it out |
+| 0 → 5 | `FUN_088d5088`, `FUN_088d4624` | The title and the top menu, with the title music | The same |
+
+The movie (39.6 s) opens on black, then the Natsume logo, the CG intro and the title
+card the menu then appears over. Its format, the decoder it needs and the player's
+threads are in [screens.md](screens.md#opening-movie).
 - When `main` returns, `user_main` ends the thread instead of calling newlib `exit`.
