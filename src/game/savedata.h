@@ -100,6 +100,52 @@ void savedata_team_delete(int team);
 /* Registers card (or -1 to unregister) as member m, on formation spot `spot`. */
 void savedata_team_set_member(int team, int m, int card, int spot);
 
+/* ---- what the player owns (shared block; all saved with the Battle Data) ----
+ * The parts stock (CCarnageHeart + 0x3AE80 + 0x47BBC, FUN_0889d288): a word per item,
+ * 0 not offered, 1 for sale in the Shop, 2 owned (the OKE Configuration lists show
+ * owned parts only). Groups and their words (FUN_08918bcc): */
+enum {
+    STOCK_BODY,      /* +0x000, 0x25 */
+    STOCK_CPU,       /* +0x094, 8 */
+    STOCK_ARMOR,     /* +0x0B4, 12 */
+    STOCK_ADD_ARMOR, /* +0x0E4, 8 */
+    STOCK_WEAPON,    /* +0x104, 0x3C */
+    STOCK_OPTION,    /* +0x1F4, 11 */
+    STOCK_CHIP,      /* +0x220, 0x36 */
+    STOCK_OTHER,     /* +0x2F8, 0x1F: the Shop's "Other" items (0x08c8a570) */
+    STOCK_GROUPS,
+};
+int savedata_stock(int group, int id);
+/* FUN_08919354: then FUN_08919694 keeps the "none" entries (no additional armour,
+ * no weapon, no option, the first chip) owned. */
+void savedata_set_stock(int group, int id, int value);
+
+/* Victory Points (+0x48394, FUN_0889d2f8): add (FUN_0889d308, capped at 99999) and
+ * spend (FUN_0889d338, floored at 0). */
+int savedata_money(void);
+void savedata_add_money(int amount);
+void savedata_spend_money(int amount);
+
+/* CMenuLimitDataBase (+0x479B0, FUN_0889d278): words of 0 / 1 that switch menu items
+ * off and on. Word 6 + n is OKE Configuration's item n (FUN_0895e3c4), word 0x67 + n
+ * the System Menu's (FUN_0895e8d4). */
+#define LIMIT_DESIGN 6
+#define LIMIT_SYSTEM 0x67
+int savedata_menu_limit(int word);
+void savedata_set_menu_limit(int word, int value);
+
+/* CBattleFieldStateDataBase (+0x47F30, FUN_0889d2b8): a word per stage, 1 when its map
+ * can be chosen. FUN_0889ed84: available when 1, never stage 13. */
+#define SAVE_STAGES 0xAF
+int savedata_map_state(int stage);
+void savedata_set_map_state(int stage, int value);
+bool savedata_stage_available(int stage);
+
+/* A new Battle Mode game (FUN_088d3d80 mode 1): the menu limits (FUN_0895de04), the
+ * stock (FUN_08918d5c: everything owned but bodies 14 and 33 and the Other items
+ * 0x14-0x1E, which are for sale) and the first 14 maps (FUN_0882f65c). */
+void savedata_battle_mode_new(void);
+
 /* ---- the sequences ---- */
 
 /* The start-up check (CSystemMngr mode 0x17, CSaveMngr type 4 exec 3). */
@@ -127,7 +173,10 @@ int32_t savedata_result(void);
 int32_t savedata_run(int (*update)(void));
 
 /* --make-test-save: a Battle Data file named `file` whose first cards are shipped
- * preset OKEs (read from the pack at run time). Returns false if it couldn't. */
+ * preset OKEs (read from the pack at run time), on a new Battle Mode game with
+ * TEST_SAVE_MONEY Victory Points and a few parts back on sale to try the Shop with
+ * (see docs/screens.md). Returns false if it couldn't. */
+#define TEST_SAVE_MONEY 5000
 bool savedata_make_test_save(const char *file);
 
 #endif

@@ -20,8 +20,11 @@ new game, or the ones of the Battle Data loaded with Continue, see "Save data" i
 `docs/screens.md`) and the two simulation OKEs. A saved card's record goes to the
 battle as it is in the save, copied when the battle starts, so changes made in OKE
 Configuration (body, CPU, armour, weapons and ammo, options; see `docs/screens.md`) are
-in the next battle. `--make-test-save` writes a save with twelve preset OKEs and two
-teams to try it (the shop, which fills the cards in the game, isn't ported).
+in the next battle. `--make-test-save` writes a save with twelve preset OKEs, two
+teams and 5000 Victory Points to try it. The Shop (`docs/screens.md`) sells the parts
+the save doesn't own yet (on a new Battle Mode game bodies 14 Hades and 33 Nidhogg)
+and maps; what is bought is in OKE Configuration's lists, and so in the next battle,
+and bought maps in the Test Program's map list.
 
 Code: `src/game/battle.c` (screens and drawing), `src/game/battle_sim.c` (the
 simulation), `src/game/gmo.c`, `okemodel.c`, `terrain.c` (models and field),
@@ -66,7 +69,7 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Movement modifiers | Stand-in | `FUN_08858c8c` / `FUN_08858d44` scale each command by the OKE's performance (legs, weight); taken as 100%, so every body of a type moves alike. Commands 0x206-0x208 and 0x20a-0x210 (pose speed, waits, altitude, loop mode) are skipped |
 | Poses | Partly | the pose each script's pose command names is drawn straight away; the game blends to it over the command's frames. No blending yet |
 | Weapons on the body | Stand-in | the `PARTS2` defaults; the equipment-dependent part choice isn't read |
-| Map choice | **Real** | the stage picked on the Test Program's map screen, or the arena opponent's stage, through `CPresetStage` (`FUN_08a35844`, table at `0x08c21854`). Map size and barricade are chosen but not simulated (the field stays 720×720) |
+| Map choice | **Real** | the stage picked on the Test Program's map screen (the stages the save opens, map state 1; the Shop sells more), or the arena opponent's stage, through `CPresetStage` (`FUN_08a35844`, table at `0x08c21854`). Map size and barricade are chosen but not simulated (the field stays 720×720) |
 | OKE choice | **Real** | the cards chosen on the Test Program's team windows (up to three a team), the members of the Team Formation team chosen in the arena (the save's `COkeDataBase` records as OKE Configuration left them, or the simulation OKEs from the pack), and all of the arena opponent's OKE files (`+4` count, `+0x14` + 0x40 n) |
 | Teams and spawn positions | **Real** | up to three OKEs a side (`TEAM_SIZE`, `CTeamDataBase`'s three `CFormationDataBase`). Placement as `CBattleScene` `FUN_08869a28` does it: each member's formation spot (`+0x24`: 0-8) is a point of the 3 × 3 grid at `0x08bd7d10` (x ±60 / 0, z -60 / -120 / -180), scaled by map size / 540; the enemy team (the game's team 0) keeps the point and faces the centre, yours takes it mirrored (-x, -z) and turned round. A member without a spot takes the free ones in the order at `0x08c3e228` (4, 3, 5, ...: the middle of the second row, then its sides). Arena opponents' spots come from their record (`+0xD4`). The game's nudge of 16 units away from obstacles near a spot isn't done |
 | End of the battle and the winner | **Real** (partly) | the judge (`FUN_088689c8`) ends the battle once a team has no live OKE (`FUN_0881f908`), or at the time limit. A team with none left loses. Otherwise the winner is chosen by the Test Program's default condition (`CBattleParam +0x14` = 0, "Durability Left %", string 0x4B): the team with the higher average HP %, destroyed OKEs counting 0; equal is a draw. The other conditions (Remaining OKEs, OKEs & Durability, Defeat Leader) and the arena opponents' own conditions aren't chosen yet, and the leader isn't treated specially |
@@ -83,6 +86,8 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Reticle chips and lead | **Real** (mostly) | Start Reticle (`FUN_0883be40`) readies weapon 1-5 (8: broken off, 9: empty slot), 5 puts it away and resets the sight, 6 readies the next usable one. "Current weapon" in the fire chips means the readied one; with none they fail with 0x11. Move Reticle (`FUN_0883c0d4`) sets the sight's goal yaw (0.01°, ±180, relative with b2 = 1) and holds the tracker off for 2 s; it is ignored while firing in mode 2 or 3. Shoot Reticle (`FUN_08848288`) fires at the sight's HUD point (mode 1), Select and Fire at the target itself (mode 2), Firing Direction along its angle (mode 3) (`FUN_0883c298`). The gun rises while the fire control aims, at 2 × body `+0x38` / 100 per second, and drops at once otherwise (`FUN_088509bc`). Once fully raised, with the chip's spread setting 0, 1 or 4 (table `0x08cce2c0` is 0 there), the shot leads: target + its velocity × distance / bullet speed, one pass (`FUN_0883e2c4`). In mode 1 the lead goes into the sight, in mode 2 into the shot. The fire control stays aiming until the weapon is put away |
 | Pitch, muzzle cone, part targeting | Stand-in | pitch isn't simulated (shots have no height), so the reticle's pitch is ignored and the mark's height is a stand-in. Shots leave from the body's centre, not the muzzle (`+0x30` of the slot), and aren't limited to the weapon's aiming cone (`DAT_08cce2d8`, `FUN_08810edc`) or its turret limits. Selecting a target part (weapon mounts) isn't ported. The spread values themselves (table `0x08cce2c0`) aren't applied as scatter |
 | Names, timer | Stand-in | plain text where the game has its top windows: the watched OKE's name, the other team's name, its OKEs left and durability |
+| Parts the player owns | **Real** | the save's parts stock (`+0x47BBC`, 2 = owned): OKE Configuration offers only owned parts, the Shop sells the rest for Victory Points (`+0x48394`); a new Battle Mode game owns all but two bodies (`FUN_08918d5c`) |
+| Victory Points from battles | Missing | the game adds them after battles (`FUN_0889d308`, called from `FUN_08808f98` and `FUN_0881da8c`); the port doesn't yet, so the money only comes from the save |
 | Selection screens | **Real** (partly) | the game's Battle Mode, Battle, Test Program and Battle Arena screens; their stand-ins are listed in `docs/screens.md` |
 
 The tables come from your EBOOT at run time (`--elf`), so nothing is copied into the
@@ -101,7 +106,7 @@ From the entrance code (`FUN_088d5510`, `FUN_088d497c`, `FUN_088d5a70`,
   `FUN_088d3d80` mode 4 makes the scene `FUN_0882fba4`, which runs `CBattleModeFlow`
   (`FUN_088372a0`) and the scene behind it (`FUN_0887459c`, not drawn).
 - `CBattleModeFlow`'s sub-flows (`FUN_08837c64`): 0 `CDesignFlow`, 1
-  `CTeamFormationFlow`, 2 `CBattleSelectFlow` (ported), 3 `CShopFlow`, 4 system.
+  `CTeamFormationFlow`, 2 `CBattleSelectFlow` (ported), 3 `CShopFlow` (ported), 4 system.
   `CBattleSelectFlow`'s (`FUN_08880bc4`): 3 `CBattleTestFlow` (ported), 4
   `CBattleMissionFlow`, 5 `CBattleArenaFlow` (ported), 6 `CMatchMakeFlow`.
 - The battle itself is `CBattleScene` / `CBattleSceneMngr` (file set "battlescene":
@@ -197,4 +202,5 @@ height map dumped from a running game or emulator.
   real game.
 - **Flow**: name entry, the parts of OKE Configuration listed as stand-ins in
   `docs/screens.md` (chip editing, paint, emblems, names, notes, the energy sliders),
-  the shop, missions and matchmaking.
+  the Shop's stand-ins (`docs/screens.md`), Victory Points won in battles, missions and
+  matchmaking.

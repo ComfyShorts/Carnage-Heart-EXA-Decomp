@@ -42,7 +42,7 @@ game is included. It reads the game's files from your own dump at runtime. With
 `CApplication::Init`) and the graphics side of its main loop, drawing through a
 software GE renderer, up to the title screen and its Story Mode / Battle Mode menu.
 Battle Mode leads to the game's Battle Mode screens (OKE Configuration, Team
-Formation, the Test Program, the Battle Arena) and a battle between teams of up to three robots running
+Formation, the Shop, the Test Program, the Battle Arena) and a battle between teams of up to three robots running
 their chip programs. See `docs/startup.md`, `docs/graphics.md`,
 `docs/screens.md` and `docs/battle.md`. Without
 it, it opens a window and runs an empty frame loop. The chip interpreter and pack reader
@@ -75,7 +75,8 @@ writable folder as the memory stick (`ms0:`). Without it the game is told no mem
 stick is inserted. Save data (`sceUtilitySavedata*`) goes in the folder given with
 `--saves DIR`, default `saves/` (gitignored), one directory per save as on a memory
 stick; `--make-test-save` writes a Battle Data save holding twelve of the shipped preset
-OKEs and two teams of them (see "Save data" in `docs/screens.md`). The file and UMD imports are implemented (sync and async open, read,
+OKEs, two teams of them and 5000 Victory Points for the Shop (see "Save data" and
+"Shop" in `docs/screens.md`). The file and UMD imports are implemented (sync and async open, read,
 write, seek, close, directory listing, stat, mkdir, rename). The tests skip themselves
 (exit 77) when the game files aren't found; they default to `$CHEXA_DISC`, then
 `/mnt/c/psp/chexa`.

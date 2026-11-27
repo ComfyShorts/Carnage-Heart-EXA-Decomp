@@ -160,6 +160,126 @@ void savedata_card_name(int card, char *out, size_t n)
     out[len] = 0;
 }
 
+/* ---- stock, money, menu limits, maps ---- */
+
+#define STOCK_BASE 0x47BBC
+#define LIMIT_BASE 0x479B0
+#define MAP_BASE 0x47F30
+#define MONEY 0x48394
+#define LIMIT_WORDS 0x83
+
+static const struct { uint16_t off, count; } k_stock[STOCK_GROUPS] = {
+    {0x000, 0x25}, {0x094, 8}, {0x0B4, 12}, {0x0E4, 8}, {0x104, 0x3C}, {0x1F4, 11}, {0x220, 0x36}, {0x2F8, 0x1F},
+};
+
+static uint8_t *db_bytes(void)
+{
+    return (uint8_t *)&g_save.db;
+}
+
+static uint8_t *stock_word(int group, int id)
+{
+    if (group < 0 || group >= STOCK_GROUPS || id < 0 || id >= k_stock[group].count)
+        return NULL;
+    return db_bytes() + STOCK_BASE + k_stock[group].off + 4 * id;
+}
+
+int savedata_stock(int group, int id)
+{
+    uint8_t *w = stock_word(group, id);
+    return w ? (int)get_word(w) : 0;
+}
+
+/* FUN_08919694 */
+static void stock_keep_none(void)
+{
+    put_word(stock_word(STOCK_ADD_ARMOR, 0), 2);
+    put_word(stock_word(STOCK_WEAPON, 0), 2);
+    put_word(stock_word(STOCK_OPTION, 0), 2);
+    put_word(stock_word(STOCK_CHIP, 0), 2);
+}
+
+void savedata_set_stock(int group, int id, int value)
+{
+    uint8_t *w = stock_word(group, id);
+    if (!w)
+        return;
+    put_word(w, (uint32_t)value);
+    stock_keep_none();
+}
+
+int savedata_money(void)
+{
+    return (int)get_word(db_bytes() + MONEY);
+}
+
+void savedata_add_money(int amount)
+{
+    int v = savedata_money() + amount;
+    put_word(db_bytes() + MONEY, (uint32_t)(v < 100000 ? v : 99999));
+}
+
+void savedata_spend_money(int amount)
+{
+    int v = savedata_money() - amount;
+    put_word(db_bytes() + MONEY, (uint32_t)(v >= 0 ? v : 0));
+}
+
+int savedata_menu_limit(int word)
+{
+    return word >= 0 && word < LIMIT_WORDS ? (int)get_word(db_bytes() + LIMIT_BASE + 4 * word) : 0;
+}
+
+void savedata_set_menu_limit(int word, int value)
+{
+    if (word >= 0 && word < LIMIT_WORDS)
+        put_word(db_bytes() + LIMIT_BASE + 4 * word, (uint32_t)value);
+}
+
+int savedata_map_state(int stage)
+{
+    return stage >= 0 && stage < SAVE_STAGES ? (int)get_word(db_bytes() + MAP_BASE + 4 * stage) : -1;
+}
+
+void savedata_set_map_state(int stage, int value)
+{
+    if (stage >= 0 && stage < SAVE_STAGES)
+        put_word(db_bytes() + MAP_BASE + 4 * stage, (uint32_t)value);
+}
+
+bool savedata_stage_available(int stage)
+{
+    return stage != 13 && savedata_map_state(stage) == 1;
+}
+
+void savedata_battle_mode_new(void)
+{
+    /* FUN_0895de04: groups of menu words switched on, a few left off. */
+    static const struct { uint8_t from, count; } k_on[] = {
+        {0x00, 6}, {0x06, 0xD}, {0x13, 0xF}, {0x22, 0xE}, {0x30, 5}, {0x35, 0x2A}, {0x5F, 8}, {0x67, 9}, {0x70, 0x13},
+    };
+    for (int w = 0; w < LIMIT_WORDS; w++)
+        savedata_set_menu_limit(w, 0);
+    for (unsigned i = 0; i < sizeof k_on / sizeof k_on[0]; i++)
+        for (int w = k_on[i].from; w < k_on[i].from + k_on[i].count; w++)
+            savedata_set_menu_limit(w, 1);
+    static const uint8_t k_off[] = {0x0B, 0x2A, 0x36, 0x6E, 0x6A};
+    for (unsigned i = 0; i < sizeof k_off; i++)
+        savedata_set_menu_limit(k_off[i], 0);
+    /* FUN_08918d5c: FUN_08919594 owns everything, then some go on sale. */
+    for (int g = 0; g < STOCK_GROUPS; g++)
+        for (int id = 0; id < k_stock[g].count; id++)
+            put_word(stock_word(g, id), 2);
+    stock_keep_none();
+    put_word(stock_word(STOCK_BODY, 14), 1);
+    put_word(stock_word(STOCK_BODY, 33), 1);
+    for (int id = 0x14; id <= 0x1E; id++)
+        put_word(stock_word(STOCK_OTHER, id), 1);
+    /* FUN_0882f65c: the first 14 maps. */
+    for (int st = 0; st < 14; st++)
+        savedata_set_map_state(st, 1);
+}
+
 /* ---- team cards ---- */
 
 #define EMBLEM_PALETTE 0x0047FDB8u /* DAT_08c83db8, 16 words (FUN_089ed05c) */
@@ -822,7 +942,18 @@ bool savedata_make_test_save(const char *file)
         return false;
     }
     savedata_new_game();
+    savedata_battle_mode_new();
     memcpy(g_save.battle, "TESTER", 6); /* the player name */
+    /* Money to try the Shop with, and a few owned parts put back on sale so every
+     * category has something (a test-only change: a real new game sells only bodies
+     * 14 and 33 and the Other items 0x14-0x1E). */
+    savedata_add_money(TEST_SAVE_MONEY);
+    static const struct { uint8_t group, id; } k_sale[] = {
+        {STOCK_CPU, 7}, {STOCK_ARMOR, 11}, {STOCK_ADD_ARMOR, 6}, {STOCK_WEAPON, 0x23}, {STOCK_WEAPON, 0x2C},
+        {STOCK_OPTION, 10},
+    };
+    for (unsigned i = 0; i < sizeof k_sale / sizeof k_sale[0]; i++)
+        savedata_set_stock(k_sale[i].group, k_sale[i].id, 1);
     int n = 0;
     /* The two simulation OKEs, then the leaders of the first ten arena teams. */
     static const char *const k_sim[2] = {"preset/oke_t01_1.bin", "preset/oke_t01_2.bin"};
@@ -854,14 +985,16 @@ bool savedata_make_test_save(const char *file)
         savedata_team_create(1, ptr_string(TEAM_NAMES + 4u), owner);
         for (int m = 0; m < 2; m++)
             savedata_team_set_member(1, m, m, k_spots[m]);
-    }    pack_close(&pack);
+    }
+    pack_close(&pack);
     if (n == 0) {
         SDL_Log("[save] test save: no preset OKEs could be read");
         return false;
     }
     savedata_save_start(file);
     int32_t r = savedata_run(savedata_io_update);
-    SDL_Log("[save] test save %s with %d preset OKE card(s) and %d team(s): %s", file, n,
-            (savedata_team_status(0) != 0) + (savedata_team_status(1) != 0), r == 0 ? "written" : "failed");
+    SDL_Log("[save] test save %s with %d preset OKE card(s), %d team(s) and %d Victory Points: %s", file, n,
+            (savedata_team_status(0) != 0) + (savedata_team_status(1) != 0), savedata_money(),
+            r == 0 ? "written" : "failed");
     return r == 0;
 }

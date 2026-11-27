@@ -16,6 +16,7 @@
 #include "psp_shim.h"
 #include "savedata.h"
 #include "oke_menu.h"
+#include "shop_menu.h"
 #include "team_menu.h"
 #include "ui.h"
 
@@ -166,6 +167,7 @@ typedef enum {
     SCR_TEAMFORM,   /* Team Formation (team_menu.c) */
     SCR_TEAMS,      /* the arena's Select Team: the team cards */
     SCR_OKECONFIG,  /* OKE Configuration (oke_menu.c) */
+    SCR_SHOP,       /* the Shop (shop_menu.c) */
 } ScreenId;
 
 enum { TEAM_ENEMY, TEAM_FRIEND };
@@ -343,8 +345,13 @@ void battle_menu_resume(void)
 static int resolve_map(int stage)
 {
     int map = stage_map(stage);
-    if (map < 0) /* "Select Randomly" */
-        map = (int)(SDL_GetTicks() % 25);
+    if (map < 0) { /* "Select Randomly": one of the available stages */
+        int ok[STAGE_LIST], n = 0;
+        for (int st = 0; st < STAGE_LIST - 1; st++)
+            if (savedata_stage_available(st))
+                ok[n++] = st;
+        map = n ? stage_map(ok[SDL_GetTicks() % (unsigned)n]) : (int)(SDL_GetTicks() % 25);
+    }
     return map;
 }
 
@@ -438,6 +445,9 @@ static int update_mode(void)
         } else if (it->id == 1) { /* eTOP_MENU_TYPE 0: CDesignFlow */
             oke_menu_open();
             push(SCR_OKECONFIG);
+        } else if (it->id == 4) { /* eTOP_MENU_TYPE 3: CShopFlow */
+            shop_menu_open();
+            push(SCR_SHOP);
         } else {
             SDL_Log("[battle-menu] \"%s\" chosen: that flow isn't ported", it->text ? it->text : "?");
             g.message = it->text;
@@ -652,6 +662,19 @@ static int stage_at(int pos)
     return pos;
 }
 
+/* CStageSelectWnd's entries are switched on by FUN_08827c98 for the stages the save
+ * makes available (FUN_0889ed84: map state 1, never 13; the Shop's map items add
+ * more). "Select Randomly" is kept on. */
+static bool stage_ok(int stage)
+{
+    return stage == STAGE_LIST - 1 || savedata_stage_available(stage);
+}
+
+static bool stage_enabled(int pos)
+{
+    return stage_ok(stage_at(pos));
+}
+
 #define STAGE_ROWS 9
 
 static int update_stages(void)
@@ -671,7 +694,7 @@ static int update_stages(void)
         g.stage_scroll = g.stage_cursor;
     if (g.stage_cursor >= g.stage_scroll + STAGE_ROWS)
         g.stage_scroll = g.stage_cursor - STAGE_ROWS + 1;
-    if (pad_pressed(PSP_CTRL_CIRCLE)) {
+    if (pad_pressed(PSP_CTRL_CIRCLE) && stage_enabled(g.stage_cursor)) {
         g.stage = stage_at(g.stage_cursor);
         refresh_values();
         pop();
@@ -836,6 +859,12 @@ int battle_menu_update(float dt)
             ui_menu_open(&g.mode);
         }
         break;
+    case SCR_SHOP:
+        if (!shop_menu_update(dt)) {
+            pop();
+            ui_menu_open(&g.mode);
+        }
+        break;
     }
     for (int i = 0; i < g.depth - 1; i++) { /* only the top menu takes input */
         UiMenu *under = menu_of(g.stack[i]);
@@ -952,9 +981,11 @@ static void draw_test_side(void)
         draw_stage_panel(326, 186, g.stage, NULL);
 }
 
+/* `enabled` (NULL: all) greys the rows that can't be chosen. */
 static void draw_list_window(int x, int y, int w, int rows, int first, int count, int cursor,
-                             void (*label)(int, char *, size_t), const char *title)
+                             void (*label)(int, char *, size_t), const char *title, bool (*enabled)(int))
 {
+    TextStyle grey = text_style(0, 6, 12, 12, 0, 4, 0xFF909090, 0);
     ui_frame(ui_part(PART_BF_SWND4), x, y, w, rows * 18 + 30, 8, 1.0f);
     if (title)
         ui_text(title, style_dark(), x + 10, y + 6, 1.0f);
@@ -964,7 +995,7 @@ static void draw_list_window(int x, int y, int w, int rows, int first, int count
             ui_frame(ui_part(PART_BF_CUR0), x + 4, ry - 3, w - 8, 18, 6, ui_pulse(SDL_GetTicks() / 1000.0f));
         char text[64];
         label(i, text, sizeof text);
-        ui_text(text, style_dark(), x + 12, ry, 1.0f);
+        ui_text(text, !enabled || enabled(i) ? style_dark() : &grey, x + 12, ry, 1.0f);
     }
 }
 
@@ -1024,14 +1055,14 @@ static void draw_screen(ScreenId s, bool is_top)
         break; /* drawn by SCR_TEST's side panel with its cursor */
     case SCR_CARDS:
         draw_list_window(140, 30, 160, CARD_ROWS, g.card_scroll, CARD_COUNT, g.card_cursor, card_label,
-                         s_test(g.team_side == TEAM_ENEMY ? 9 : 10));
+                         s_test(g.team_side == TEAM_ENEMY ? 9 : 10), NULL);
         break;
     case SCR_FIELD:
         ui_menu_draw(&g.field);
         break;
     case SCR_STAGES: {
         draw_list_window(140, 30, 170, STAGE_ROWS, g.stage_scroll, STAGE_LIST, g.stage_cursor, stage_label,
-                         s_test(11));
+                         s_test(11), stage_enabled);
         break;
     }
     case SCR_ARENA:
@@ -1040,16 +1071,17 @@ static void draw_screen(ScreenId s, bool is_top)
         draw_opponent_info(300, 30);
         break;
     case SCR_OPPONENTS:
-        draw_list_window(130, 30, 170, OPP_ROWS, g.opp_scroll, ARENA_COUNT, g.opponent, opp_label, s_arena(3));
+        draw_list_window(130, 30, 170, OPP_ROWS, g.opp_scroll, ARENA_COUNT, g.opponent, opp_label, s_arena(3), NULL);
         break;
     case SCR_ASK:
         ui_ask_draw(&g.ask);
         break;
     case SCR_TEAMS:
-        draw_list_window(130, 30, 170, TEAM_ROWS, g.team_scroll, SAVE_TEAMS, g.team_cursor, team_label, s_arena(4));
+        draw_list_window(130, 30, 170, TEAM_ROWS, g.team_scroll, SAVE_TEAMS, g.team_cursor, team_label, s_arena(4), NULL);
         break;
     case SCR_TEAMFORM:
     case SCR_OKECONFIG:
+    case SCR_SHOP:
         break; /* drawn on their own */
     }
 }
@@ -1062,6 +1094,10 @@ void battle_menu_draw(void)
     }
     if (top() == SCR_OKECONFIG) {
         oke_menu_draw();
+        return;
+    }
+    if (top() == SCR_SHOP) {
+        shop_menu_draw();
         return;
     }
     sceGuEnable(GU_BLEND);

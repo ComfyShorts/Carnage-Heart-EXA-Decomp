@@ -157,15 +157,16 @@ static const TextStyle *small_color(uint32_t c)
 /* ---- the top menu ---- */
 
 /* setupTopMenu (FUN_088b9c28): the CTopMenuWnd on parts 8 / 9 / 0x85 (bf_menb2,
- * bf_menl2, bf_new00), placed as Team Formation's. Battle Mode's menu limits
- * (FUN_0895de04) drop item 5, Snapshot. */
+ * bf_menl2, bf_new00), placed as Team Formation's. Items whose menu-limit word is
+ * off are left out: a new Battle Mode game (FUN_0895de04) drops item 5, Snapshot,
+ * until the Shop sells it. */
 static void build_top_menu(void)
 {
     int keep = g.top.cursor;
     ui_menu_init(&g.top, 0, 0x18 + 4, 24 - 5, 12, text_style(0, 6, 12, 12, 0, 0, 0xFF303030, 0));
     int card = current();
     for (int id = 0; id < ITEM_COUNT; id++) {
-        if (id == ITEM_SNAPSHOT)
+        if (!savedata_menu_limit(LIMIT_DESIGN + id)) /* FUN_0895e3c4 */
             continue;
         UiMenuItem *it = ui_menu_add(&g.top, dstr(id + 0x18), id, id + 0x23, PART_BF_MENB2, PART_BF_MENL2);
         if (it && installed(card) && id != ITEM_NOTES)
