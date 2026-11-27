@@ -21,7 +21,7 @@
 #include "okemodel.h"
 #include "packfile.h"
 #include "pad.h"
-#include "sound.h"
+#include "music.h"
 #include "sound.h"
 #include "pgchip.h"
 #include "picture.h"
@@ -166,6 +166,9 @@ static bool start_battle(void)
     battle_sim_start(&g_b, seed ^ (uint32_t)set->map);
     /* the battle bank (FUN_08b26998(.., 1, "sound/se/seset_01bat.phd", ".pbd")) */
     sound_bank_open(SE_BANK_BATTLE);
+    /* FUN_088754d8: a battle that names its own track plays it (FUN_08b34e88);
+     * Battle Mode's don't, so the battle list (FUN_0888dfb0) */
+    music_battle();
     g.watch = 0; /* your leader */
     scene_load();
     SDL_Log("[battle] %s (%d) vs %s (%d) on map %02d, %.0f s", set->team_label[0], set->count[0],
@@ -602,6 +605,7 @@ void battle_mode_start(void)
     g_scene.map = -1;
     if (!font_init())
         SDL_Log("[battle] fonts unavailable");
+    music_lists_build(); /* FUN_088d3d80: the BGM Player's lists for this mode */
     g.fileset = fileset_open("battlescene", &g_default_heap, 0, 0);
     if (g.fileset < 0)
         SDL_Log("[battle] OpenFileSet(\"battlescene\") failed: no HUD art");

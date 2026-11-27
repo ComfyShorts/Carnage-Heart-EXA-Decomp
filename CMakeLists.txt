@@ -41,6 +41,24 @@ else()
   target_link_libraries(chexa_core PUBLIC SDL3::SDL3)
 endif()
 
+# libavcodec (FFmpeg, LGPL-2.1-or-later) decodes the ATRAC3plus music, linked dynamically
+# from the system (for the 32-bit build: tools/setup_pc_deps.sh --libavcodec). Without
+# it the port builds and runs with sound effects only.
+option(CHEXA_LIBAVCODEC "Use the system libavcodec for ATRAC3plus (music)" ON)
+if(CHEXA_LIBAVCODEC)
+  find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h)
+  find_library(AVCODEC_LIBRARY avcodec)
+  find_library(AVUTIL_LIBRARY avutil)
+endif()
+if(CHEXA_LIBAVCODEC AND AVCODEC_INCLUDE_DIR AND AVCODEC_LIBRARY AND AVUTIL_LIBRARY)
+  message(STATUS "ATRAC3plus: libavcodec ${AVCODEC_LIBRARY}")
+  target_include_directories(chexa_core SYSTEM BEFORE PRIVATE ${AVCODEC_INCLUDE_DIR})
+  target_compile_definitions(chexa_core PRIVATE CHEXA_HAVE_LIBAVCODEC=1)
+  target_link_libraries(chexa_core PUBLIC ${AVCODEC_LIBRARY} ${AVUTIL_LIBRARY})
+else()
+  message(STATUS "ATRAC3plus: no libavcodec, the music won't play")
+endif()
+
 add_executable(chexa-pc src/pc/main.c)
 chexa_target_setup(chexa-pc)
 target_link_libraries(chexa-pc PRIVATE chexa_core)
@@ -88,6 +106,8 @@ add_test(NAME oke_parts COMMAND chexa-oke-parts-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME sound_effects COMMAND chexa-sound-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_test(NAME music_decode COMMAND chexa-sound-test --music
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 # The game's start-up path into the main loop: 30 frames drawn, then the HOME-menu exit.
 set(CHEXA_TEST_DISC "$ENV{CHEXA_DISC}")
 if(NOT CHEXA_TEST_DISC)
@@ -97,7 +117,7 @@ add_test(NAME startup_path COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup 
          --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/startup)
 set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                      PASS_REGULAR_EXPRESSION "the game called sceKernelExitGame")
-set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts sound_effects startup_path PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts sound_effects music_decode startup_path PROPERTIES SKIP_RETURN_CODE 77)
 
 # SDL loads libX11 and friends at runtime with dlopen. With the user-local sysroot those
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not

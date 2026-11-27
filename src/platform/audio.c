@@ -246,73 +246,7 @@ int32_t sceAudioOutput2OutputBlocking(int vol, const void *buf)
     return c ? channel_output(c, vol, vol, buf, true) : (int32_t)AUDIO_ERR_NOT_RESERVED;
 }
 
-/* ---- sceAtrac3plus (11 imports) ---- */
-
-int32_t sceAtracAddStreamData(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x7DB31251);
-    return 0;
-}
-
-int32_t sceAtracDecodeData(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x6A8C3CD5);
-    return 0;
-}
-
-int32_t sceAtracGetInternalErrorInfo(void)
-{
-    PSP_STUB("sceAtrac3plus", 0xE88F759B);
-    return 0;
-}
-
-int32_t sceAtracGetRemainFrame(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x9AE849A7);
-    return 0;
-}
-
-int32_t sceAtracGetSoundSample(void)
-{
-    PSP_STUB("sceAtrac3plus", 0xA2BBA8BE);
-    return 0;
-}
-
-int32_t sceAtracGetStreamDataInfo(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x5D268707);
-    return 0;
-}
-
-int32_t sceAtracIsSecondBufferNeeded(void)
-{
-    PSP_STUB("sceAtrac3plus", 0xECA32A99);
-    return 0;
-}
-
-int32_t sceAtracReinit(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x132F1ECA);
-    return 0;
-}
-
-int32_t sceAtracReleaseAtracID(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x61EB33F5);
-    return 0;
-}
-
-int32_t sceAtracSetDataAndGetID(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x7A20E7AF);
-    return 0;
-}
-
-int32_t sceAtracSetLoopNum(void)
-{
-    PSP_STUB("sceAtrac3plus", 0x868120B5);
-    return 0;
-}
+/* sceAtrac3plus: atrac.c */
 
 /* ---- sceMp3 (13 imports) ---- */
 

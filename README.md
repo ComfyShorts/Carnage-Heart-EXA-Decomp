@@ -89,10 +89,13 @@ multilib and 32-bit X11 packages with `apt-get download` and unpacks them into `
 `libgl1:i386 libpulse0:i386` and rebuild SDL3 with PulseAudio enabled. Without them SDL
 uses its software renderer and dummy audio.
 
-Sound effects play through SDL3 audio (the menus' cursor, decide, cancel, OK and error
-sounds, and the battle's gun reports, launches and hits); `--mute` turns the output
-off. Music, voices and some effects are ATRAC3plus and need a decoder that isn't added
-yet. See "Sound" in `docs/screens.md` and "Battle sounds" in `docs/battle.md`.
+Sound plays through SDL3 audio: the menus' cursor, decide, cancel, OK and error sounds,
+the battle's gun reports, launches and hits, and the music (the title's, Battle Mode's
+menu and battle play lists from the save); `--mute` turns the output off. The music is
+ATRAC3plus, decoded by the system libavcodec (FFmpeg, LGPL-2.1-or-later), linked
+dynamically: `tools/setup_pc_deps.sh --libavcodec` fetches the 32-bit one into `.deps`
+(`--libavcodec-only` for just that step). Without it the port builds with effects only.
+See "Sound" and "Music" in `docs/screens.md` and "Battle sounds" in `docs/battle.md`.
 
 Every import logs its first call, implemented or not, with arguments and result for the
 implemented ones (`--trace` or `PSP_SHIM_LOG=all` logs every call). At exit a summary

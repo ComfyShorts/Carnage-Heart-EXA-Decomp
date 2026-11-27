@@ -14,6 +14,7 @@
 #include "gu.h"
 #include "pad.h"
 #include "sound.h"
+#include "music.h"
 #include "psp_shim.h"
 #include "savedata.h"
 #include "oke_menu.h"
@@ -305,6 +306,7 @@ static void refresh_values(void)
 void battle_menu_start(void)
 {
     memset(&g, 0, sizeof g);
+    music_menu(); /* FUN_0888d2ac, from the Battle Mode screens */
     build_mode_menu();
     build_select_menu();
     build_test_menu();
@@ -334,6 +336,7 @@ const BattleSetup *battle_menu_setup(void)
 
 void battle_menu_resume(void)
 {
+    music_menu();
     g.message = NULL;
     UiMenu *m = menu_of(top());
     if (m)

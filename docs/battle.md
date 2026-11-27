@@ -206,7 +206,11 @@ Not played yet:
   FUN_089f293c, tables at `0x08c83f2c` / `0x08c83f30` by body), explosions and
   wrecks (0x2E, FUN_08842fa4), the system effects used in battle (`SE_BTL_080`,
   `092`..`096`), and the HUD and alert sounds;
-- the battle music (ATRAC3plus, see "Sound" in `docs/screens.md`).
+
+The battle music plays: at the start the battle list's next track (CBgmPlayer
+FUN_0888dfb0, called from the battle scene FUN_088754d8; Battle Mode's battles don't
+name a track of their own), and Battle Mode's menu music again after the result
+screen. See "Music" in `docs/screens.md`.
 
 ## Missing
 
@@ -223,8 +227,8 @@ Not played yet:
   `bs_tnum0` timer digits, alerts), the radar's own layout and the gun sight's
   movement. The parts table is at `0x00476398` (64 names, `CBsPicture`,
   `FUN_08895e2c` / `FUN_08895f64`).
-- **Sound**: the gun reports, launches and hits play ("Battle sounds"); the movement,
-  explosion, ground-hit and HUD sounds and the music don't.
+- **Sound**: the gun reports, launches, hits and the music play ("Battle sounds"); the
+  movement, explosion, ground-hit and HUD sounds don't.
 - **Behaviour**: `CBattleOke` (hardware stats: legs, weapons, armour, engine, heat,
   ammunition; flying types; collision) isn't ported, so who wins says little about the
   real game.

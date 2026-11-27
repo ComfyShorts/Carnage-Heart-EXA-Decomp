@@ -38,6 +38,7 @@
 #include <SDL3/SDL.h>
 
 #include "fileio.h"
+#include "music.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 
@@ -125,6 +126,7 @@ static void init_common(bool thread)
     if (thread) {
         SDL_SetAtomicInt(&g.running, 1);
         g.thread = SDL_CreateThread(sound_thread, "SOUND_SasThread", NULL);
+        music_init(); /* CSoundDriver::strInit and the BGM table */
     }
     g.init = true;
     SDL_Log("[sound] %d effects in the table%s", g.rows, psp_audio_muted() ? " (muted)" : "");
@@ -151,6 +153,7 @@ void sound_shutdown(void)
 {
     if (!g.init)
         return;
+    music_shutdown();
     SDL_SetAtomicInt(&g.running, 0);
     if (g.thread) {
         SDL_WaitThread(g.thread, NULL);

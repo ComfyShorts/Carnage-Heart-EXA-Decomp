@@ -301,8 +301,9 @@ build/pc-m32/chexa-pc --disc DIR --startup $B --shot 170 orig/bm_top.png \
 |---|---|---|
 | `sound/sound_se_tbl.bin` (file set "boot") | the SE table, 243 rows of 0x38 bytes | yes (read at start-up) |
 | `sound/se/seset_00sys`, `_01bat`, `_02adv` `.phd` / `.pbd` (loose in the pack, also in "gamecommon" / "battle_se") | libsnd banks: a "PPHD" header with programs, tones and samples; the `.pbd` holds PSX-style 4-bit ADPCM ("VAG") at 22050 or 44100 Hz | system and battle banks yes, `_02adv` (story scenes) isn't loaded |
-| `sound/se/at3se/NNN.at3` (pack) | ATRAC3plus, mono, 44100 Hz (RIFF WAVE, format 0xFFFE with the ATRAC3plus GUID) | no: needs a decoder |
-| `USRDIR/sound/bgm/bgm01..54.at3` | ATRAC3plus, stereo, 44100 Hz, about 64 kbit/s, with an `smpl` loop | no: needs a decoder |
+| `sound/se/at3se/NNN.at3` (pack) | ATRAC3plus, mono, 44100 Hz (RIFF WAVE, format 0xFFFE with the ATRAC3plus GUID) | not yet (the decoder is there, the effect path isn't) |
+| `USRDIR/sound/bgm/bgm01..54.at3` | ATRAC3plus, stereo, 44100 Hz, about 64 kbit/s, with an `smpl` loop | yes, with libavcodec (see "Music") |
+| `sound/sound_bgm_tbl.bin` (file set "boot") | the BGM table, 55 rows of 0x34 bytes | yes |
 | `voice/*.at3` (voice.dat), `PSP_GAME/SND0.AT3` | ATRAC3plus | no |
 
 None of the files is plain ATRAC3. The loose pack entries with a stored size of 0 are
@@ -377,17 +378,69 @@ numbers; "PPTN" tones of 0x60 bytes (+0x00 sample, +0x20 volume with 0x1000 full
 Missing on these screens: 8, 0xE, 0x10, 0x11 and the single uses of 2 and 4 (screens
 or cases not ported yet, such as the system menus); the four system effects that are
 ATRAC3plus files (`SE_SYS_002`..`005`, at3se 252..255) and every `SE_SCN_*` effect of the
-story scenes; the title music and all the other music. See "Battle sounds" in
-`docs/battle.md` for the battle.
+story scenes. See "Battle sounds" in `docs/battle.md` for the battle.
 
-### Music and the ATRAC3plus files
+### Music
 
-Music, voices and the AT3 effects need an ATRAC3plus decoder. Sony's own (libatrac3plus)
-can't be used. The usable one is FFmpeg's `atrac3plus` decoder (`libavcodec/atrac3plus.c`,
-`atrac3plusdsp.c`, a reverse-engineered implementation), licensed **LGPL-2.1-or-later**:
-either linked as a shared system `libavcodec`, or as the stand-alone copy PPSSPP keeps
-(`ext/at3_standalone`, also LGPL-2.1-or-later). None is added yet; the
-`sceAtrac3plus` imports are still logging stubs.
+The ATRAC3plus decoder is the system **libavcodec** (FFmpeg's reverse-engineered
+`atrac3plus` decoder, **LGPL-2.1-or-later**), linked dynamically. Sony's own library
+can't be used. For the 32-bit build, `tools/setup_pc_deps.sh --libavcodec` (or
+`--libavcodec-only` on top of an existing `.deps`) fetches Ubuntu's i386 `libavcodec`
+and the libraries it loads (about 100 packages, 60 MB) into `.deps/sysroot`, all
+but libc, which stays the system's; CMake finds it and defines `CHEXA_HAVE_LIBAVCODEC`
+(`-DCHEXA_LIBAVCODEC=OFF` leaves it out). Without it the port builds and runs as
+before, with effects only. A 64-bit build would use the system's own `libavcodec`.
+
+**The decoder (`src/platform/atrac.c`).** `sceAtrac*` on libavcodec, for the case
+where the caller hands over the whole file: then the remaining-frame count is -1 and
+the game never streams (its CSoundPlayerAT3 handles that case: FUN_08b2dfa8 returns at
+once). The RIFF `fmt ` chunk gives the channels, rate and frame size (0x178 bytes for
+the music), `fact` the sample count and the decoder samples before the first one
+played (3217 in `bgm01`), `smpl` the loop in decoder positions. A call decodes one
+frame of 2048 samples; at the loop end it starts again at the loop start, priming the
+decoder with the frame before so that the join is seamless.
+
+**The player (`src/game/music.c`).** CSoundDriver::strInit (FUN_08b2d82c) calls
+`sceAtracReinit(0, 3)` and sets up three players (CSoundPlayerSTR), each on its own
+channel. CSoundPlayerAT3 sets the file up (FUN_08b2dbf0: SetDataAndGetID,
+GetSoundSample, SetLoopNum -1 when the file has a loop, GetRemainFrame), decodes into a
+ring of 0x1800 stereo samples until a grain of 0x200 is ready (FUN_08b2ddbc), and sends
+a grain at a time with `sceAudioOutputPannedBlocking` (FUN_08b2e120), padding the end
+with silence (FUN_08b2e0a8). The port runs one player on its own thread
+(`SOUND_STRThread`) and reads the whole file (about 450 KB) when a track starts,
+where the game reads it in pieces. A new track fades the old one out over half a
+second; the game's own fades, the system data's BGM volume and the second and third
+players (voices) aren't ported.
+
+**The BGM table** (`sound/sound_bgm_tbl.bin`, TblBGMOpen FUN_08b27638): rows of 0x34
+bytes, the title at +0x00 ("THE DAWN"), the name at +0x20 (`BGM_36`), the file number
+at +0x30 (`sound/bgm/bgm%02d.at3`, -1 for none) and the volume at +0x32 (0-100, a 0-1
+factor for the player, FUN_08b35410). CSound::BGMPlay (FUN_08b34de8) takes a row,
+the picker that asked (kept at +0x11d9c, FUN_08b35400 reads it) and the loop flag.
+
+**Which track plays** (CBgmPlayer):
+
+| Where | Picker | Track |
+|---|---|---|
+| the title (top menu, FUN_088d4624) | FUN_0888c718, kind 0 | row 0x24 "THE DAWN" (`bgm35.at3`) |
+| Battle Mode's screens | FUN_0888d2ac, kind 1 | the next track of the menu list |
+| a battle | FUN_0888dfb0, kind 3 (from the battle scene FUN_088754d8, unless the battle names its own track, FUN_08b34e88) | the next track of the battle list |
+| the software designer | FUN_0888d9d4, kind 2 | the designer list (screen not ported) |
+
+A picker does nothing while its kind is already playing, so the music carries on
+across Battle Mode's screens. The lists come from the save's BGM Player settings
+(`CGameCommonDataBase`): three flag arrays of 99 words (+0x44E98 menus, +0x45024
+designer, +0x451B0 battles: the rows ticked) and a mode each (+0x4533C..: 0 in order,
+1 shuffled again after the last track, 2 at random). A new game ticks row 20
+("Scoffing Crucifix(CHP)") for the menus, 17 for the designer and 21 ("Code Breaker")
+for battles. FUN_088d3d80 builds the lists when a mode starts (FUN_0888cbd4 /
+FUN_0888cd8c / FUN_0888cf44, shuffling in mode 1). In Story Mode the pickers choose by
+story progress instead; that isn't ported.
+
+`chexa-sound-test --music` (CTest `music_decode`) decodes `bgm01` and `bgm36` through the
+imports, checks the sample count against the file and that the loop wraps without a
+gap; `--wav DIR` writes their first ten seconds. It reports "skipped" without
+libavcodec.
 
 ## GIM notes
 
@@ -421,5 +474,5 @@ Q/W = L/R, Space = start, Right Shift = select.
 - The phases after the menus: 0xC (new story game), 7 (the player-name keyboard),
   6 for network play, 10 (attract after 65 s idle).
 - Shift-JIS text (`gothic16.gim`, the double-byte table) for the Japanese strings.
-- Music, voices and the ATRAC3plus effects (needs a decoder, see "Sound"); the
-  remaining menu effects.
+- Voices and the ATRAC3plus effects (the decoder is in, their players aren't); the BGM
+  Player screen; the remaining menu effects.

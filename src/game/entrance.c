@@ -17,6 +17,7 @@
 #include "heap.h"
 #include "pad.h"
 #include "sound.h"
+#include "music.h"
 #include "picture.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
@@ -348,6 +349,7 @@ static void mngr_open(EntranceMngr *m, int phase, int arg)
         }
         break;
     case PHASE_TOP_MENU: /* FUN_088d4624 */
+        music_title(); /* FUN_0888c718 */
         if (arg == 1) { /* back from the mode menu: slide in from the right */
             menu_open(&m->top_menu, 1);
         } else {

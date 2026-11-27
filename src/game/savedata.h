@@ -137,6 +137,13 @@ void savedata_set_menu_limit(int word, int value);
 /* CBattleFieldStateDataBase (+0x47F30, FUN_0889d2b8): a word per stage, 1 when its map
  * can be chosen. FUN_0889ed84: available when 1, never stage 13. */
 #define SAVE_STAGES 0xAF
+/* The BGM Player settings (CGameCommonDataBase +0x44E98..): three lists, 0 the
+ * menus, 1 the software designer, 2 battles, each a flag per BGM table row (99, all
+ * off but row 20, 17 and 21 in a new game) and a play mode (+0x4533C..: 0 in order,
+ * 1 shuffled, 2 at random). FUN_0889cf68 / FUN_0889d048 / FUN_0889d128, FUN_0889d208.. */
+bool savedata_bgm_enabled(int list, int row);
+int savedata_bgm_mode(int list);
+
 int savedata_map_state(int stage);
 void savedata_set_map_state(int stage, int value);
 bool savedata_stage_available(int stage);
