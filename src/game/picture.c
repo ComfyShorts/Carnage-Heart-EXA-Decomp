@@ -10,8 +10,8 @@
  *   +0x06 u16 order (0 linear, 1 swizzled "faststorage")
  *   +0x08 u16 width            +0x0A u16 height      +0x0C u16 bits per pixel
  *   +0x0E u16 pitch alignment (bytes)                +0x10 u16 height alignment
- *   +0x1C u32 offset of the level/frame offset table +0x20 u32 pixels start
- *   +0x2E u16 frame count
+ *   +0x18 u32 offset of the level/frame offset table +0x1C u32 pixels start
+ *   +0x20 u32 pixels end       +0x2A u16 level count +0x2E u16 frame count
  *
  * all offsets relative to the header. Formats: 0 5650, 1 5551, 2 4444, 3 8888,
  * 4 index4, 5 index8, 6 index16, 7 index32 - the same numbers as the GE's. */
@@ -67,7 +67,7 @@ static int parse_image(const uint8_t *hdr, const uint8_t *end, GimImage *out)
         return 0;
     int row_bytes = (out->width * out->bpp / 8 + pitch_align - 1) / pitch_align * pitch_align;
     out->pitch_px = row_bytes * 8 / out->bpp;
-    uint32_t table = rd32(hdr + 0x1C);
+    uint32_t table = rd32(hdr + 0x18);
     int levels = rd16(hdr + 0x2A);
     out->frames = rd16(hdr + 0x2E);
     if (out->frames < 1)

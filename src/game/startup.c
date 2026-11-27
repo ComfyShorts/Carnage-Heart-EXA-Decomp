@@ -18,6 +18,8 @@
  * but the clear is drawn. */
 #include "startup.h"
 #include "gamedata.h"
+#include "entrance.h"
+#include "pad.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -353,16 +355,25 @@ static void main_loop(void)
 {
     Render *gfx = render_instance();
     render_setup_display(gfx, 1);
-    /* The first screen's constructor (FUN_088f1d98, CSceneBoot or similar) sets a black
-     * clear colour; its child screens and the net-play dialogs aren't ported. */
+    /* The root screen (FUN_088f1d98) sets a black clear colour and starts the entrance
+     * as its state-3 child. When that ends it would open the next screens. */
     render_set_clear_color(gfx, 0);
+    entrance_start();
+    int entrance_running = 1;
     g_startup_stop_reason = "main loop: frames run until sceKernelExitGame";
-    SDL_Log("[startup] CApplication::Start: display on; entering the main loop (screens not ported, "
-            "only the clear is drawn)");
+    SDL_Log("[startup] CApplication::Start: display on; entering the main loop");
     for (uint32_t frame = 0;; frame++) {
         if (g_startup_gu_trace_frames > 0 && frame < (uint32_t)g_startup_gu_trace_frames)
             SDL_Log("[gu] ---- frame %u ----", (unsigned)frame);
-        /* Before this the real loop updates the scene, sound, timers and pad. */
+        /* The pad, then the screens (the update command sent through the command
+         * manager), with dt = the frame's vertical blanks / 60. Sound and timers aren't
+         * ported. */
+        int step = render_interval(gfx);
+        pad_update(step);
+        if (entrance_running && !entrance_update((float)step * (1.0f / 60.0f))) {
+            entrance_running = 0;
+            SDL_Log("[startup] the entrance ended: the next screens aren't ported");
+        }
         render_end_frame(gfx);
         if (frame + 1 == (uint32_t)g_startup_gu_trace_frames)
             psp_gu_set_trace(false);

@@ -23,7 +23,7 @@ static int g_seg_count;
 #define DESIGN_STRING_COUNT 0x13B
 
 /* The text segment ends at the data segment's start; a known string checks the file. */
-#define CHECK_ADDR 0x00444158u /* "font/gothic.tbl" */
+#define CHECK_ADDR 0x00444098u /* "font/gothic.tbl" */
 
 static uint32_t rd32(const uint8_t *p)
 {

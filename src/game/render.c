@@ -3,6 +3,8 @@
  * src/platform/gu.c with the same arguments. */
 #include "render.h"
 
+#include <string.h>
+
 #include <SDL3/SDL.h>
 
 #include "gu.h"
@@ -150,13 +152,51 @@ static void reset_state(void)
 }
 
 /* FUN_08b20678: build the packet for this frame. */
+#define MAX_NODES 16
+static struct {
+    int priority;
+    RenderDrawFn draw;
+    void *ctx;
+} g_nodes[MAX_NODES];
+static int g_node_count;
+
+void render_add_node(Render *r, int priority, RenderDrawFn draw, void *ctx)
+{
+    (void)r;
+    if (g_node_count >= MAX_NODES) {
+        SDL_Log("[render] render list full");
+        return;
+    }
+    int i = g_node_count++;
+    while (i > 0 && g_nodes[i - 1].priority > priority) {
+        g_nodes[i] = g_nodes[i - 1];
+        i--;
+    }
+    g_nodes[i].priority = priority;
+    g_nodes[i].draw = draw;
+    g_nodes[i].ctx = ctx;
+}
+
+void render_remove_node(Render *r, void *ctx)
+{
+    (void)r;
+    for (int i = 0; i < g_node_count; i++)
+        if (g_nodes[i].ctx == ctx) {
+            memmove(&g_nodes[i], &g_nodes[i + 1], (size_t)(g_node_count - i - 1) * sizeof g_nodes[0]);
+            g_node_count--;
+            return;
+        }
+}
+
 static void begin_packet(Render *r, int frame)
 {
     sceGuStart(GU_CALL2, r->packet[frame], PACKET_SIZE);
     reset_state();
     clear_apply(&r->clear);
-    /* Here the game draws every object on the render list (vtable +0x13C, +0xC); the
-     * port has none yet. FUN_08b209d4 after it is empty. */
+    /* Every object on the render list (vtable +0x13C, +0xC); FUN_08b209d4 after it is
+     * empty. */
+    for (int i = 0; i < g_node_count; i++)
+        g_nodes[i].draw(g_nodes[i].ctx);
     r->packet_size = sceGuFinish();
     if (r->packet_size >= PACKET_SIZE)
         SDL_Log("[render] assertion failed: this->ms_iPacketBufsizeMax > this->m_iPacketSize");

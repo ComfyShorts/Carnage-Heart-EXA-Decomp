@@ -40,13 +40,14 @@ A native build that runs decompiled game code against a PSP shim on SDL3. Nothin
 game is included. It reads the game's files from your own dump at runtime. With
 `--startup` it runs the game's own start-up code (entry point, C runtime start-up, `main`,
 `CApplication::Init`) and the graphics side of its main loop, drawing through a
-software GE renderer; see `docs/startup.md` and `docs/graphics.md`. Without
+software GE renderer, up to the title screen and its Story Mode / Battle Mode menu; see
+`docs/startup.md`, `docs/graphics.md` and `docs/screens.md`. Without
 it, it opens a window and runs an empty frame loop. The chip interpreter and pack reader
 in `src/game/` are exercised by the tests.
 
 | Path | Contents |
 |---|---|
-| `src/game/` | hand-written game C: start-up path (`startup.c`), CRender frame loop (`render.c`), the game's file layer and file sets (`fileio.c`), heap allocator stand-in (`heap.c`), chip program interpreter (`pgchip.c`), robot record layout (`okedb.h`), pack index and ARZ reader (`packfile.c`, `lz.c`) |
+| `src/game/` | hand-written game C: start-up path (`startup.c`), CRender frame loop (`render.c`), the title screens (`entrance.c`), GIM textures and sprites (`picture.c`), bitmap text (`font.c`), pad (`pad.c`), strings read from your EBOOT (`gamedata.c`), the game's file layer and file sets (`fileio.c`), heap allocator stand-in (`heap.c`), chip program interpreter (`pgchip.c`), robot record layout (`okedb.h`), pack index and ARZ reader (`packfile.c`, `lz.c`) |
 | `src/platform/` | PSP shim: one file per subsystem (`files`, `input`, `threads`, `graphics`, `audio`, `video`, `net`, `system`) with a stub for each of the 299 imports in `docs/imports.md`, the implemented kernel imports (`kernel.c`), libgu (`gu.c`), the GE interpreter and software renderer (`ge.c`), the display (`display.c`), plus the SDL3 window layer |
 | `src/pc/` | entry point |
 | `tests/` | `chexa-io-test` (file shim), `chexa-gu-test` (renderer pixels) and `chexa-pgchip-test` (loads robot records from the pack and steps them) |
@@ -60,6 +61,7 @@ cmake --preset m32 && cmake --build --preset m32
 build/pc-m32/chexa-pc --disc /path/to/disc     # also --ms DIR, --frames N, --scale N
 build/pc-m32/chexa-pc --disc /path/to/disc --startup   # run the game's start-up path (--trace: log every import call)
 build/pc-m32/chexa-pc --disc /path/to/disc --startup --gu-trace 3 --screenshot   # sceGu calls of 3 frames, first frame to orig/
+build/pc-m32/chexa-pc --disc /path/to/disc --startup --shot 60 orig/title.png --press 70 circle --shot 100 orig/menu.png
 CHEXA_DISC=/path/to/disc ctest --test-dir build/pc-m32
 ```
 

@@ -1,7 +1,6 @@
 /* CRender / CGraphics (singleton at DAT_08c8d338, 0x520 bytes): builds one GU packet
  * per frame and shows the frames on the display. Only what the start-up path and the
- * main loop's frame end use; the render list (objects drawn into the packet) is kept
- * but nothing registers with it yet. */
+ * main loop's frame end use, and the render list of objects drawn into the packet. */
 #ifndef GAME_RENDER_H
 #define GAME_RENDER_H
 
@@ -31,6 +30,14 @@ typedef struct Render {
     int display_delay;     /* +0x510: frames until sceGuDisplay(1) */
     void *matrix_stack;    /* +0xD0: 16 matrices for libgum (inside the object in the game) */
 } Render;
+
+/* An object on the render list: drawn into each packet (the game calls its vtable
+ * +0x13C, then +0xC). Lower priorities draw first. */
+typedef void (*RenderDrawFn)(void *ctx);
+
+/* FUN_08b202e4 (add) and its removal counterpart. */
+void render_add_node(Render *r, int priority, RenderDrawFn draw, void *ctx);
+void render_remove_node(Render *r, void *ctx);
 
 /* CGraphics::GetInstance (FUN_08b205c0): creates the object on first use. */
 Render *render_instance(void);
