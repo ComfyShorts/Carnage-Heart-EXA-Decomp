@@ -219,7 +219,7 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Waits, notices | Op 0x1C (frames); op 0x21 ("Avispa added.") with its jingle, closed with circle or cross | The notice uses the port's frame (`FUN_088c0ba0` isn't in the export) |
 | Variables (op 0x10) | Set / OR of the current battle mission (table `0x08c7d280`), the parts stock (`0x08c7cab0`), the menu limits (`0x08c7c4c0`, groups as `FUN_0895e1cc`) and the script's ten variables | The lesson states (flag 0x10000000) and the one if (in a lesson) are logged and not taken: part 5 |
 | Hidden scripts (ops 0x1F / 0x20) | Stored on and removed from the menu points of the save (`CEventScriptField`, menu numbers `FUN_088df724`) | |
-| Sound | Effects (op 0x1A) from the story bank (`seset_02adv`, opened with Story Mode) | Music (ops 0xB / 0xC) and voices (op 0xE) aren't played yet: part 4 |
+| Sound | Effects (op 0x1A) from the story bank (`seset_02adv`, opened with Story Mode); music and voices (part 4) | |
 | Lesson commands (0x23-0x2A) | Read and skipped | Part 5 |
 
 ### 3. The briefing hub and mission battles
@@ -250,6 +250,17 @@ B="$B --press 400 circle --press 440 circle"                      # Kyle's Team,
 build/pc-m32/chexa-pc --disc DIR --startup --story-step 48 --battle-result win $B \
     --press 760 circle --frames 900          # scenario22 starts: the story goes on
 ```
+
+### 4. Music and voices
+
+| Part | Real | Stand-in |
+|---|---|---|
+| Scene music | Op 0xB fades out what plays and starts BGM table row N, looping (`FUN_088e3808` → `FUN_0888c648`, `CSound::BGMPlay`; e.g. `scenario01` plays row 28, "Try and Error"); op 0xC stops it; the music stops when a scene ends (`FUN_08b34f44`). The tracks are the disc's `sound/bgm/bgmNN.at3` through the port's music player (screens.md, "Music") | Op 0xC's fade time (0x4000 with milliseconds) is the player's fixed half-second fade |
+| The hub and battles | The hub plays the menu list (`FUN_0888d2ac`), the mission battles the battle list, as Battle Mode does | |
+| Voices | Op 0xE plays `voice/<who>/<id>.at3` from `voice.dat` (ATRAC3plus, mono, 44.1 kHz) on its own audio channel (`src/game/voice.c`, through the same `sceAtrac` decoder as the music); a new voice, the page turned (op 0xF) or the scene's end stops it; nothing plays while L/R skip | The game's voice player and its volume setting aren't read: voices play at full volume. Replaying a voice from the backlog comes with the backlog |
+
+`chexa-story-test` also decodes `scenario01`'s first voice and checks it is speech
+(mono, RMS and zero crossings), so a broken decoder path fails the test.
 
 `chexa-story-test` (CTest `story_steps`) reads every step's script from the disc to
 its end with the player's argument table (85 steps, 23,732 commands), checks the

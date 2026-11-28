@@ -3,7 +3,9 @@
  *     disc, 41 scenes, 13 lessons and 11 missions;
  *   - every step's script is on the disc and reads to its end marker with the scene
  *     player's argument table (scene_dry_run);
- *   - a new story (savedata_story_new + loadPreset) has its preset cards and team.
+ *   - a new story (savedata_story_new + loadPreset) has its preset cards and team;
+ *   - a scene voice from voice.dat decodes (sceAtrac, as voice.c plays it) to mono
+ *     samples that aren't silent (skipped without libavcodec).
  *
  *   chexa-story-test [--disc DIR] [--elf FILE] [-v]
  *
@@ -12,9 +14,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <SDL3/SDL.h>
+
 #include "fileio.h"
 #include "gamedata.h"
 #include "heap.h"
+#include "psp_imports.h"
 #include "psp_shim.h"
 #include "savedata.h"
 #include "scene.h"
@@ -106,6 +111,45 @@ int main(int argc, char **argv)
     CHECK(savedata_story_preset(), "loadPreset's files are on the disc");
     CHECK(savedata_card_used(0) && savedata_card_used(1) && !savedata_card_used(2), "cards 1 and 2 hold the presets");
     CHECK(savedata_team_status(0) != 0, "team card 1 holds the preset team");
+
+    /* The first voice of scenario01. */
+    const char *voice = "voice/til/til0023380.at3";
+    int32_t vsize = fileio_file_size(voice);
+    uint8_t *vbuf = vsize > 0 ? malloc((size_t)vsize) : NULL;
+    CHECK(vbuf && fileio_read_file(voice, vbuf, (uint32_t)vsize) == vsize, "%s is in voice.dat", voice);
+    if (vbuf) {
+        int id = sceAtracSetDataAndGetID(vbuf, (uint32_t)vsize);
+        if (id < 0) {
+            printf("skip  the voice decode: no ATRAC3plus decoder (0x%08X)\n", (unsigned)id);
+        } else {
+            static int16_t frame[2 * 2048];
+            int peak = 0, total = 0, clipped = 0, crossings = 0;
+            double sq = 0.0;
+            for (int f = 0; f < 40; f++) {
+                int n = 0, finish = 0, remain = 0;
+                if (sceAtracDecodeData(id, frame, &n, &finish, &remain) < 0)
+                    break;
+                for (int i = 0; i < n; i++) { /* mono: one sample each */
+                    peak = SDL_max(peak, abs(frame[i]));
+                    sq += (double)frame[i] * frame[i];
+                    clipped += abs(frame[i]) >= 32767;
+                    crossings += i > 0 && (frame[i] < 0) != (frame[i - 1] < 0);
+                }
+                total += n;
+                if (finish)
+                    break;
+            }
+            sceAtracReleaseAtracID(id);
+            /* Speech: loud enough, rarely at full scale, and not noise (noise crosses
+             * zero about every other sample). */
+            int rms = total ? (int)SDL_sqrt(sq / total) : 0;
+            CHECK(vbuf[0x16] == 1 && total > 44100 / 2 && rms > 300 && clipped < total / 100 &&
+                      crossings < total / 4,
+                  "the voice decodes: mono %d, %d samples, rms %d, peak %d, %d clipped, %d zero crossings",
+                  vbuf[0x16] == 1, total, rms, peak, clipped, crossings);
+        }
+        free(vbuf);
+    }
 
     printf("%d steps, %d script commands read; %s\n", STORY_STEPS, commands,
            failures ? "FAILED" : "all passed");

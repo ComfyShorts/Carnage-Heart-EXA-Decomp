@@ -187,14 +187,44 @@ int32_t sceAtracReinit(int at3_ids, int at3plus_ids)
     return 0;
 }
 
+#ifdef CHEXA_HAVE_LIBAVCODEC
+static int32_t set_data(int id, const void *buf, uint32_t size);
+#endif
+
 int32_t sceAtracSetDataAndGetID(const void *buf, uint32_t size)
 {
 #ifdef CHEXA_HAVE_LIBAVCODEC
+    /* The music and the voices take IDs from their own threads: the free slot is
+     * claimed under a lock, then set up outside it. */
+    static SDL_SpinLock lock;
+    static bool claimed[ATRAC_IDS];
+    SDL_LockSpinlock(&lock);
     int id = 0;
-    while (id < ATRAC_IDS && g_atrac[id].used)
+    while (id < ATRAC_IDS && (g_atrac[id].used || claimed[id]))
         id++;
+    if (id < ATRAC_IDS)
+        claimed[id] = true;
+    SDL_UnlockSpinlock(&lock);
     if (id == ATRAC_IDS)
         return (int32_t)ATRAC_ERR_NO_ID;
+    int32_t r = set_data(id, buf, size);
+    claimed[id] = false;
+    return r;
+#else
+    static bool warned;
+    if (!warned) {
+        warned = true;
+        SDL_Log("[atrac] built without libavcodec: no ATRAC3plus, the music doesn't play "
+                "(tools/setup_pc_deps.sh --libavcodec)");
+    }
+    (void)buf, (void)size;
+    return (int32_t)ATRAC_ERR_UNKNOWN_FORMAT;
+#endif
+}
+
+#ifdef CHEXA_HAVE_LIBAVCODEC
+static int32_t set_data(int id, const void *buf, uint32_t size)
+{
     Atrac *a = &g_atrac[id];
     memset(a, 0, sizeof *a);
     a->file = buf;
@@ -215,17 +245,8 @@ int32_t sceAtracSetDataAndGetID(const void *buf, uint32_t size)
     PSP_TRACE(id, "%u bytes: %d ch, %d Hz, %d samples, loop %d..%d", size, a->channels, a->rate,
               a->total, a->loop_start, a->loop_end);
     return id;
-#else
-    static bool warned;
-    if (!warned) {
-        warned = true;
-        SDL_Log("[atrac] built without libavcodec: no ATRAC3plus, the music doesn't play "
-                "(tools/setup_pc_deps.sh --libavcodec)");
-    }
-    (void)buf, (void)size;
-    return (int32_t)ATRAC_ERR_UNKNOWN_FORMAT;
-#endif
 }
+#endif
 
 int32_t sceAtracReleaseAtracID(int id)
 {

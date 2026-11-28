@@ -25,6 +25,7 @@
 #include "render.h"
 #include "savedata.h"
 #include "scene.h"
+#include "music.h"
 #include "battle.h"
 #include "battle_menu.h"
 #include "sound.h"
@@ -279,6 +280,7 @@ static void adventure_update(float dt)
         g.t += dt;
         if (!scene_update(dt)) {
             scene_stop();
+            music_stop(); /* FUN_08b34f44 when the script has ended */
             child_finish();
         }
         break;

@@ -11,12 +11,14 @@
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
+#include "music.h"
 #include "pad.h"
 #include "picture.h"
 #include "psp_shim.h"
 #include "savedata.h"
 #include "sound.h"
 #include "ui.h"
+#include "voice.h"
 
 /* ---- the script file (CEventScriptAnalysis) ---- */
 
@@ -557,16 +559,19 @@ static void run_commands(void)
                 return;
             }
             break;
-        case 0x0B: { /* music (story.c / part 4) */
+        case 0x0B: { /* music: what plays fades out (0.2 s), then the track, looping
+                      * (FUN_088e3808 -> FUN_0888c648: CSound::BGMPlay, kind 0) */
             int track = next_int();
             next_int();
             if (taking() && !s_headless)
-                SDL_Log("[scene] music track %d (not played yet)", track);
+                music_play(track, MUSIC_TITLE, true);
             break;
         }
-        case 0x0C: /* stop the music */
+        case 0x0C: /* stop the music: 0x4000 fades over the given ms, else 0.2 s */
             next_int();
             next_int();
+            if (taking() && !s_headless)
+                music_stop();
             break;
         case 0x0D: { /* the window's style; a change clears the page */
             int style = next_int();
@@ -577,15 +582,17 @@ static void run_commands(void)
             w.style = style;
             break;
         }
-        case 0x0E: { /* a voice */
+        case 0x0E: { /* a voice from voice.dat */
             const char *s = next_string();
-            if (taking() && !w.voice_warned && !s_headless) {
-                SDL_Log("[scene] voices aren't played yet (first: %s)", s);
+            if (taking() && !s_headless && !skipping() && !voice_play(s) && !w.voice_warned) {
+                SDL_Log("[scene] voice %s can't be played", s);
                 w.voice_warned = true;
             }
             break;
         }
-        case 0x0F: /* the end of a message: the voice stops */
+        case 0x0F: /* the end of a message (the page turned): the voice stops */
+            if (taking() && !s_headless)
+                voice_stop();
             break;
         case 0x10: { /* a variable: op, flags | index, value */
             int vop = next_int();
@@ -756,6 +763,8 @@ bool scene_start(const char *path, const char *id)
 
 void scene_stop(void)
 {
+    if (w.active && !s_headless)
+        voice_stop();
     pic_free(&w.bg);
     for (int i = 0; i < PORTRAITS; i++)
         pic_free(&w.chara[i]);
