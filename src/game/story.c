@@ -194,7 +194,7 @@ static void move_briefing(void)
     g.t = 0.0f;
     g.note = "Briefing";
     snprintf(g.script_id, sizeof g.script_id, "%s", storydb_script_id(step) ? storydb_script_id(step) : "");
-    /* A lesson's first script is hidden on Lesson (FUN_088df4b0 on menu 0, key 0). */
+    /* A lesson's first script is hidden on the hub (FUN_088df4b0 on menu 0, key 0). */
     if (storydb_lecture_part(step) && g.script_id[0])
         savedata_story_field_hide(0, 0, g.script_id);
     SDL_Log("[story] step %d: briefing for %s (%s)", step, g.script_id, savedata_story_script());

@@ -45,7 +45,7 @@
 #define MISSION_NAMES 0x00467040u   /* 0x08c6b040: "Battle Mission 1".. */
 #define MISSION_STRIDE 0x3D0u
 #define MISSION_COUNT 49
-#define FIELD_LESSON 0   /* CEventScriptField menu 10: Lesson (CLectureFlow) */
+#define FIELD_HUB 0      /* CEventScriptField menu 10: the hub ("This is the Main Menu") */
 #define FIELD_MISSION 13 /* menu 0x34: Battle, Mission (CBattleMissionMngr) */
 /* The battles that move the story on (FUN_08818ff0): the missions' stages. */
 #define MISSION_STAGE_FIRST 0x40
@@ -385,6 +385,7 @@ static void menu_start(bool story)
         return;
     }
     SDL_Log("[battle-menu] the briefing hub (CBriefingMngr), %d items", g.mode.count);
+    play_field(FIELD_HUB); /* a lesson's first script, hidden on the hub */
 }
 
 void battle_menu_start(void) { menu_start(false); }
@@ -1043,9 +1044,9 @@ static int update_ask(float dt)
         return 1;
     if (g.ask_kind == ASK_LESSON) {
         /* The day's scripts for their effects (the items, parts and missions the
-         * lessons unlock), and the lesson's first script taken off Lesson. */
+         * lessons unlock), and the lesson's first script taken off the hub. */
         int n = scene_apply_file(savedata_story_script());
-        savedata_story_field_clear(FIELD_LESSON, 0);
+        savedata_story_field_clear(FIELD_HUB, 0);
         SDL_Log("[battle-menu] lesson counted as completed (a stand-in for CLectureFlow): %d scripts of %s applied",
                 n, savedata_story_script());
         g.story_advance = true;

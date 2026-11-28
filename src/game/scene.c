@@ -278,6 +278,7 @@ static struct {
     Picture *window;                    /* +0x11C: parts/bf/sd_wind1.gim */
     Picture *page;                      /* +0x120: parts/bf/sd_page0.gim */
     char notice[LINE_MAX];
+    int rect[4];        /* op 0x29: a lesson's highlight (x, y, w, h), w 0 none */
     UiAsk ask;
     float t;
     bool voice_warned;
@@ -723,13 +724,19 @@ static void run_commands(void)
             next_string();
             next_int();
             break;
-        case 0x29:
-            next_int();
-            next_int();
-            next_int();
-            next_int();
+        case 0x29: { /* a lesson's highlight rectangle (CEventScriptWnd +0x2264) */
+            int r[4];
+            for (int i = 0; i < 4; i++)
+                r[i] = next_int();
+            if (taking())
+                memcpy(w.rect, r, sizeof r);
             break;
-        case 0x24: case 0x26: case 0x28: case 0x2A: /* the lessons' pointers and labels */
+        }
+        case 0x2A:
+            if (taking())
+                memset(w.rect, 0, sizeof w.rect);
+            break;
+        case 0x24: case 0x26: case 0x28: /* the lessons' pointers and labels */
             break;
         case 0x2F:
             if (taking()) {
@@ -922,6 +929,8 @@ void scene_draw(void)
     if (!w.active)
         return;
     pic_draw(&w.bg);
+    if (w.rect[2] > 0 && w.rect[3] > 0) /* the port's pulsing frame for the game's highlight */
+        ui_frame(ui_part(PART_BF_CUR0), w.rect[0], w.rect[1], w.rect[2], w.rect[3], 6, ui_pulse(w.t));
     for (int i = PORTRAITS - 1; i >= 0; i--)
         pic_draw(&w.chara[i]);
     if (w.state != ST_HIDDEN) {

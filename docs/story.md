@@ -77,10 +77,23 @@ The kinds of step:
   `CBattleMissionFlow` and its manager (`CBattleMissionMngr`, `FUN_0881a26c`): the
   hidden briefing plays from the step's script file, then a team list
   (`FUN_0881a428`), then the battle.
-- **CEventScriptField menus.** Op 0x1F / 0x20's menu numbers are screens: 10 Lesson,
-  0x14 and 0x1E-0x23 OKE Configuration and its parts (0x21 the chip editor, whose
-  keys are chip ids), 0x32 Battle, 0x34 Mission, 0x46 and 0x5A others the lessons
-  use.
+- **CEventScriptField menus.** Op 0x1F / 0x20's menu numbers are screens: 10 the
+  hub ("This is the Main Menu"), 0x14 the Lesson card screen, 0x1E-0x23 OKE
+  Configuration and its parts (0x21 the chip editor, whose keys are chip ids:
+  `fight`, `button_detect`, `turn`), 0x32 Battle, 0x34 Mission, 0x46 and 0x5A
+  others the lessons use. A script hidden on a screen plays when the screen opens.
+- **Lessons** (`CLectureFlow` `FUN_0893554c`, steps 2-44, `adv/tutorial_a`-`m.chs`,
+  one file a day). They are interactive tutorials across the screens: the day's
+  first script is hidden on the hub and points at Lesson; each script hides the next
+  on the screen it sends the player to (`tutorial01a` → Lesson 0x14, `tutorial03b`
+  → Mission 0x34 with a lesson battle record, `tutorial04c` → the chip editor's
+  keys), highlights a rectangle (op 0x29, cleared by 0x2A), names a button (0x25 /
+  0x27, cleared by 0x26 / 0x28) and limits input to one control (0x2D sets
+  `+0x2B28`, 0x2E clears it). Lesson battles use records 0-37
+  (`preset/lecture/oke_lNN_n.bin`); `tutorialNN_succeed` / `_fail` follow the result.
+  The lesson states (op 0x10 flag 0x10000000, nibbles at `+0x88`) and the cleared
+  flags (`+0xBC`) say which cards are offered; finishing a day sets the step-done
+  word (`FUN_08934480`).
 
 ## Scene scripts (`.chs`)
 
@@ -261,6 +274,20 @@ build/pc-m32/chexa-pc --disc DIR --startup --story-step 48 --battle-result win $
 
 `chexa-story-test` also decodes `scenario01`'s first voice and checks it is speech
 (mono, RMS and zero crossings), so a broken decoder path fails the test.
+
+### 5. Lessons
+
+| Part | Real | Stand-in |
+|---|---|---|
+| The day's first script | Hidden on the hub (menu 10) and played over it when the hub opens, with its portraits and text | |
+| Highlights (op 0x29 / 0x2A) | The game's rectangles | Drawn as the port's pulsing cursor frame; the game's highlight object (`CEventScriptWnd` +0x2264) isn't read |
+| Button names, input locks (ops 0x25-0x28, 0x2D / 0x2E) | Read; 0x2D / 0x2E stored in the save | Not drawn or enforced |
+| The Lesson card screen, the lesson scripts on other screens, lesson battles, lesson states | | Not ported. On a lesson step, Lesson asks (the port's text) whether to count the day as completed; Yes runs all the day's scripts at once for their effects (the hub items, parts and missions they unlock) and the story goes on. The lesson-state ops (flag 0x10000000) and the one if (in a lesson) are logged and not taken |
+
+What a full port needs, in order: the Lesson card screen (`CLectureMngr`, menu
+0x14) with the states at `+0x88` / `+0xBC`; scripts hidden on OKE Configuration, the
+chip editor (by chip id) and Battle played when those open; the input lock of
+`+0x2B28`; the lesson battles with `_succeed` / `_fail`; then the step-done word.
 
 `chexa-story-test` (CTest `story_steps`) reads every step's script from the disc to
 its end with the player's argument table (85 steps, 23,732 commands), checks the
