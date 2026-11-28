@@ -4,9 +4,13 @@
  *     points into an empty cell, bit 6 on chips with an incoming arrow, bit 7 on cells
  *     without an error) change nothing but bit 7 on blank cells and Returns, which a
  *     few designs were shipped without; a second pass changes nothing;
+ *   - on every chip of every shipped design, each parameter its type's sub-menus list
+ *     can be read, and writing back what was read changes nothing (direction and
+ *     elevation too); the range editor never leaves the game's bounds and changing a
+ *     range's shape gives a valid range;
  *   - a new game holds each type's default chip, and placing a chip remembers it;
  *   - a design is loaded into a card, edited (chips placed, exits turned, a chip
- *     removed, the start moved, a block copied), saved as Battle Data, the saves
+ *     removed, the start moved, a block copied, parameters and a range set), saved as Battle Data, the saves
  *     cleared, reloaded, and its software is byte for byte the edited one;
  *   - a second card is cleared (Delete All) and given a two-chip program by hand, saved
  *     and reloaded with the first, and fought in the battle simulation: the
@@ -52,7 +56,38 @@ static int load(const char *path, OkeDataBase *out)
 
 typedef struct Tally {
     int designs, programs, unchanged, bit7_only, other;
+    int params, param_bad, angles, angle_bad;
 } Tally;
+
+/* Each listed parameter read and written back. */
+static void check_params(Tally *t, const char *path, const PgChipCommand *c)
+{
+    int subs[PGCHIP_SUB_ITEMS], n = pgchip_sub_menus(pgchip_type(c), subs);
+    for (int i = 0; i < n; i++) {
+        int sub = subs[i];
+        if (sub == PGCHIP_SUB_CONFIRM || sub == PGCHIP_SUB_POLAR || sub == PGCHIP_SUB_CARTESIAN)
+            continue;
+        if (sub == PGCHIP_SUB_DIRECTION || sub == PGCHIP_SUB_ELEVATION) {
+            PgChipCommand d = *c;
+            int a = 0;
+            bool ok = pgchip_angle_get(&d, sub == PGCHIP_SUB_ELEVATION, &a) &&
+                      pgchip_angle_set(&d, sub == PGCHIP_SUB_ELEVATION, a) && !memcmp(&d, c, sizeof d);
+            t->angles++;
+            if (!ok && ++t->angle_bad <= 3)
+                printf("      %s type 0x%02X: angle %d doesn't round-trip\n", path, pgchip_type(c), sub);
+            continue;
+        }
+        int32_t v;
+        PgChipCommand d = *c;
+        bool ok = pgchip_param_get(&d, sub, &v);
+        if (ok && sub != PGCHIP_SUB_RANGE) /* the shape only the range editor writes */
+            ok = pgchip_param_set(&d, sub, v) && !memcmp(&d, c, sizeof d);
+        t->params++;
+        if (!ok && ++t->param_bad <= 5)
+            printf("      %s type 0x%02X sub 0x%02X: %02X %02X %02X %02X %02X %02X\n", path, pgchip_type(c), sub,
+                   c->b[2], c->b[3], c->b[4], c->b[5], c->b[6], c->b[7]);
+    }
+}
 
 static int check_design(void *user, const char *path, const PackEntry *e)
 {
@@ -73,6 +108,8 @@ static int check_design(void *user, const char *path, const PackEntry *e)
         int bit7 = 0, other = 0;
         for (int i = 0; i < before.width * before.width; i++) {
             const PgChipCommand *a = &before.chips[i], *b = &after.chips[i];
+            if (pgchip_is_chip(a))
+                check_params(t, path, a);
             if (!memcmp(a, b, sizeof *a))
                 continue;
             PgChipCommand fixed = *a;
@@ -97,6 +134,42 @@ static int check_design(void *user, const char *path, const PackEntry *e)
     pgchip_normalize(&again);
     CHECK(!memcmp(&again, &sw, sizeof sw), "%s: normalizing twice changes nothing", path);
     return 0;
+}
+
+/* ---- the range editor ---- */
+
+static bool range_valid(const uint8_t r[4])
+{
+    if (r[0] & 1)
+        return (r[0] >> 1) <= 0x6E && r[1] <= 0x6E && abs((int8_t)r[2]) <= 0x6E && abs((int8_t)r[3]) <= 0x6E;
+    return (r[0] >> 1) <= r[2] && r[1] <= 0xB4 && r[2] <= 0x6E && r[3] < 0xB4;
+}
+
+static void check_range_editor(void)
+{
+    uint8_t r[4] = {0, 45, 20, 0}; /* a sector: inner 0, +/-90 degrees, out to step 20, ahead */
+    int bad = 0, changed = 0;
+    srand(7);
+    for (int i = 0; i < 20000; i++) {
+        if (i % 2500 == 0)
+            pgchip_range_set_shape(r, (i / 2500) & 1);
+        int dx = rand() % 3 - 1, dy = rand() % 3 - 1;
+        changed += pgchip_range_edit(r, dx, dy, rand() & 1, rand() % 8 == 0);
+        bad += !range_valid(r);
+    }
+    CHECK(bad == 0 && changed > 1000, "20000 range edits stayed in bounds (%d changed, %d out)", changed, bad);
+    uint8_t s[4] = {0, 45, 20, 0};
+    pgchip_range_set_shape(s, 1);
+    CHECK((s[0] & 1) && range_valid(s) && (int8_t)s[3] > 0 && s[2] == 0,
+          "a sector ahead becomes a rectangle ahead (%02X %02X %02X %02X)", s[0], s[1], s[2], s[3]);
+    pgchip_range_set_shape(s, 0);
+    CHECK(!(s[0] & 1) && range_valid(s) && s[3] == 0, "and back to a sector ahead (%02X %02X %02X %02X)", s[0], s[1],
+          s[2], s[3]);
+    CHECK(pgchip_range_distance(0x6E) > pgchip_range_distance(20), "the farthest step is the farthest");
+    CHECK(pgchip_angle_edit(0, false, 200, -1, true, false) == 35800, "direction wraps below 0");
+    CHECK(pgchip_angle_edit(400, false, 200, 1, true, true) == 9000, "L goes on to the quarter");
+    CHECK(pgchip_angle_edit(9000, true, 200, 1, false, false) == 9000, "a held elevation stops at 90");
+    CHECK(pgchip_angle_edit(9000, true, 200, 1, true, false) == -9000, "a fresh press goes round");
 }
 
 /* ---- an edit, saved and loaded ---- */
@@ -138,6 +211,16 @@ static void edit_program(OkeDataBase *card)
     CHECK(pgchip_is_chip(pgchip_at(&main, x, y)) && count_chips(&main) == before + 1, "it's there");
     CHECK(pgchip_exit_dir(pgchip_at(&main, x, y)) == 0 && pgchip_branch_dir(pgchip_at(&main, x, y)) == 4,
           "with the default exits up / down");
+    {
+        PgChipCommand *j = pgchip_at(&main, x, y);
+        pgchip_range_set_shape(j->b + 2, 1);
+        CHECK(pgchip_range_edit(j->b + 2, 1, 1, false, false), "moved the judge's range");
+        uint8_t keep[4];
+        memcpy(keep, j->b + 2, 4);
+        int32_t v = -1;
+        CHECK(pgchip_param_get(j, PGCHIP_SUB_RANGE, &v) && v == 1, "its range is a rectangle now");
+        memcpy(j->b + 2, keep, 4);
+    }
     CHECK(pgchip_turn_exit(sw, 0, x, y, false, 1), "R turned its exit");
     CHECK(pgchip_exit_dir(pgchip_at(&main, x, y)) == 1, "to up-right");
     CHECK(pgchip_set_exit(sw, 0, x, y, true, 6), "set its branch to the left");
@@ -150,7 +233,11 @@ static void edit_program(OkeDataBase *card)
     /* An action chip, then removed again. */
     int ax, ay;
     if (find_free(&main, &ax, &ay)) {
-        CHECK(pgchip_place(sw, 0, ax, ay, savedata_chip_default(0x1E)), "placed a move chip");
+        PgChipCommand move = *savedata_chip_default(0x1E);
+        int32_t v = -1;
+        CHECK(pgchip_param_set(&move, 0x3A, 0) && pgchip_param_get(&move, PGCHIP_SUB_PROCESSING, &v) && v == 1,
+              "an endless move passes through");
+        CHECK(pgchip_place(sw, 0, ax, ay, &move), "placed a move chip");
         pgchip_remove(sw, 0, ax, ay);
         CHECK(!pgchip_is_chip(pgchip_at(&main, ax, ay)), "and removed it");
     }
@@ -262,6 +349,10 @@ int main(int argc, char **argv)
     printf("%d designs, %d programs: %d unchanged, %d only gain bit 7 on blank cells / Returns, %d other\n",
            t.designs, t.programs, t.unchanged, t.bit7_only, t.other);
     CHECK(t.programs > 0 && t.other == 0, "the normalize rules match every shipped program");
+    printf("%d parameters and %d angles on the shipped chips\n", t.params, t.angles);
+    CHECK(t.params > 1000 && t.param_bad == 0, "every listed parameter reads and writes back (%d bad)", t.param_bad);
+    CHECK(t.angles > 0 && t.angle_bad == 0, "every direction / elevation writes back (%d bad)", t.angle_bad);
+    check_range_editor();
 
     /* Defaults in a new game. */
     savedata_new_game();

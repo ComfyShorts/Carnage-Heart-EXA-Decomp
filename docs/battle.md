@@ -53,7 +53,7 @@ build/pc-m32/chexa-pc --disc DIR --startup --gmo land/map01/map01_sky.gmo --shot
 | Part | Status | Source |
 |---|---|---|
 | Robot behaviour | **Real** | `pgchip.c` (`CBattleOkePgChip`) runs the programs stored in the preset records |
-| Edited programs | **Real** | A program changed in Software Setup (`docs/screens.md`) is written into the save's card; the battle copies the card when it starts and the same interpreter runs it. `chexa-chip-edit-test` fights a two-chip program made with the editor's functions and checks the chip history holds only those two chips |
+| Edited programs | **Real** | A program changed in Software Setup (`docs/screens.md`), chip parameters and ranges included, is written into the save's card; the battle copies the card when it starts and the same interpreter runs it. `chexa-chip-edit-test` fights a two-chip program made with the editor's functions and checks the chip history holds only those two chips |
 | Chip speed | **Real** | per CPU part, table at `0x08bd5f88` (`FUN_08856704`) |
 | Scan and aim distances | **Real** | `PGCHIP::CRange` (`FUN_089fc37c`), tables at `0x08c1cab4` / `0x08c1cb7c` / `0x08c1cbd0`. A range is a sector (b2 bit 0 clear) or, with bit 0 set, a rectangle in the OKE's frame (`FUN_08841bd8` → `FUN_08860408` → `FUN_0887eab8`): centred dist(b4) to the right and dist(b5) ahead (signed), dist(b3) wide and dist(b2 bits 1-7) deep. The search's distance cap (`+0x9f8c`) isn't applied; the obstacle and area scans still treat every range as a sector |
 | 3D models | **Real** | `gmo.c`: GMO reader (bones, parts, meshes, GE vertex arrays, materials, embedded GIM textures) |
@@ -235,6 +235,6 @@ screen. See "Music" in `docs/screens.md`.
   ammunition; flying types; collision) isn't ported, so who wins says little about the
   real game.
 - **Flow**: name entry, the parts of OKE Configuration listed as stand-ins in
-  `docs/screens.md` (in Software Setup: parameter editing, drag / pull, macros, the test program; note templates, Snapshot), the colours, polish and emblem on the battle models,
+  `docs/screens.md` (in Software Setup: the range editor's 3D view and number pad, drag / pull, macros, the test program; note templates, Snapshot), the colours, polish and emblem on the battle models,
   the Shop's stand-ins (`docs/screens.md`), Victory Points won in battles, missions and
   matchmaking.

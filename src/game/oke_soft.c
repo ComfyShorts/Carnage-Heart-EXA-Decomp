@@ -11,8 +11,8 @@
  *     (FUN_08a0c008 tiles, FUN_08a13430 face routines, FUN_08a13468 exit arrows).
  *   CPgChipSelectWnd: Create FUN_08a16bc8 (5 pages of 9 x 7, titles CDesignString
  *     0xCF-0xD3), the page rule FUN_08a155f8.
- * The rules themselves are in pgchip_edit.c. What isn't ported (the parameter
- * sub-menus, drag / pull, flipping and turning a pasted block, macros, the test
+ * The parameter sub-menus are in oke_param.c, the rules in pgchip_edit.c. What isn't
+ * ported (drag / pull, flipping and turning a pasted block, macros, the test
  * program, example solutions) is listed in docs/screens.md. */
 #include "oke_soft.h"
 
@@ -25,6 +25,7 @@
 #include "gamedata.h"
 #include "gu.h"
 #include "oke_card.h"
+#include "oke_param.h"
 #include "osk.h"
 #include "pad.h"
 #include "pgchip_edit.h"
@@ -142,6 +143,7 @@ typedef enum {
     M_EDIT,       /* mode 3: Edit Chips */
     M_SELECT,     /* mode 0x12: the chip list */
     M_CONNECT,    /* mode 0x1A: the exits of the chip just placed */
+    M_PARAM,      /* mode 0x13: the parameter sub-menu (oke_param.c) */
     M_PICK,       /* mode 6: chips selected one by one */
     M_RANGE,      /* Select Area: a rectangle */
     M_RANGE_MENU, /* mode 0x11: Move / Copy / Delete / Save Macro */
@@ -171,6 +173,7 @@ static struct {
     /* exit step */
     bool branch_step;
     Mode back_to;
+    bool param_from_list; /* the sub-menu came from the chip list */
     /* selections */
     int ax, ay; /* Select Area's anchor */
     bool picked[PGCHIP_PROGRAM_MAX][PGCHIP_MAIN_CAP * PGCHIP_MAIN_CAP];
@@ -389,6 +392,54 @@ static void close_editor(void)
     }
 }
 
+/* ---- the parameter sub-menu (mode 0x13, oke_param.c) ---- */
+
+static void open_param(const PgChipCommand *chip, bool from_list)
+{
+    param_open(chip, &g.sw, savedata_card(g.card));
+    g.param_from_list = from_list;
+    g.mode = M_PARAM;
+}
+
+static void open_list(void);
+static void enter_connect(void);
+
+/* UpdateModeSubMenu's ends: Confirm puts the chip on the cell and goes on to its
+ * exits; cross keeps the chip as the type's default and goes back, putting it on the
+ * cell only when it came from one (FUN_08a854fc). */
+static void update_param(float dt)
+{
+    ParamResult r = param_update(dt);
+    if (r == PARAM_OPEN)
+        return;
+    const PgChipCommand *chip = param_chip();
+    int x, y, p = cursor_area(&x, &y);
+    if (r == PARAM_CANCEL && g.param_from_list) {
+        savedata_set_chip_default(chip);
+        g.mode = M_SELECT;
+        return;
+    }
+    PgChipCommand *cell = cursor_chip();
+    if (!g.param_from_list && cell && !memcmp(cell, chip, sizeof *cell)) {
+        /* unchanged: nothing to undo */
+    } else {
+        backup();
+        if (p < 0 || !pgchip_place(&g.sw, p, x, y, chip)) {
+            error_se();
+            g.mode = M_EDIT;
+            return;
+        }
+        SDL_Log("[soft] %s (0x%02X) at %d (%d, %d): %02X %02X %02X %02X %02X %02X", chip_name(pgchip_type(chip)),
+                pgchip_type(chip), p, x, y, chip->b[2], chip->b[3], chip->b[4], chip->b[5], chip->b[6], chip->b[7]);
+    }
+    if (r == PARAM_CANCEL) {
+        savedata_set_chip_default(chip); /* FUN_08a1cbd8 */
+        g.mode = M_EDIT;
+        return;
+    }
+    enter_connect();
+}
+
 /* ---- the chip list (CPgChipSelectWnd) ---- */
 
 #define LIST_COLS 9
@@ -452,6 +503,11 @@ static void update_list(void)
      * built on them) and goes straight onto the cell (BeginModeEditConnection). */
     int x0, y0, p = cursor_area(&x0, &y0);
     PgChipCommand chip = *savedata_chip_default(g.list[g.list_cursor]);
+    if (p >= 0 && param_has(pgchip_type(&chip))) { /* its parameters first (mode 0x13) */
+        sound_se(SE_DECIDE, 1.0f);
+        open_param(&chip, true);
+        return;
+    }
     backup();
     if (p < 0 || !pgchip_place(&g.sw, p, x0, y0, &chip)) {
         error_se();
@@ -460,6 +516,11 @@ static void update_list(void)
     }
     SDL_Log("[soft] placed %s (0x%02X) at %d (%d, %d)", chip_name(pgchip_type(&chip)), pgchip_type(&chip), p, x0, y0);
     sound_se(SE_DECIDE, 1.0f);
+    enter_connect();
+}
+
+static void enter_connect(void)
+{
     g.branch_step = false;
     g.back_to = M_EDIT;
     g.mode = M_CONNECT;
@@ -562,7 +623,9 @@ static void update_edit(void)
         sound_se(SE_DECIDE, 1.0f);
         if (!c || !pgchip_is_chip(c)) {
             open_list();
-        } else { /* the chip under the cursor: its exits (its parameters aren't ported) */
+        } else if (param_has(pgchip_type(c))) { /* its parameters (mode 0x13) */
+            open_param(c, false);
+        } else { /* a chip without parameters: its exits */
             g.branch_step = false;
             g.back_to = M_EDIT;
             g.mode = M_CONNECT;
@@ -1062,6 +1125,7 @@ int soft_update(float dt)
     case M_EDIT: update_edit(); break;
     case M_SELECT: update_list(); break;
     case M_CONNECT: update_connect(); break;
+    case M_PARAM: update_param(dt); break;
     case M_PICK: update_pick(); break;
     case M_RANGE: update_range(); break;
     case M_RANGE_MENU: update_range_menu(); break;
@@ -1494,6 +1558,9 @@ void soft_draw(void)
     case M_SELECT:
         draw_list();
         break;
+    case M_PARAM:
+        param_draw();
+        break;
     case M_RANGE_MENU:
         draw_range_menu();
         break;
@@ -1526,6 +1593,10 @@ const char *soft_help(void)
     case M_EDIT: return c && pgchip_valid_type(pgchip_type(c)) ? chip_help(pgchip_type(c)) : sstr(0x24A);
     case M_SELECT: return g.list_count ? chip_help(g.list[g.list_cursor]) : sstr(0x24E);
     case M_CONNECT: return sstr(g.branch_step ? 0x252 : 0x251);
+    case M_PARAM: {
+        const char *h = param_help();
+        return h ? h : chip_help(pgchip_type(param_chip()));
+    }
     case M_PICK: return sstr(0x24D);
     case M_RANGE: return sstr(0x24C);
     case M_RANGE_MENU:

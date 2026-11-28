@@ -114,4 +114,53 @@ void pgchip_clip_paste(SoftwareDataBase *sw, int program, const PgChipClip *clip
  * dropped. */
 bool pgchip_copy_software(SoftwareDataBase *dst, const SoftwareDataBase *src);
 
+/* ---- parameters ---- */
+
+/* The parameter sub-menus (CSoftDesignMngr::eSUB_MENU_TYPE, 0..0x4C), labelled by
+ * CSoftString through the table at 0x08C2E494. Each chip type lists up to 8 of them,
+ * Confirm (0) last (table 0x08C2DCFC, read from the EBOOT). */
+#define PGCHIP_SUB_ITEMS 8
+enum {
+    PGCHIP_SUB_CONFIRM = 0x00,
+    PGCHIP_SUB_RANGE = 0x02,     /* the range's shape, then the range editor */
+    PGCHIP_SUB_POLAR = 0x03,
+    PGCHIP_SUB_CARTESIAN = 0x04,
+    PGCHIP_SUB_DIRECTION = 0x05, /* angle editors (Select and Fire, Turn Turret) */
+    PGCHIP_SUB_ELEVATION = 0x06,
+    PGCHIP_SUB_PROCESSING = 0x07,
+    PGCHIP_SUB_COUNT = 0x4D,
+};
+int pgchip_sub_menus(int type, int out[PGCHIP_SUB_ITEMS]);
+
+/* GetSubMenuValue / SetSubMenuValue (FUN_08a959c8 / FUN_08a96284): a sub-menu's value
+ * in the chip's bytes. False when the type has no such value. Move and Rotate with an
+ * endless distance (0) always pass through (processing mode 1). */
+bool pgchip_param_get(const PgChipCommand *c, int sub, int32_t *value);
+bool pgchip_param_set(PgChipCommand *c, int sub, int32_t value);
+
+/* The chips with a scan range in bytes 2-5: the types whose sub-menus include Specify
+ * Range (2 or 3). */
+bool pgchip_has_range(int type);
+/* PGCHIP::CRange step -> distance (FUN_089fc37c). */
+int pgchip_range_distance(int step);
+/* FUN_089fc9ac: change a range between sector (0) and rectangle (1), keeping roughly
+ * the same place. */
+void pgchip_range_set_shape(uint8_t range[4], int shape);
+/* The range editor's input (FUN_08a9fa58): a sector's bearing (dx) and outer distance
+ * (dy), or with `alt` (R held) its half-width and inner distance; a rectangle's
+ * centre, or with `alt` its width and depth. `snap` (L held) goes to the next scale
+ * level / 90 degrees. True when it changed. */
+bool pgchip_range_edit(uint8_t range[4], int dx, int dy, bool alt, bool snap);
+
+/* Direction and elevation in hundredths of a degree (FUN_08a8b0b8 / FUN_08a8b144,
+ * FUN_08a8b1a4 / FUN_08a8b230): Select and Fire keeps 2-degree units, Turn Turret
+ * the hundredths. */
+bool pgchip_angle_get(const PgChipCommand *c, bool elevation, int *centideg);
+bool pgchip_angle_set(PgChipCommand *c, bool elevation, int centideg);
+/* The editor's step: 2 degrees, or 1 / 0.1 degree by Turn Turret's byte 2. */
+int pgchip_angle_step(const PgChipCommand *c);
+/* One press (d = -1 / +1) in the direction (FUN_08a99954, wraps, `snap` to 90) or
+ * elevation editor (FUN_08a9b490, -90..90, a `fresh` press wraps). */
+int pgchip_angle_edit(int centideg, bool elevation, int step, int d, bool fresh, bool snap);
+
 #endif
