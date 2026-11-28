@@ -133,18 +133,29 @@ Menu writes it to the file.
 
 | Screen | Game | Real | Stand-in |
 |---|---|---|---|
-| Top menu | `setupTopMenu` `FUN_088b9c28` | Items from `DAT_08bfe348` (0-8), text id + 0x18, help id + 0x23, on `bf_menb2` / `bf_menl2` / `bf_new00` (parts 8, 9, 0x85). Battle Mode's menu limits (`FUN_0895de04` on entry, read by `FUN_0895e3c4`) leave out Snapshot. On an installed card (status 2/3, `FUN_089eea58`) all but Notes are disabled (string 0x6F). Software and the rest need a design first (string 0x2E) | OKE Customization (its sub-menu `FUN_088b9edc`: Design, Main / Accent Color, Polish), Emblems, Name OKE (the keyboard), Notes and Privacy Level log a line; the title banner (`bf_ttl1`) and the menu's place are the port's (as Team Formation's) |
-| The card window | `COkeCard::drawHardware` `FUN_089e6324` | The body, CPU, armour, additional armour, the body's weapon slots with ammo and its option slots, durability, and weight against payload with the weight state (`FUN_089edf40`) | Drawn as text on `bf_swnd4` with `oc_hdbg` as the header: the game draws the OKE's picture (`CreatePicture`), the CPU picture and equipment icons (`CEquipmentIcon`, `FUN_088d88a4`) on `oc_wbg0-4`; the weight-state colours are the port's |
+| Top menu | `setupTopMenu` `FUN_088b9c28` | Items from `DAT_08bfe348` (0-8), text id + 0x18, help id + 0x23, on `bf_menb2` / `bf_menl2` / `bf_new00` (parts 8, 9, 0x85). Battle Mode's menu limits (`FUN_0895de04` on entry, read by `FUN_0895e3c4`) leave out Snapshot. On an installed card (status 2/3, `FUN_089eea58`) all but Notes are disabled (string 0x6F). Software and the rest need a design first (string 0x2E) | The title banner (`bf_ttl1`) and the menu's place are the port's (as Team Formation's); Snapshot isn't ported |
+| The card window | `COkeCard` (`src/game/oke_card.c`): `Initialize` `FUN_089e5dcc`, `Draw` `FUN_089e4b50` = `drawWeightLine` `FUN_089e4cf0` + `drawType` `FUN_089e4f48` + `drawHardware` `FUN_089e6324` | The card itself: the weight band `oc_wbg0-3` by the weight state (`FUN_089edf40`; `oc_wbg1` empty, `oc_wbg4` selected), the name band `oc_stbg0/1` with the card's name, the hardware band `oc_hdbg` with the OKE's picture (`CreatePicture` `FUN_089e431c`: 48 x 48 index8 at hardware `+0x2B0`, 256 colours at `+0xBB0`), the emblem (`FUN_089e447c`: 32 x 32 index4 at `+0`, 16 colours at `+0x200`), `oc_bso_0`, and `CEquipmentIcon` (`FUN_088d88a4`) cells of `bf_icon0`: weapons (icon by ability and category, `FUN_088d8770`), armour, additional armour, options. Under it: body, durability, weight / payload, CPU, armour, weapons with ammo, options | The window around the card (`bf_swnd4`) and the stats under it are the port's: the game shows the card in its lists and the 3D model beside them. The weight-state colours of the stats, the half-dark squares behind the pictures (colour 1, alpha 0x7F: the colour is a guess) and the chip-program marks of the weight band (0xFD / 0xFE, not ported) |
 | Select OKE Card | `FUN_089e6ba8`, `COkeCardSelectMngr` | The 32 cards; circle makes the card current ("Currently editing OKE Card." 0x124 / "This OKE Card is blank." 0x125), installed cards refused (0x6F). Square asks "Delete this design?" (0x66) and clears the card (`FUN_089eea80`), triangle copies: choose where (0x65), "Copy OKE Card here?" (0x67 / 0x68 over a used card) | A deleted card also leaves the teams it was on (the port's choice); the list layout; the card labels (number and name, the body's name without one) |
-| Hardware | `CHardDesignMngr` modes 1 (`FUN_088f6748` / `FUN_088f7b00`), menu `FUN_088f9694` | Body, CPU, Armor Thickness, Additional Armor, Weapon 1-5 (as many as the body's `+0x18`), Energy, Engine Output, Option 1-4 (the body's `+0x14`); text `CHardString` 0xCF + item, help 2 / 3 / 0xF3 / 0xF4 / 4 / 0xED / 0xEE / 6. On a blank card only Body can be chosen (`FUN_08ad8944`; 0xF6 for the rest) | Energy and Engine Output (modes 0x10 / 0x11, the tuning sliders) show their percentages but can't be changed; the window layout |
+| Hardware | `CHardDesignMngr` modes 1 (`FUN_088f6748` / `FUN_088f7b00`), menu `FUN_088f9694` | Body, CPU, Armor Thickness, Additional Armor, Weapon 1-5 (as many as the body's `+0x18`), Energy, Engine Output, Option 1-4 (the body's `+0x14`); text `CHardString` 0xCF + item, help 2 / 3 / 0xF3 / 0xF4 / 4 / 0xED / 0xEE / 6. On a blank card only Body can be chosen (`FUN_08ad8944`; 0xF6 for the rest) | The window layout |
 | The parts lists | `CEquipmentSelectWnd` `FUN_088da8b8`: `FUN_088d95f8` bodies, `FUN_088d976c` CPUs, `FUN_088d98cc` / `FUN_088d9a2c` armour, `FUN_088d9b8c` weapons, `FUN_088d9df0` options | The parts the save owns (stock 2, see Shop below): a new Battle Mode game (`FUN_08918d5c`) owns everything but bodies 14 and 33, and the Shop sells the rest. Bodies in the order at `0x08be8a80`; weapons by category, "No Weapon" when the slot may be empty, a weapon only where the body's slot table (`0x08c15c88`, `FUN_089eda88`) takes its type. The help line is the part's `CHardString` text (bodies 0xB+, CPUs 0x30+, weapons 0x4D+, options 0x8A+, armour 0x95, additional armour 0x96+). Choosing: a body takes its default loadout (`FUN_089f3a14`) and keeps paint, colours, CPU, armour and energy (`FUN_088f4df4`); a CPU resizes the program (`FUN_088f5020` → `FUN_089eeb44`: main 4 / 6 / 10 / 15 by the CPU's class at `0x08bd5f68`, sub-programs 7 for class 3; chips inside the new size kept, new ones blank as `FUN_089fcddc`); a weapon of the same category keeps its ammo up to the slot's capacity, another gets 100 rounds (types 1-8), 30 (type 9) or the slot's amount (`FUN_088da16c`, `FUN_089edb24`). On a blank card the chosen body starts a new design (status 1, CPU TP-16, a 4 x 4 program) | The info window's numbers are a choice of the game's stat labels (0x31-0x51); the ammo count window the game opens after some weapons (mode `+0x294` = 1, `FUN_089e15ac`) isn't ported; where the start chip goes when a program shrinks is the port's (kept if inside, else the corner) |
 | Software | `CSoftDesignMngr` / `CPgChipWnd` | The main program and the sub-programs (L/R), chip names from `PGCHIP`'s table (`0x08c85100`), the chip tiles `parts/soft/sd_chip0` (faded for chips switched off) | View only: Edit Chips and the rest of the Software Setup menu aren't ported. The tile for each kind (`FUN_089fd528`: system, judge, action, other, Return) is a guess by order; the chip icons (`sd_cicn0`), the exits' arrows and the parameters (shown as bytes) aren't drawn |
+| Energy and Engine Output | `CHardDesignMngr` modes 0x10 / 0x11 (`FUN_088f4018` / `FUN_088f4170`), `CTuneWnd` (`FUN_08adf134`, input `FUN_08adf454`, draw `FUN_08adf624`) | 50-150 %, left / right one step (repeating, a fresh press past an end wraps), written into the card at once (`+0x29C` / `+0x2A0`) so the weight follows; circle keeps, cross puts the opening value back. Window `bf_twnd2` | The cursor style |
+| Name OKE | mode 9 (`FUN_088bafa8`), the keyboard through `CUtility` (`FUN_08b2552c`) | Starts from the card's name or its body's (`FUN_089eebc0`), titled "Name Input" (`0x08be31a4`); OK writes the name into the card | The keyboard is the PSP's own (system software, not in the game): `src/game/osk.c` is a stand-in, see "On-screen keyboard" |
+| OKE Customization | modes 2-6 (`FUN_088ba534`), sub-menu `FUN_088b9edc` (text 0x106 + i, help 0x10A + i, each item on its menu-limit word) | Design (`CPaintWnd`, 0-3, hardware `+0x244`, "Paint Pattern"), Main / Accent Color (`CColorEditWnd` `FUN_088a1128`-`FUN_088a2aa8`: R, G, B 0-100, `+0x248` / `+0x24C` as R \| G<<8 \| B<<16; triangle a random colour, sound 0x11), Polish (`CColorLusterWnd` `FUN_088a3d40`, 0-4, `+0x250`). Each written into the card as it changes; cross puts the opening value back. The game's parts and help strings | The game previews on the OKE's 3D model; the port shows the card window instead. The help line 0x10B is longer than the help window (the game's wrapping isn't known). The cursor style |
+| Emblems | mode 7, `CEmblemEditor` (`src/game/oke_emblem.c`; updates `FUN_088c6594`, draw `FUN_088d0004`) | The tool column (table `0x08be6edc`: y, button part, icon; `em_icon_00` cells, help `CHardString` 0x9E + icon), the 32 x 32 canvas at 5 px a pixel on `em_bgwnd`, the picture at its size, the palette `em_plt` (L / R pick, also on the tools), the grid (on at start, toggled). Undo (one level, a swap: `FUN_088c9630`), Pencil (circle arms it, then cross held draws: as decompiled, `FUN_088c6718`), Line / Rectangle / Oval (circle the first point, circle again draws, cross drops the point; the cursor stays where it is, `FUN_088c9cc4`; the oval shows its box), Paint (fill), Palette (the colour window with an A row, R/G/B as (b - 0x1C) / 2, A as 0-255 → 0-100, `FUN_088c96fc`), Delete Image (0xBA, Yes / No), Placement (three places, bits of `+0x254`, `em_brk_bl` / `em_brk_st`). Samples (mode 0xB `FUN_088ce050`, list built at open by `FUN_088d1984`): `EMBLEM02`-`EMBLEM75` (hard parts 0xD-0x52), then the non-blank emblems (`FUN_088cbbd4`) of the OKE cards (not installed private ones) and teams; five at a time at (0x10E + 0x26 i, 0xA7) with `sd_saro0/1` arrows and the `lc_cur` cursor, help 0xB7; choosing copies picture and palette (R, G, B kept within 0x1C-0xE4, `FUN_088c9304`). Triangle there: your own pictures (mode 0xC `FUN_088ce900`), 32 x 32 16-colour BMPs from `ms0:/PICTURE/CHE/` (the `--ms` folder), one directory entry read a frame, up to 50 (`FUN_088cc18c`, parser `FUN_088d2af8` / `FUN_088d2c80`). Ranges: triangle in Pencil, a shape tool without a first point, or Paint sizes a range (mode 0xD, help 0xAA); circle opens Move / Copy / Delete (mode 0xE, table `0x08be6fd8`, help 0xAB + item); Move / Copy lift it (`FUN_088cad88`) to be moved inside the picture, flipped with triangle, turned a quarter with R / L (`FUN_088cb0e0`, re-centred by `FUN_088cb028`), pasted with circle (every pixel, `FUN_088caa40`) or taken back with cross (Undo). Square held erases. Cross writes the picture and palette back into the card (`FUN_088cb970`) | The full-screen window the game shows with the samples (`+0x4EC`) isn't drawn; the strips' scroll and the range column's slide aren't animated; the user strip shows its right arrow with fewer than five pictures, as the game's test reads. The shapes are plain Bresenham / midpoint rasterizations (the game's point list `FUN_088c8c48` isn't followed exactly); the grid colour; the cursor boxes; the 3D preview of the placements isn't drawn |
+| Notes | mode 10, `CCommentWnd` (`src/game/oke_notes.c`, rows `FUN_088aa304`), the tag keyboard `CKeyOskWnd` | The card's notes (`COkeDataBase + 0x1A40`: ten tags of up to 10 button marks 1-14, ten texts of up to 100 bytes, the defaults in Japanese), shown with `cm_btn_p` / `cm_wln0` / `cm_wrn0`. Tags typed on the game's keyboard (keys at `0x0047B850`, looks `0x0047B5F8`, icons `0x003F2698`, parts `cm_bf01`-`cm_wnd_p`); Move / Copy / Delete of marked cells as the game's backup and clipboard; Delete All (0x123). An installed card's notes are only viewed. The help window hides while a keyboard is open (`FUN_088abb58`) | Text entry uses the stand-in keyboard ("Enter Comments", `0x003DCBD8`). Save Template, Paste Template and Copy from Card aren't ported (logged). The cursor style, the menu's place and how the row frame is put together |
+| Privacy Level | mode 0xB, `CSecretLevelWnd` (draw `FUN_08a6d6a0`) | Public / Private (0x61 / 0x62) on `bf_swnd2` beside the menu at the cursor's row; circle writes the card header `+0x20`, help 0x2B | The cursor style |
 
-The hardware block (`CHardwareDataBase`, `COkeDataBase + 0x30`): `+0x240` body, `+0x244`
-paint, `+0x248` / `+0x24C` colours, `+0x250` polish, `+0x254` flags, `+0x258` five
+The hardware block (`CHardwareDataBase`, `COkeDataBase + 0x30`): `+0` the emblem (32 x
+32, 4 bits a pixel, the even pixel in the low nibble), `+0x200` its 16 colours (R, G, B,
+A bytes), `+0x240` body, `+0x244` paint pattern (0-3), `+0x248` / `+0x24C` main and
+accent colours (R | G<<8 | B<<16 | A<<24, each 0-100; -1 unset), `+0x250` polish
+(0-4), `+0x254` the emblem's places (bits 0-2, `FUN_089ed5b0` / `FUN_089ed580`), `+0x258` five
 weapons, `+0x26C` their ammo, `+0x280` armour thickness, `+0x284` additional armour,
 `+0x288` CPU, `+0x28C` four options, `+0x29C` on-board energy %, `+0x2A0` engine
-output %. The weight (`FUN_089edebc`) is the body's `+4`, the energy carried (body `+0xC`
+output %, `+0x2B0` the OKE's picture (48 x 48, 8 bits a pixel) and `+0xBB0` its 256
+colours. The card header's `+0x20` is the privacy level, and `COkeDataBase + 0x1A40`
+the notes. The weight (`FUN_089edebc`) is the body's `+4`, the energy carried (body `+0xC`
 × energy % × 0.2), the armour (`0x08bd5ed8` / `0x08bd6064`: % of the body's weight),
 each weapon (`0x08bd5a28`: weight + per-round weight × ammo), each option
 (`0x08bd6038`) and the CPU (`0x08bd5fbc` by class + speed × 100 / the fastest's); the
@@ -158,6 +169,38 @@ O="--press 200 up --press 210 up --press 220 circle"         # -> OKE Configurat
 build/pc-m32/chexa-pc --disc DIR --saves orig/teamtest --startup $C $O --shot 270 orig/oke_top.png \
     --press 280 circle --press 290 down --press 296 down --shot 330 orig/oke_cards.png --frames 340
 ```
+
+The screens one at a time (frames are 30 a second; the top menu's items are 8 frames
+apart from frame 250: 3 downs Customize, 4 Emblems, 5 Name, 6 Notes, 7 Privacy):
+
+```sh
+D="--press 250 down --press 258 down --press 266 down --press 274 down"   # -> Emblems
+build/pc-m32/chexa-pc --disc DIR --saves COPY_OF_teamtest --startup $C $O $D --press 290 circle \
+    --shot 320 orig/oke_emblem.png --frames 325
+```
+
+Screenshots in `orig/` (not committed): `oke_card.png`, `oke_energy.png`,
+`oke_output.png`, `oke_name.png`, `oke_custom.png`, `oke_design.png`, `oke_color.png`,
+`oke_polish.png`, `oke_emblem*.png` (with `_samples`, `_user`, `_range*`), `oke_card_emblem.png` (an edit on the card),
+`oke_notes*.png`, `oke_privacy*.png`. Saving through the System Menu and loading
+again keeps the changes (checked with Privacy Level).
+
+#### On-screen keyboard
+
+Name OKE and the Notes' texts use the PSP's text-entry keyboard (`sceUtilityOsk`), which
+is system software, not part of the game: the game passes a title, the text to start
+from and a length (`CUtility` `FUN_08b2552c`) and takes the text back on OK
+(`FUN_08b23c3c` / `FUN_08b25730`). `src/game/osk.c` stands in for it: a grid of ASCII
+characters, the d-pad moves, circle types, square deletes the last character (both
+bytes of a Shift-JIS one), triangle a space, Start accepts, cross cancels. The game's
+own keyboard for the Notes' button tags (`CKeyOskWnd`) is ported as the game draws it.
+
+#### Two-byte text
+
+The Notes' default texts are Shift-JIS. `src/game/font.c` draws them from
+`font/gothic16.gim` as the game does (`FUN_08b15ae8`): Shift-JIS to JIS (`FUN_08b0ab28`),
+the cell (`FUN_08b14f20`) row (j1 - 0x21, or j1 - 0x28 from 0x29) × 0x5E + j2 - 0x21,
+through the sheet's u16 map (0 skips the glyph).
 
 ### Shop
 
@@ -540,6 +583,8 @@ Q/W = L/R, Space = start, Right Shift = select.
   and message dialogs; Story Data; the keyboard for save names.
 - The phases after the menus: 0xC (new story game), 7 (the player-name keyboard),
   6 for network play, 10 (attract after 65 s idle).
-- Shift-JIS text (`gothic16.gim`, the double-byte table) for the Japanese strings.
+- Shift-JIS text is drawn (see "Two-byte text"); the game's wrapping of long help lines.
+- OKE Configuration: chip editing, Snapshot, the note templates, and the 3D model
+  beside the menus.
 - Voices and the ATRAC3plus effects (the decoder is in, their players aren't); the BGM
   Player screen; the remaining menu effects.

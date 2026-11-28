@@ -141,6 +141,45 @@ Picture *picture_from_memory(const char *name, const void *data, int32_t size)
     return p; /* not in the by-name cache: the owner releases it */
 }
 
+static int indexed_sizes(int format, int w, int h, int *image, int *palette)
+{
+    if ((format != 4 && format != 5) || w <= 0 || h <= 0 || (w * (format == 4 ? 4 : 8)) % 128)
+        return 0; /* rows of 16 bytes, as the GE wants */
+    *image = w * h * (format == 4 ? 4 : 8) / 8;
+    *palette = (format == 4 ? 16 : 256) * 4;
+    return 1;
+}
+
+Picture *picture_from_pixels(const char *name, int format, int w, int h, const void *pixels, const void *palette)
+{
+    int ib, pb;
+    if (!indexed_sizes(format, w, h, &ib, &pb))
+        return NULL;
+    uint8_t *buf = heap_alloc(&g_default_heap, (uint32_t)(ib + pb), 16, "texture", 0);
+    if (!buf)
+        return NULL;
+    Picture *p = SDL_calloc(1, sizeof *p);
+    SDL_strlcpy(p->name, name, sizeof p->name);
+    p->file = buf;
+    p->refs = 1;
+    p->image = (GimImage){.format = format, .width = w, .height = h, .bpp = format == 4 ? 4 : 8, .pitch_px = w,
+                          .frames = 1, .frame_data = {buf}};
+    p->palette = (GimImage){.format = 3, .width = format == 4 ? 16 : 256, .height = 1, .bpp = 32,
+                            .pitch_px = format == 4 ? 16 : 256, .frames = 1, .frame_data = {buf + ib}};
+    p->has_palette = 1;
+    picture_set_pixels(p, pixels, palette);
+    return p;
+}
+
+void picture_set_pixels(Picture *p, const void *pixels, const void *palette)
+{
+    int ib, pb;
+    if (!p || !indexed_sizes(p->image.format, p->image.width, p->image.height, &ib, &pb))
+        return;
+    memcpy(p->file, pixels, (size_t)ib);
+    memcpy(p->file + ib, palette, (size_t)pb);
+}
+
 Picture *picture_load(const char *name)
 {
     for (int i = 0; i < MAX_PICTURES; i++)
@@ -184,6 +223,19 @@ void picture_release(Picture *p)
             g_pictures[i] = NULL;
     heap_free(&g_default_heap, p->file);
     SDL_free(p);
+}
+
+bool picture_index4_data(const Picture *p, int w, int h, const uint8_t **pixels, const uint8_t **palette,
+                         int *palette_format)
+{
+    /* rows of w / 2 bytes; a swizzled image is the same when a row is one 16-byte block */
+    if (!p || p->image.format != 4 || p->image.width != w || p->image.height != h || !p->has_palette ||
+        p->image.pitch_px != w || (p->image.swizzled && w != 32))
+        return false;
+    *pixels = p->image.frame_data[0];
+    *palette = p->palette.frame_data[0];
+    *palette_format = p->palette.format;
+    return true;
 }
 
 int picture_width(const Picture *p)

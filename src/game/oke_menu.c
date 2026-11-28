@@ -6,15 +6,16 @@
  *     FUN_0895e3c4 that Battle Mode fills with FUN_0895de04: Snapshot off; an
  *     installed card leaves only Notes, FUN_089eea58), the OKE Customization
  *     sub-menu FUN_088b9edc;
- *   COkeCard::drawHardware FUN_089e6324 for what the card window lists;
+ *   COkeCard::drawHardware FUN_089e6324 for what the card window lists (oke_card.c);
  *   CHardDesignMngr: the mode switches FUN_088f301c / FUN_088f3248, the category
  *     menu FUN_088f6748 / FUN_088f7b00 built by FUN_088f9694 (CHardString 0xCF + item;
  *     on a blank card everything but Body disabled), the part lists of
  *     CEquipmentSelectWnd (FUN_088da8b8) and the confirms in oke_parts.c;
  *   CSoftDesignMngr: the chip grid, viewed only (chip names from PGCHIP's table at
  *     0x08c85100).
- * OKE Customization, Emblems, Name OKE, Notes and Privacy Level aren't ported;
- * choosing them is logged. */
+ * OKE Customization (oke_custom.c), Emblems (oke_emblem.c), Name OKE (the stand-in
+ * keyboard osk.c), Notes (oke_notes.c) and Privacy Level (CSecretLevelWnd, here);
+ * the card itself is COkeCard (oke_card.c). Snapshot and chip editing aren't ported. */
 #include "oke_menu.h"
 
 #include <stdio.h>
@@ -25,7 +26,12 @@
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
+#include "oke_card.h"
+#include "oke_custom.h"
+#include "oke_emblem.h"
+#include "oke_notes.h"
 #include "oke_parts.h"
+#include "osk.h"
 #include "pad.h"
 #include "sound.h"
 #include "psp_shim.h"
@@ -37,6 +43,12 @@
 #define PART_BF_SWND2 0x99
 #define PART_BF_SWND5 0x9C
 #define PART_OC_HDBG 0xC6
+#define PART_OP_SVF_L 0x44 /* the gauge */
+#define PART_BF_TWND2 0x9E /* the slider and colour windows */
+#define PART_BF_CUR7 0xDD  /* the gauge's fill */
+
+#define NAME_MAX_INPUT 12  /* FUN_08b2552c's limit for kind 1, the OKE name */
+#define CARD_NAME_SIZE 0x1C /* COkeDataBase + 4 .. + 0x20 */
 
 #define T_CHIP_NAME 0x00481100u /* PGCHIP's chip names, 0x36 pointers (0x08c85100) */
 #define T_CHIP_KIND 0x00418BE4u /* PGCHIP's chip kinds, 0x36 bytes (0x08c1cbe4, FUN_089fd528) */
@@ -63,6 +75,12 @@ typedef enum {
     MODE_HARDWARE,   /* CHardDesignMngr mode 1: the categories */
     MODE_PARTS,      /* modes 2-0xE: one category's parts */
     MODE_SOFTWARE,   /* CSoftDesignMngr: the program grid */
+    MODE_SLIDER,     /* CHardDesignMngr modes 0x10 / 0x11: Energy Rate, Engine Output */
+    MODE_NAME,       /* CDesignMngr mode 9: Name Input, the on-screen keyboard */
+    MODE_PRIVACY,    /* mode 0xB: CSecretLevelWnd */
+    MODE_NOTES,      /* mode 10: CCommentWnd (oke_notes.c) */
+    MODE_CUSTOM,     /* modes 2-6: OKE Customization (oke_custom.c) */
+    MODE_EMBLEM,     /* mode 7: CEmblemEditor (oke_emblem.c) */
 } Mode;
 
 typedef enum { ASK_DELETE, ASK_COPY } AskKind;
@@ -77,6 +95,8 @@ static struct {
     int hw_items[HWI_COUNT], hw_count, hw_cursor;
     int parts[PART_LIST_MAX], part_count, part_cursor, part_scroll;
     int program, chip_x, chip_y;
+    int slider_item, slider_value, slider_keep; /* the tuning slider (CTuneWnd's +0xB4 / +0xB8) */
+    int privacy;     /* CSecretLevelWnd +0xB0: 0 Public, 1 Private */
     const char *message;
     bool closing;
 } g;
@@ -124,6 +144,15 @@ static const char *nz(const char *s)
 static int current(void)
 {
     return savedata_current_card();
+}
+
+#define CARD_PRIVACY 0x20 /* COkeDataBase + 0x20: 0 public, 1 private */
+
+static int32_t card_privacy(int card)
+{
+    int32_t v;
+    memcpy(&v, savedata_card(card)->header + CARD_PRIVACY, 4);
+    return v;
 }
 
 static bool installed(int card)
@@ -205,7 +234,7 @@ static bool hw_item_enabled(int item)
 {
     if (!savedata_card_used(current()))
         return item == HWI_BODY; /* FUN_088f9694: FUN_08ad8944 on the rest */
-    return item != HWI_ENERGY && item != HWI_OUTPUT;
+    return true;
 }
 
 /* The help line of each category: CHardString 2 Body, 3 CPU, 0xF3 / 0xF4 armour,
@@ -259,6 +288,51 @@ static void enter_item(int id)
         g.mode = MODE_SOFTWARE;
         g.program = 0;
         g.chip_x = g.chip_y = 0;
+        break;
+    case ITEM_NAME: { /* mode 9, FUN_088bafa8 */
+        if (!savedata_card_used(card)) {
+            g.message = dstr(0x2E);
+            return;
+        }
+        /* The keyboard starts from FUN_089eebc0: the card's name, or its body's. */
+        char name[32];
+        savedata_card_name(card, name, sizeof name);
+        const char *start = name[0] ? name : nz(oke_body_name(hw_get(savedata_card(card), HW_BODY)));
+        osk_open(gamedata_string(0x003DF1A4u) /* "Name Input", 0x08be31a4 */, start, NAME_MAX_INPUT);
+        g.mode = MODE_NAME;
+        break;
+    }
+    case ITEM_CUSTOMIZE: /* mode 2, FUN_088ba534 */
+        if (!savedata_card_used(card)) {
+            g.message = dstr(0x2E);
+            return;
+        }
+        custom_open(card);
+        g.mode = MODE_CUSTOM;
+        break;
+    case ITEM_EMBLEMS: /* mode 7, FUN_088bad64 */
+        if (!savedata_card_used(card)) {
+            g.message = dstr(0x2E);
+            return;
+        }
+        emblem_open(card);
+        g.mode = MODE_EMBLEM;
+        break;
+    case ITEM_NOTES: /* mode 10, FUN_088bb110: view only on an installed card */
+        if (!savedata_card_used(card)) {
+            g.message = dstr(0x2E);
+            return;
+        }
+        notes_open(card, installed(card));
+        g.mode = MODE_NOTES;
+        break;
+    case ITEM_PRIVACY: /* mode 0xB, FUN_088bb318: starts on Private when card+0x20 is 1 */
+        if (!savedata_card_used(card)) {
+            g.message = dstr(0x2E);
+            return;
+        }
+        g.privacy = card_privacy(card) == 1;
+        g.mode = MODE_PRIVACY;
         break;
     default:
         if (!savedata_card_used(card)) {
@@ -395,6 +469,115 @@ static void update_ask(float dt)
     g.message = NULL;
 }
 
+/* ---- Energy Rate / Engine Output (CHardDesignMngr modes 0x10 / 0x11) ----
+ * The slider window (FUN_08adf134; input FUN_08adf454, draw FUN_08adf624) holds a
+ * percentage from 50 to 150. Left / right step it by one, holding repeats, and a
+ * fresh press past either end wraps. The mode's update (FUN_088f4018 / FUN_088f4170)
+ * writes each change into the card at once (+0x29C / +0x2A0), so the weight and the
+ * card window follow; circle keeps it, cross puts the value it opened with back. */
+#define SLIDER_MIN 50
+#define SLIDER_MAX 150
+
+static int slider_field(int item)
+{
+    return item == HWI_ENERGY ? HW_ENERGY : HW_OUTPUT;
+}
+
+static void open_slider(int item)
+{
+    const OkeDataBase *card = savedata_card(current());
+    int v = hw_get(card, slider_field(item));
+    if (v < SLIDER_MIN || v > SLIDER_MAX) /* FUN_08adf0f4 / FUN_08adf114 keep 50 then */
+        v = SLIDER_MIN;
+    g.slider_item = item;
+    g.slider_value = g.slider_keep = v;
+    g.mode = MODE_SLIDER;
+    g.message = NULL;
+}
+
+static void update_slider(void)
+{
+    int old = g.slider_value;
+    if (pad_repeat(PSP_CTRL_LEFT)) {
+        if (g.slider_value > SLIDER_MIN)
+            g.slider_value--;
+        else if (pad_trigger(PSP_CTRL_LEFT))
+            g.slider_value = SLIDER_MAX;
+    } else if (pad_repeat(PSP_CTRL_RIGHT)) {
+        if (g.slider_value < SLIDER_MAX)
+            g.slider_value++;
+        else if (pad_trigger(PSP_CTRL_RIGHT))
+            g.slider_value = SLIDER_MIN;
+    }
+    if (g.slider_value != old)
+        sound_se(0x10, 1.0f);
+    bool done = false;
+    if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
+        done = true;
+    } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
+        g.slider_value = g.slider_keep;
+        done = true;
+    }
+    OkeDataBase *card = savedata_card_edit(current());
+    if (hw_get(card, slider_field(g.slider_item)) != g.slider_value)
+        hw_set(card, slider_field(g.slider_item), g.slider_value);
+    if (done) {
+        SDL_Log("[oke] card %d: %s = %d%% (weight %d / %d)", current() + 1, nz(hard_string(0xCF + g.slider_item)),
+                g.slider_value, oke_weight(card), oke_payload(card));
+        g.mode = MODE_HARDWARE;
+    }
+}
+
+/* Mode 9's update (FUN_088bc378): when the keyboard ends with OK, its text (up to
+ * 0x19 bytes) becomes the card's name (COkeDataBase + 4, FUN_089ee9f0); either way
+ * back to the top menu. */
+static void update_name(void)
+{
+    int r = osk_update();
+    if (r == OSK_RUNNING)
+        return;
+    if (r == OSK_OK) {
+        OkeDataBase *card = savedata_card_edit(current());
+        memset(card->header + 4, 0, CARD_NAME_SIZE);
+        strncpy((char *)card->header + 4, osk_text(), CARD_NAME_SIZE - 1);
+        SDL_Log("[oke] card %d named \"%s\"", current() + 1, osk_text());
+        build_top_menu();
+    }
+    g.mode = MODE_TOP;
+}
+
+/* Mode 0xB. CSecretLevelWnd's input (FUN_08a6d45c): up / down move between the two
+ * rows, held keys stop at the ends and a fresh press wraps; circle accepts, cross
+ * leaves. The mode's update (FUN_088bc53c) then writes card+0x20 (FUN_089eeae8 /
+ * FUN_089eeaf0): 1 for Private, 0 for Public. */
+static void update_privacy(void)
+{
+    int old = g.privacy;
+    if (pad_repeat(PSP_CTRL_UP) || pad_repeat(PSP_CTRL_DOWN)) {
+        bool up = pad_repeat(PSP_CTRL_UP);
+        int to = g.privacy + (up ? -1 : 1);
+        if (to >= 0 && to <= 1)
+            g.privacy = to;
+        else if (pad_trigger(up ? PSP_CTRL_UP : PSP_CTRL_DOWN))
+            g.privacy = to < 0 ? 1 : 0;
+    }
+    if (g.privacy != old)
+        sound_se(SE_CURSOR, 1.0f);
+    if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        sound_se(SE_DECIDE, 1.0f);
+        OkeDataBase *card = savedata_card_edit(current());
+        int32_t v = g.privacy != 0;
+        memcpy(card->header + CARD_PRIVACY, &v, 4);
+        SDL_Log("[oke] card %d: privacy %s", current() + 1, nz(dstr(0x61 + v)));
+        g.mode = MODE_TOP;
+    } else if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
+        g.mode = MODE_TOP;
+    }
+}
+
 static void update_hardware(void)
 {
     int old_cursor = g.hw_cursor;
@@ -411,13 +594,11 @@ static void update_hardware(void)
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         sound_se(SE_DECIDE, 1.0f);
         if (!hw_item_enabled(item)) {
-            if (item == HWI_ENERGY || item == HWI_OUTPUT) {
-                SDL_Log("[oke] \"%s\" (CHardDesignMngr mode 0x%X, the tuning slider) isn't ported",
-                        nz(hard_string(0xCF + item)), item == HWI_ENERGY ? 0x10 : 0x11);
-                g.message = hard_string(0xCF + item);
-            } else {
-                g.message = hard_string(0xF6); /* "Unavailable when no body is selected." */
-            }
+            g.message = hard_string(0xF6); /* "Unavailable when no body is selected." */
+            return;
+        }
+        if (item == HWI_ENERGY || item == HWI_OUTPUT) {
+            open_slider(item);
             return;
         }
         open_parts(item);
@@ -524,6 +705,21 @@ int oke_menu_update(float dt)
     case MODE_HARDWARE: update_hardware(); break;
     case MODE_PARTS: update_parts(); break;
     case MODE_SOFTWARE: update_software(); break;
+    case MODE_SLIDER: update_slider(); break;
+    case MODE_NAME: update_name(); break;
+    case MODE_PRIVACY: update_privacy(); break;
+    case MODE_EMBLEM:
+        if (!emblem_update(dt))
+            g.mode = MODE_TOP;
+        break;
+    case MODE_CUSTOM:
+        if (!custom_update(dt))
+            g.mode = MODE_TOP;
+        break;
+    case MODE_NOTES:
+        if (!notes_update(dt))
+            g.mode = MODE_TOP;
+        break;
     }
     if (g.closing) {
         SDL_Log("[oke] back to the Battle Mode menu");
@@ -552,20 +748,15 @@ static void draw_card(const OkeDataBase *card, int number, int x, int y)
 {
     const int w = 266, h = 200;
     ui_frame(ui_part(PART_BF_SWND4), x, y, w, h, 8, 1.0f);
-    Picture *head = ui_part(PART_OC_HDBG);
-    if (head)
-        picture_draw_ex(head, x + 6, y + 6, 0, w - 12, 20, 0, 0, picture_width(head), picture_height(head),
-                        BLEND_ALPHA, 0xFFFFFFFF, 0, 0, 0, 0);
-    char line[80], name[32];
-    savedata_card_name(number, name, sizeof name);
+    /* the game's card (COkeCard) on top, the stats under it */
+    int ch = oke_card_draw(number, x + (w - OKE_CARD_W) / 2, y + 6, false);
+    char line[80];
     bool used = card && card->header[0];
-    snprintf(line, sizeof line, "%02d  %s", number + 1, used ? name : "");
-    ui_text(line, dark(), x + 12, y + 9, 1.0f);
     if (!used) {
-        ui_text(nz(dstr(0x125)), small(), x + 14, y + 40, 1.0f);
+        ui_text(nz(dstr(0x125)), small(), x + 14, y + 12 + ch, 1.0f);
         return;
     }
-    int body = hw_get(card, HW_BODY), lx = x + 12, vx = x + 104, ly = y + 32;
+    int body = hw_get(card, HW_BODY), lx = x + 12, vx = x + 104, ly = y + 6 + ch;
     label_value(dstr(0x30), oke_body_name(body), lx, ly, vx, NULL);
     snprintf(line, sizeof line, "%d", body_durability(body));
     label_value(dstr(0x31), line, lx, ly += 11, vx, NULL);
@@ -589,6 +780,18 @@ static void draw_card(const OkeDataBase *card, int number, int x, int y)
 static void draw_cursor(int x, int y, int w, int h)
 {
     ui_frame(ui_part(PART_BF_CUR0), x, y, w, h, 6, ui_pulse(SDL_GetTicks() / 1000.0f));
+}
+
+/* CSecretLevelWnd's draw (FUN_08a6d6a0) on part 0x99 (bf_swnd2), opened beside the
+ * top menu at x 0x8C, at the height of the cursor's row: CDesignString 0x61 / 0x62
+ * at (+0xC, +6) a row of 0xC apart, the cursor 0x58 x 0xC at (8, 6 + row * 0xC). */
+static void draw_privacy(void)
+{
+    int x = 0x8C, y = g.top.y + g.top.cursor * g.top.pitch;
+    ui_frame(ui_part(PART_BF_SWND2), x, y, 0x68, 0x24, 8, 1.0f);
+    for (int i = 0; i < 2; i++)
+        ui_text(nz(dstr(0x61 + i)), dark(), x + 0xC, y + 6 + i * 0xC, 1.0f);
+    draw_cursor(x + 8, y + 6 + g.privacy * 0xC, 0x58, 0xC);
 }
 
 static void draw_card_list(int x, int y, int w)
@@ -632,6 +835,61 @@ static void draw_hardware(int x, int y)
         }
         ui_text(v, st, x + 92, ry, 1.0f);
     }
+}
+
+/* The slider (FUN_08adf624): its title, the gauge (op_svf_l's left end and body,
+ * bf_cur7 filled to value / 150 of its width) and the value; beside it the numbers
+ * the setting changes (FUN_08adff5c for the energy, FUN_08ae07a0 for the output). */
+static void draw_slider(int x, int y)
+{
+    const OkeDataBase *card = savedata_card(current());
+    const int w = 214, h = 44;
+    ui_frame(ui_part(PART_BF_TWND2), x, y, w, h, 8, 1.0f);
+    /* the window's title is a literal of the class (0x08c40a18 / 0x08c40a24) */
+    const char *title = gamedata_string(g.slider_item == HWI_ENERGY ? 0x0043CA18u : 0x0043CA24u);
+    ui_text(nz(title), dark(), x + 0xC, y + 4, 1.0f);
+    Picture *gauge = ui_part(PART_OP_SVF_L), *fill = ui_part(PART_BF_CUR7);
+    if (gauge) {
+        int gh = picture_height(gauge) < 0x57 ? picture_height(gauge) : 0x57;
+        picture_draw_ex(gauge, x + 0x12, y + 0x17, 0, 0x10, 12, 0, gh > 12 ? 0 : 0, 0x10, gh, BLEND_ALPHA, 0xFFFFFFFF,
+                        0, 0, 0, 0);
+        picture_draw_ex(gauge, x + 0x22, y + 0x17, 0, 0xA6, 12, 0x10, 0, picture_width(gauge) - 0x10, gh, BLEND_ALPHA,
+                        0xFFFFFFFF, 0, 0, 0, 0);
+    } else {
+        ui_fill(x + 0x12, y + 0x17, 0xB6, 12, 0xFF404040);
+    }
+    int fw = (fill ? picture_width(fill) : 0xA0) * g.slider_value / SLIDER_MAX;
+    if (fill)
+        picture_draw_ex(fill, x + 0x1F, y + 0x19, 0, fw, picture_height(fill), 0, 0, fw, picture_height(fill),
+                        BLEND_ALPHA, 0xFFFFFFFF, 0, 0, 0, 0);
+    else
+        ui_fill(x + 0x1F, y + 0x19, fw, 8, 0xFF20A0E0);
+    char v[32];
+    snprintf(v, sizeof v, "%d%%", g.slider_value);
+    ui_text(v, dark(), x + w - 44, y + 4, 1.0f);
+    /* the numbers it changes */
+    int ix = x, iy = y + h + 4, lx = ix + 10, vx = ix + 0x46 + 40;
+    ui_frame(ui_part(PART_BF_SWND4), ix, iy, w, 0x52, 8, 1.0f);
+    int body = hw_get(card, HW_BODY);
+    if (g.slider_item == HWI_ENERGY) {
+        int amount = oke_energy_amount(card);
+        snprintf(v, sizeof v, "%d", hw_get(card, HW_ENERGY));
+        label_value(hard_string(0xE0), v, lx, iy + 9, vx, NULL);
+        snprintf(v, sizeof v, "%d", amount);
+        label_value(hard_string(0xE2), v, lx, iy + 0x1B, vx, NULL);
+        snprintf(v, sizeof v, "%d", oke_energy_weight(card));
+        label_value(hard_string(0xE3), v, lx, iy + 0x2D, vx, NULL);
+        snprintf(v, sizeof v, "%d", oke_heat_resist(card));
+        label_value(hard_string(0xE1), v, lx, iy + 0x3F, vx, NULL);
+    } else {
+        snprintf(v, sizeof v, "%d", hw_get(card, HW_OUTPUT));
+        label_value(hard_string(0xE4), v, lx, iy + 9, vx, NULL);
+        snprintf(v, sizeof v, "%d", oke_payload(card));
+        label_value(hard_string(0xE5), v, lx, iy + 0x1B, vx, NULL);
+        snprintf(v, sizeof v, "%d", oke_consumption(card));
+        label_value(hard_string(0xE6), v, lx, iy + 0x2D, vx, NULL);
+    }
+    (void)body;
 }
 
 /* The parts window (CEquipmentSelectWnd) and beside it the part's numbers, with the
@@ -779,6 +1037,11 @@ static const char *help_text(void)
     case MODE_PARTS:
         return g.part_count ? part_help(g.hw_items[g.hw_cursor], g.parts[g.part_cursor]) : NULL;
     case MODE_SOFTWARE: return dstr(0x25);
+    case MODE_SLIDER: return hw_item_help(g.slider_item);
+    case MODE_PRIVACY: return dstr(0x2B);
+    case MODE_NOTES: return notes_help();
+    case MODE_CUSTOM: return custom_help();
+    case MODE_EMBLEM: return emblem_help();
     default: return NULL;
     }
 }
@@ -820,7 +1083,31 @@ void oke_menu_draw(void)
     case MODE_SOFTWARE:
         draw_software(4, 22);
         break;
+    case MODE_NAME:
+    case MODE_PRIVACY:
+        ui_menu_draw(&g.top);
+        draw_card(savedata_card(c), c, 205, 22);
+        if (g.mode == MODE_PRIVACY)
+            draw_privacy();
+        break;
+    case MODE_NOTES:
+        notes_draw();
+        break;
+    case MODE_EMBLEM:
+        emblem_draw();
+        break;
+    case MODE_CUSTOM:
+        custom_draw();
+        draw_card(savedata_card(c), c, 205, 22);
+        break;
+    case MODE_SLIDER:
+        draw_hardware(4, 22);
+        draw_card(savedata_card(c), c, 205, 22);
+        draw_slider(130, 90);
+        break;
     }
-    ui_help_draw(help_text());
+    if (!(g.mode == MODE_NOTES && notes_help_hidden()))
+        ui_help_draw(help_text());
+    osk_draw(); /* over everything, as the system keyboard is; nothing when it's closed */
     sceGuEnable(GU_TEXTURE_2D);
 }
