@@ -50,7 +50,7 @@ void psp_ctrl_key_event(int keycode, bool down)
 
 /* ---- scripted presses ---- */
 
-#define MAX_SCRIPT 32
+#define MAX_SCRIPT 256 /* --press entries (typing a name on the keyboard takes many) */
 static struct { uint32_t frame, buttons; } g_script[MAX_SCRIPT];
 static int g_script_count;
 

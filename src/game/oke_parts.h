@@ -20,7 +20,10 @@
 
 enum {
     HW_BODY = 0x240,
-    HW_PAINT = 0x244,
+    HW_PAINT = 0x244,  /* 0-3, CColorDesignWnd */
+    HW_MAIN_COLOR = 0x248,   /* R | G << 8 | B << 16 | A << 24, each 0-100; -1 unset */
+    HW_ACCENT_COLOR = 0x24C,
+    HW_POLISH = 0x250, /* 0-4, CColorLusterWnd */
     HW_WEAPON = 0x258,
     HW_AMMO = 0x26C,
     HW_ARMOR = 0x280,
@@ -80,11 +83,17 @@ int body_weapons(int body);     /* +0x18: weapon slots (FUN_089ed784) */
 /* CBattleOkeEquipment: a weapon's type (0x08bd5574 +0) and category (+0x10). */
 int weapon_type(int weapon);
 int weapon_category(int weapon);
+int weapon_ability(int weapon); /* +4 (FUN_08855fb8) */
 /* CHardwareDataBase FUN_089eda88: how much of weapon type `type` slot `slot` of the
  * body takes, -1 when it can't. */
 int slot_capacity(const OkeDataBase *card, int slot, int type);
 
 /* ---- what the card adds up to ---- */
+/* The tuning sliders' numbers (CHardDesignMngr modes 0x10 / 0x11, see oke_parts.c). */
+int oke_energy_amount(const OkeDataBase *card);
+int oke_energy_weight(const OkeDataBase *card);
+int oke_heat_resist(const OkeDataBase *card);
+int oke_consumption(const OkeDataBase *card);
 int oke_payload(const OkeDataBase *card);       /* FUN_089ed624 */
 int oke_weight(const OkeDataBase *card);        /* FUN_089edebc */
 /* FUN_089edf40: 0 under 70% of the payload, 1 up to 100%, 2 up to 130%, 3 over. */

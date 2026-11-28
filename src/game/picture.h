@@ -22,6 +22,12 @@ void picture_release(Picture *p);
 /* A picture from a GIM image in memory (copied), e.g. one embedded in a model. */
 Picture *picture_from_memory(const char *name, const void *data, int32_t size);
 
+/* CPicture::Create from pixels (FUN_08b089d8): an index4 (format 4) or index8 (5)
+ * image of w x h, its palette 8888 words (16 or 256), both copied. The owner releases
+ * it; picture_set_pixels copies new pixels and palette into it. */
+Picture *picture_from_pixels(const char *name, int format, int w, int h, const void *pixels, const void *palette);
+void picture_set_pixels(Picture *p, const void *pixels, const void *palette);
+
 int picture_width(const Picture *p);  /* FUN_08b57b9c(level 0) */
 int picture_height(const Picture *p); /* FUN_08b57bec(level 0) */
 int picture_frames(const Picture *p);

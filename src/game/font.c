@@ -26,9 +26,8 @@ typedef struct GlyphTable {
 static struct {
     uint8_t *tbl;
     GlyphTable single, wide;
-    Picture *sheet8;
+    Picture *sheet8, *sheet16;
     int ready;
-    int warned_wide;
 } g_font;
 
 static uint32_t rd32(const uint8_t *p)
@@ -76,6 +75,9 @@ int font_init(void)
     g_font.sheet8 = picture_load("font/gothic8.gim");
     if (!g_font.sheet8)
         return 0;
+    g_font.sheet16 = picture_load("font/gothic16.gim"); /* FUN_08b15ae8(0, 1) */
+    if (!g_font.sheet16)
+        SDL_Log("[font] font/gothic16.gim is missing: two-byte characters won't be drawn");
     g_font.ready = 1;
     SDL_Log("[font] single-byte font: %dx%d cells, %d columns, %d rows per sheet", g_font.single.cell_w,
             g_font.single.cell_h, g_font.single.columns, g_font.single.rows_per_sheet);
@@ -116,6 +118,46 @@ static void draw_single(uint8_t c, const TextStyle *st, int x, int y, int z)
     sceGuSprite(x, y, z, col * t->cell_w, row * t->cell_h, 0, 0);
 }
 
+/* FUN_08b0aa28 (FUN_08b0ab28): a Shift-JIS pair to JIS, worked in bytes; then
+ * FUN_08b14f20: the JIS row and cell to the double-byte table's index, rows 0x21-0x28
+ * and 0x30 on packed together, 0x5E cells a row. */
+static int wide_code(uint8_t s1, uint8_t s2)
+{
+    uint8_t j1, j2;
+    if (s1 > 0xDF)
+        s1 = (uint8_t)(s1 - 0x40);
+    if (s2 >= 0x80)
+        s2 = (uint8_t)(s2 - 1);
+    if (s2 < 0x9E) {
+        j1 = (uint8_t)(s1 * 2 + 0x1F);
+        j2 = (uint8_t)(s2 - 0x1F);
+    } else {
+        j1 = (uint8_t)(s1 * 2 + 0x20);
+        j2 = (uint8_t)(s2 + 0x83);
+    }
+    uint8_t row = (uint8_t)(j1 < 0x29 ? j1 - 0x21 : j1 - 0x28);
+    return row * 0x5E + (uint8_t)(j2 - 0x21);
+}
+
+/* CFontMngr::DrawChar for the double-byte sheet (FUN_08b15798): nothing when the map
+ * entry is 0. */
+static void draw_wide(uint8_t s1, uint8_t s2, const TextStyle *st, int x, int y, int z)
+{
+    const GlyphTable *t = &g_font.wide;
+    int code = wide_code(s1, s2);
+    if (!g_font.sheet16 || code < 0 || code >= t->map_entries)
+        return;
+    int g = t->map[2 * code] | t->map[2 * code + 1] << 8;
+    if (!g)
+        return;
+    int row = g / t->columns, col = g % t->columns;
+    picture_set_frame(g_font.sheet16, row / t->rows_per_sheet);
+    row %= t->rows_per_sheet;
+    picture_bind(g_font.sheet16);
+    sceGuSpriteSize(t->cell_w, t->cell_h, st->full_adv, st->height);
+    sceGuSprite(x, y, z, col * t->cell_w, row * t->cell_h, 0, 0);
+}
+
 /* Walks the string the way GetDrawSize and Draw both do (mode 0). */
 static void layout(const char *s, const TextStyle *st, int draw, int x0, int y0, int z, int *w, int *h)
 {
@@ -129,10 +171,8 @@ static void layout(const char *s, const TextStyle *st, int draw, int x0, int y0,
             x += st->half_adv + st->space_x;
             p++;
         } else if (cls == 1) {
-            if (draw && !g_font.warned_wide) {
-                SDL_Log("[font] double-byte characters aren't drawn yet");
-                g_font.warned_wide = 1;
-            }
+            if (draw && p[1])
+                draw_wide(p[0], p[1], st, x0 + x, y0 + y, z);
             x += st->full_adv + st->space_x;
             p += p[1] ? 2 : 1;
         } else if (cls == 3 || cls == 4 || cls == 5) {

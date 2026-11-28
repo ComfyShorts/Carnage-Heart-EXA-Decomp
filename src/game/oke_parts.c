@@ -95,6 +95,11 @@ int weapon_type(int w)
     return w >= 0 && w < OKE_WEAPONS ? word(T_WEAPON + 0x14u * (uint32_t)w) : 0;
 }
 
+int weapon_ability(int w)
+{
+    return w >= 0 && w < OKE_WEAPONS ? word(T_WEAPON + 0x14u * (uint32_t)w + 4) : 0;
+}
+
 int weapon_category(int w)
 {
     return w >= 0 && w < OKE_WEAPONS ? word(T_WEAPON + 0x14u * (uint32_t)w + 0x10) : 0;
@@ -124,6 +129,32 @@ static int default_ammo(const OkeDataBase *card, int slot, int type)
 }
 
 /* ---- weights ---- */
+
+/* FUN_089ed6b0: the energy carried, the body's capacity (+0xC) x on-board %. */
+int oke_energy_amount(const OkeDataBase *card)
+{
+    int e = body_energy(hw_get(card, HW_BODY)), pct = hw_get(card, HW_ENERGY);
+    return pct > 0 ? e * pct / 100 : e;
+}
+
+/* FUN_089edba4 / FUN_089edbd4: what that energy weighs, 200 per 1000. */
+int oke_energy_weight(const OkeDataBase *card)
+{
+    return oke_energy_amount(card) * 200 / 1000;
+}
+
+/* FUN_089edfdc: the heat resistance, 200 - on-board %. */
+int oke_heat_resist(const OkeDataBase *card)
+{
+    return 200 - hw_get(card, HW_ENERGY);
+}
+
+/* FUN_089ed528: energy use, the output %, past 100 growing with the square. */
+int oke_consumption(const OkeDataBase *card)
+{
+    int o = hw_get(card, HW_OUTPUT);
+    return o > 100 ? o + (o - 100) * (o - 100) / 10 : o;
+}
 
 int oke_payload(const OkeDataBase *card)
 {
@@ -170,19 +201,10 @@ int option_weight(int o)
     return o >= 0 && o < OKE_OPTIONS ? word(T_OPTION_WEIGHT + 4u * (uint32_t)o) : 0;
 }
 
-/* FUN_089ed6b0 and FUN_089edbd4: the energy carried, 0.2 of a unit a point. */
-static int energy_weight(const OkeDataBase *card)
-{
-    int e = body_energy(hw_get(card, HW_BODY)), pct = hw_get(card, HW_ENERGY);
-    if (pct > 0)
-        e = e * pct / 100;
-    return e * 200 / 1000;
-}
-
 int oke_weight(const OkeDataBase *card)
 {
     int body = hw_get(card, HW_BODY);
-    int w = body_weight(body) + energy_weight(card) + armor_weight(card, hw_get(card, HW_ARMOR)) +
+    int w = body_weight(body) + oke_energy_weight(card) + armor_weight(card, hw_get(card, HW_ARMOR)) +
             add_armor_weight(card, hw_get(card, HW_ADD_ARMOR));
     for (int s = 0; s < body_weapons(body) && s < OKE_WEAPON_SLOTS; s++)
         w += weapon_weight(hw_get(card, HW_WEAPON + 4 * s), hw_get(card, HW_AMMO + 4 * s));
