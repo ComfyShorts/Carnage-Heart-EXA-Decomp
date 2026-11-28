@@ -10,8 +10,9 @@
  *     8  Formation
  *     0x12 "Delete this team?"
  *   createTeam FUN_08ac42f4, setSelect FUN_08ac452c, the selectable check FUN_08ac468c.
- * Enter Team Name (the on-screen keyboard), Emblems (CEmblemEditor) and Transfer Team
- * Data are not ported; choosing them is logged. */
+ *     9  Enter Team Name: the keyboard on the team's name (FUN_08ac1bec)
+ *     10 Emblems: CEmblemEditor's team variant (FUN_08ac1d94 / FUN_08ac30f0)
+ * Transfer Team Data is not ported; choosing it is logged. */
 #include "team_menu.h"
 
 #include <stdio.h>
@@ -23,6 +24,8 @@
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
+#include "oke_emblem.h"
+#include "osk.h"
 #include "pad.h"
 #include "sound.h"
 #include "psp_shim.h"
@@ -95,6 +98,8 @@ typedef enum {
     MODE_CARDS = 6,
     MODE_UNREGISTER = 7,
     MODE_FORMATION = 8,
+    MODE_NAME = 9,
+    MODE_EMBLEM = 10,
     MODE_DELETE = 0x12,
 } Mode;
 
@@ -156,6 +161,28 @@ static int free_spot(int team, int except)
     return 0;
 }
 
+/* FUN_08ac4628: the selected team when it's the player's own (status 1), else -1. */
+static int own_team(void)
+{
+    int t = team_menu_selected();
+    return t >= 0 && savedata_team_status(t) == 1 ? t : -1;
+}
+
+#define TEAM_NAME_INPUT 12 /* FUN_08ac1bec's limit (string 0x35: "up to 12 characters") */
+
+/* Mode 9's end (LAB_08ac4bac, then FUN_08ac30e8 back to the top): OK writes the name. */
+static void update_name(void)
+{
+    int r = osk_update();
+    if (r == OSK_RUNNING)
+        return;
+    if (r == OSK_OK) {
+        savedata_team_set_name(own_team(), osk_text());
+        SDL_Log("[team] team %d named \"%s\"", own_team() + 1, osk_text());
+    }
+    g.mode = MODE_TOP;
+}
+
 static void update_top(void)
 {
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
@@ -176,10 +203,28 @@ static void update_top(void)
                 g.slot = 0;
             }
             break;
+        case 2: /* -> mode 9 (FUN_08ac1bec): the selected team must be the player's own
+                 * (FUN_08ac4628 / FUN_08ac4740, status 1) */
+        case 3: { /* -> mode 10 (FUN_08ac1d94) */
+            int team = own_team();
+            if (team < 0) {
+                g.message = team_string(0x44);
+                sound_se(SE_ERROR, 1.0f);
+                break;
+            }
+            if (ui_menu_id(&g.top) == 2) {
+                char name[TEAM_NAME_MAX + 1];
+                savedata_team_name(team, name, sizeof name);
+                osk_open(team_string(6), name, TEAM_NAME_INPUT); /* "Enter Team Name", 12 */
+                g.mode = MODE_NAME;
+            } else {
+                emblem_open_team(team);
+                g.mode = MODE_EMBLEM;
+            }
+            break;
+        }
         default:
-            SDL_Log("[team] \"%s\" isn't ported (%s)", g.top.item[g.top.cursor].text,
-                    ui_menu_id(&g.top) == 2 ? "the on-screen keyboard"
-                    : ui_menu_id(&g.top) == 3 ? "CEmblemEditor" : "team transfer");
+            SDL_Log("[team] \"%s\" isn't ported (team transfer)", g.top.item[g.top.cursor].text);
             g.message = g.top.item[g.top.cursor].text;
             break;
         }
@@ -385,6 +430,11 @@ int team_menu_update(float dt)
     case MODE_MEMBERS: update_members(); break;
     case MODE_CARDS: update_cards(); break;
     case MODE_FORMATION: update_formation(); break;
+    case MODE_NAME: update_name(); break;
+    case MODE_EMBLEM: /* FUN_08ac30f0: back to the top when the editor closes */
+        if (!emblem_update(dt))
+            g.mode = MODE_TOP;
+        break;
     case MODE_UNREGISTER:
     case MODE_DELETE: update_ask(dt); break;
     }
@@ -510,6 +560,7 @@ static const char *help_text(void)
     case MODE_MEMBERS: return team_string(0x34);
     case MODE_CARDS: return team_string(0x3C);
     case MODE_FORMATION: return team_string(0x3D);
+    case MODE_EMBLEM: return emblem_help();
     default: return NULL;
     }
 }
@@ -526,10 +577,16 @@ void team_menu_draw(void)
     Picture *banner = ui_part(PART_BF_TTL0 + 2);
     ui_pic(banner, 0, 0, 1.0f, false);
     TextStyle tst = text_style(0, 7, 14, 14, 0, 0, 0xFFFFFFFF, 0);
-    ui_text(team_string(2), &tst, 64, (banner ? picture_height(banner) : 24) / 2 - 8, 1.0f);
-    ui_menu_draw(&g.top);
+    /* the title pushed with the mode (pushMenu FUN_08ac408c: 7 for Emblems) */
+    ui_text(team_string(g.mode == MODE_EMBLEM ? 7 : 2), &tst, 64, (banner ? picture_height(banner) : 24) / 2 - 8, 1.0f);
+    if (g.mode != MODE_EMBLEM)
+        ui_menu_draw(&g.top);
     int sel = team_menu_selected();
     switch (g.mode) {
+    case MODE_EMBLEM:
+        emblem_draw();
+        break;
+    case MODE_NAME:
     case MODE_TOP:
         team_panel_draw(sel, 190, 65, -1); /* CTeamDataWnd at (0xBE, 0x41) */
         break;
@@ -551,5 +608,6 @@ void team_menu_draw(void)
     if (g.mode == MODE_DELETE || g.mode == MODE_UNREGISTER)
         ui_ask_draw(&g.ask);
     ui_help_draw(help_text());
+    osk_draw(); /* over everything, as the system keyboard is */
     sceGuEnable(GU_TEXTURE_2D);
 }

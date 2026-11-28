@@ -158,6 +158,9 @@ int savedata_team_spot(int team, int m);
 int savedata_team_count(int team); /* registered members */
 void savedata_team_name(int team, char *out, size_t n);
 const uint8_t *savedata_team_emblem(int team);
+uint8_t *savedata_team_emblem_edit(int team);
+/* Team Formation's Enter Team Name: the name at +0x250 (up to 12 characters typed). */
+void savedata_team_set_name(int team, const char *name);
 /* CTeamFormationMngr::createTeam (FUN_08ac42f4 with FUN_089f38a0): a new team of the
  * player's, named `name`, owned by `owner`, with no members and the default emblem
  * (blank pixels, the palette at 0x08c83db8). */

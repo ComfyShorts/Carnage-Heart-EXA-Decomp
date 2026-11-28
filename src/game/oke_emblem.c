@@ -67,6 +67,7 @@
 /* The hard parts list (FUN_088ff920: names at 0x08c7ec50, "parts/hard/%s.gim"). */
 #define T_HARD_PARTS 0x0047AC50u
 #define T_TOOLS 0x003E2EDCu /* 0x08be6edc: 11 x (y, button picture, icon) */
+#define T_TEAM_TOOLS 0x003E2F60u /* 0x08be6f60: the team variant's 10 (FUN_088c9118 ..) */
 enum {
     HP_EM_ICDS = 0x69, HP_EM_PLT = 0x6A, HP_EM_BRK_BL = 0x6B, HP_EM_BRK_WB = 0x6E, HP_EM_BRK_ST = 0x6F,
     HP_EM_ICON = 0x70, HP_EM_BGWND = 0x71, HP_SD_SARO0 = 0x75, HP_SD_SARO1 = 0x76, HP_COUNT = 0x7E,
@@ -105,6 +106,7 @@ typedef struct Strip {
 
 static struct {
     int card;
+    int team;                 /* +0xC8, with +0xC4 set; -1 for an OKE card */
     EMode mode;
     bool closed;
     uint8_t pix[PIXELS], undo_pix[PIXELS];
@@ -163,6 +165,23 @@ static int tool_word(uint32_t table, int tool, int field)
     return (int)gamedata_word(table + 12u * (uint32_t)tool + 4u * (uint32_t)field, 0);
 }
 
+/* FUN_088c9100: the column's length; FUN_088c9118 / 9158 / 9198: its table. */
+static int tool_count(void)
+{
+    return g.team >= 0 ? TOOL_COUNT - 1 : TOOL_COUNT;
+}
+
+static uint32_t tool_table(void)
+{
+    return g.team >= 0 ? T_TEAM_TOOLS : T_TOOLS;
+}
+
+/* The tool on row i: the row's icon, which is the tool's number (FUN_088c91d8). */
+static int tool_at(int i)
+{
+    return tool_word(tool_table(), i, 2);
+}
+
 static const char *yes_no(int id) /* CBattleTestString 0x1F / 0x20 */
 {
     uint32_t p = gamedata_word(0x00466D50u + 4u * (uint32_t)id, 0);
@@ -174,7 +193,22 @@ static const char *yes_no(int id) /* CBattleTestString 0x1F / 0x20 */
 static void setup_samples(void);
 static void close_user(void);
 
+static void open_on(int card, int team, const uint8_t *pix, const uint8_t *pal);
+
 void emblem_open(int card)
+{
+    const OkeDataBase *c = savedata_card(card);
+    open_on(card, -1, c->hardware + HW_EMBLEM, c->hardware + HW_EMBLEM_PALETTE);
+}
+
+void emblem_open_team(int team)
+{
+    const uint8_t *e = savedata_team_emblem(team);
+    if (e)
+        open_on(-1, team, e, e + PIXELS);
+}
+
+static void open_on(int card, int team, const uint8_t *pix, const uint8_t *pal)
 {
     Picture *keep[HP_COUNT];
     memcpy(keep, g.hp, sizeof keep);
@@ -186,13 +220,13 @@ void emblem_open(int card)
     memcpy(g.hp, keep, sizeof keep);
     g.dir = -1;
     g.card = card;
-    const OkeDataBase *c = savedata_card(card);
-    memcpy(g.pix, c->hardware + HW_EMBLEM, PIXELS);
-    memcpy(g.pal, c->hardware + HW_EMBLEM_PALETTE, sizeof g.pal);
+    g.team = team;
+    memcpy(g.pix, pix, PIXELS);
+    memcpy(g.pal, pal, sizeof g.pal);
     g.grid = true; /* +0x74 = 1 */
     g.mode = E_MENU;
     setup_samples();
-    SDL_Log("[emblem] card %d, %d samples", card + 1, g.nsamples);
+    SDL_Log("[emblem] %s %d, %d samples", team >= 0 ? "team" : "card", (team >= 0 ? team : card) + 1, g.nsamples);
 }
 
 /* ---- the picture ---- */
@@ -880,6 +914,15 @@ static void open_tool(int tool)
 
 static void write_back(void) /* FUN_088cb970 */
 {
+    if (g.team >= 0) {
+        uint8_t *e = savedata_team_emblem_edit(g.team);
+        if (e) {
+            memcpy(e, g.pix, PIXELS);
+            memcpy(e + PIXELS, g.pal, sizeof g.pal);
+        }
+        SDL_Log("[emblem] team %d: emblem written back", g.team + 1);
+        return;
+    }
     OkeDataBase *c = savedata_card_edit(g.card);
     memcpy(c->hardware + HW_EMBLEM, g.pix, PIXELS);
     memcpy(c->hardware + HW_EMBLEM_PALETTE, g.pal, sizeof g.pal);
@@ -893,9 +936,9 @@ static void update_menu(void)
         if (g.tool > 0)
             g.tool--;
         else if (pad_trigger(PSP_CTRL_UP))
-            g.tool = TOOL_COUNT - 1;
+            g.tool = tool_count() - 1;
     } else if (pad_repeat(PSP_CTRL_DOWN)) {
-        if (g.tool < TOOL_COUNT - 1)
+        if (g.tool < tool_count() - 1)
             g.tool++;
         else if (pad_trigger(PSP_CTRL_DOWN))
             g.tool = 0;
@@ -906,7 +949,7 @@ static void update_menu(void)
     }
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         sound_se(SE_DECIDE, 1.0f);
-        open_tool(g.tool);
+        open_tool(tool_at(g.tool));
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         sound_se(SE_CANCEL, 1.0f);
         write_back();
@@ -1087,8 +1130,8 @@ static void draw_tools(void)
 {
     float p = ui_pulse(SDL_GetTicks() / 1000.0f);
     bool range = g.mode == E_RANGE_MENU || g.mode == E_RANGE_MOVE;
-    uint32_t table = range ? T_RANGE_TOOLS : T_TOOLS;
-    int count = range ? RANGE_ITEMS : TOOL_COUNT, cur = range ? g.range_item : g.tool;
+    uint32_t table = range ? T_RANGE_TOOLS : tool_table();
+    int count = range ? RANGE_ITEMS : tool_count(), cur = range ? g.range_item : g.tool;
     for (int i = 0; i < count; i++) {
         int y = tool_word(table, i, 0), button = tool_word(table, i, 1), icon = tool_word(table, i, 2);
         bool sel = i == cur && (g.mode == E_MENU || g.mode == E_RANGE_MENU);
@@ -1230,7 +1273,7 @@ const char *emblem_help(void)
     if (g.message)
         return g.message;
     switch (g.mode) {
-    case E_MENU: return hard_string(0x9E + g.tool);
+    case E_MENU: return hard_string(0x9E + tool_at(g.tool));
     case E_PENCIL: return hard_string(0xAE);
     case E_LINE: return hard_string(g.stage ? 0xB0 : 0xAF);
     case E_RECT: return hard_string(g.stage ? 0xB2 : 0xB1);

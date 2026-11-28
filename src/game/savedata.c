@@ -629,6 +629,21 @@ const uint8_t *savedata_team_emblem(int team)
     return t ? t + 0x10 : NULL;
 }
 
+uint8_t *savedata_team_emblem_edit(int team)
+{
+    uint8_t *t = team_card(team);
+    return t ? t + 0x10 : NULL;
+}
+
+void savedata_team_set_name(int team, const char *name)
+{
+    uint8_t *t = team_card(team);
+    if (!t)
+        return;
+    memset(t + 0x250, 0, TEAM_NAME_MAX);
+    snprintf((char *)t + 0x250, TEAM_NAME_MAX, "%s", name ? name : "");
+}
+
 void savedata_team_create(int team, const char *name, const char *owner)
 {
     uint8_t *t = team_card(team);
