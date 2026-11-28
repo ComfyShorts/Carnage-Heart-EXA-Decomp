@@ -11,6 +11,7 @@
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
+#include "lesson.h"
 #include "music.h"
 #include "pad.h"
 #include "picture.h"
@@ -279,6 +280,8 @@ static struct {
     Picture *page;                      /* +0x120: parts/bf/sd_page0.gim */
     char notice[LINE_MAX];
     int rect[4];        /* op 0x29: a lesson's highlight (x, y, w, h), w 0 none */
+    int review;         /* +0x90: 1 while a done lesson is taken again (local 10) */
+    char id[0x41];      /* the script's name, for ReportEnd */
     UiAsk ask;
     float t;
     bool voice_warned;
@@ -305,7 +308,9 @@ static uint32_t game_color(int index, int alpha)
 }
 
 /* FUN_088e4bd0: L or R held skips fades, waits and pages. */
-static bool skipping(void) { return pad_held(PSP_CTRL_LTRIGGER) || pad_held(PSP_CTRL_RTRIGGER); }
+int g_scene_auto; /* --auto-scenes (scripted runs): every script skipped as if L/R were held */
+
+static bool skipping(void) { return g_scene_auto || pad_held(PSP_CTRL_LTRIGGER) || pad_held(PSP_CTRL_RTRIGGER); }
 
 /* Commands only act while the if-stack takes them (FUN_088e6e30's states 0 and 1). */
 static bool taking(void) { return w.if_state[w.if_depth] == 0 || w.if_state[w.if_depth] == 1; }
@@ -414,6 +419,35 @@ static void var_local(int op, int index, int value)
     }
 }
 
+/* FUN_088e40d0's tests: a lesson's state (FUN_088e41e4) or the script's variables
+ * (FUN_088e8fc4: 1 ==, 2 !=, 3 >, 4 >=, 5 <, 6 <=, 7 any bit; local 10 is the review
+ * flag, local 9 a system value the port doesn't keep, 0). The stock, menu and battle
+ * tests are empty in the game and leave the branch taken. */
+static int if_test(int test, uint32_t fl, int value)
+{
+    if (fl & 0x10000000u) {
+        int r = lesson_test(test, (int)(fl & 0xFFFF), value);
+        return r ? r : 0;
+    }
+    if (fl & 0xE0000000u)
+        return 0;
+    int index = (int)fl;
+    if (index < 1 || index > 10 || test < 1 || test > 7)
+        return 0;
+    int v = index == 10 ? w.review : index == 9 ? 0 : w.locals[index - 1];
+    bool r;
+    switch (test) {
+    case 1: r = v == value; break;
+    case 2: r = v != value; break;
+    case 3: r = v > value; break;
+    case 4: r = v >= value; break;
+    case 5: r = v < value; break;
+    case 6: r = v <= value; break;
+    default: r = (v & value) != 0; break;
+    }
+    return r ? 1 : 2;
+}
+
 /* FUN_088df724: op 0x1F / 0x20's menu numbers to CEventScriptField's. */
 static int field_menu(int menu)
 {
@@ -448,6 +482,10 @@ static void run_commands(void)
         switch (op) {
         case 0x00: /* the end (+0x8C 0: done; 1 asks to read the tutorial: lessons) */
             w.state = ST_DONE;
+            if (!s_headless) {
+                SDL_Log("[scene] %s ends (frame %u)", w.id, (unsigned)psp_display_frame_count());
+                lesson_report_end(w.id); /* CLectureCredit::ReportEnd */
+            }
             return;
         case 0x01: { /* a line; "\\" shows the page */
             const char *s = next_string();
@@ -602,9 +640,17 @@ static void run_commands(void)
             if (!taking())
                 break;
             int index = (int)(fl & 0xFFFF);
-            if (fl & 0x10000000u) {
-                if (!s_headless)
-                    SDL_Log("[scene] lesson state %d op %d value %d: lessons aren't ported", index, vop, value);
+            if (fl & 0x10000000u) { /* FUN_088e435c, not in a review; then FUN_088e44bc */
+                if (!w.review)
+                    lesson_var(vop, index, value);
+                char text[160];
+                if (!s_headless && lesson_completed_text(index, value, text, sizeof text)) {
+                    sound_se(5, 1.0f);
+                    open_notice(text);
+                    return;
+                }
+            } else if (w.review && !(fl & 0x80000000u)) {
+                /* a review changes nothing else */
             } else if (fl & 0x20000000u)
                 var_stock(vop, index, value);
             else if (fl & 0x40000000u)
@@ -615,17 +661,19 @@ static void run_commands(void)
                 var_local(vop, (int)fl, value);
             break;
         }
-        case 0x12: /* if: the lesson-state test (FUN_088e41e4) isn't ported: not taken */
+        case 0x12: /* if (FUN_088e40d0): 1 taken, 2 not; then elif */
         case 0x13: {
-            next_int();
-            next_int();
-            next_int();
+            int test = next_int();
+            uint32_t fl = next_word();
+            int value = next_int();
             if (op == 0x12) {
                 if (w.if_depth < IF_MAX)
                     w.if_depth++;
-                w.if_state[w.if_depth] = taking() || w.if_depth == 1 ? 2 : 3;
+                w.if_state[w.if_depth] = if_test(test, fl, value);
             } else if (w.if_state[w.if_depth] == 1) {
                 w.if_state[w.if_depth] = 3;
+            } else if (w.if_state[w.if_depth] == 2) {
+                w.if_state[w.if_depth] = if_test(test, fl, value);
             }
             break;
         }
@@ -760,11 +808,13 @@ bool scene_start(const char *path, const char *id)
     w.active = true;
     w.style = WND_NORMAL;
     w.state = ST_RUN;
+    w.review = savedata_lesson_mode() == 1;
+    snprintf(w.id, sizeof w.id, "%s", id);
     if (!w.window)
         w.window = picture_load("parts/bf/sd_wind1.gim");
     if (!w.page)
         w.page = picture_load("parts/bf/sd_page0.gim");
-    SDL_Log("[scene] %s: %s", path, id);
+    SDL_Log("[scene] %s: %s (frame %u)", path, id, (unsigned)psp_display_frame_count());
     return true;
 }
 
@@ -816,7 +866,7 @@ int scene_update(float dt)
             w.state = ST_PAGE;
         break;
     case ST_NOTICE: /* FUN_088e4f90: circle or cross */
-        if (w.t > 0.1f && pad_pressed(PSP_CTRL_CIRCLE | PSP_CTRL_CROSS)) {
+        if ((w.t > 0.1f && pad_pressed(PSP_CTRL_CIRCLE | PSP_CTRL_CROSS)) || (g_scene_auto && w.t > 0.3f)) {
             sound_se(SE_CANCEL, 1.0f);
             w.state = ST_RUN;
         }

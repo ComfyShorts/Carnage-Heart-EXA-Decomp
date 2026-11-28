@@ -4,6 +4,8 @@
  *   - every step's script is on the disc and reads to its end marker with the scene
  *     player's argument table (scene_dry_run);
  *   - a new story (savedata_story_new + loadPreset) has its preset cards and team;
+ *   - the lessons (lesson.c): the cards' table, the state ops and tests, and the
+ *     day ending when the last of its cards is done (ReportEnd);
  *   - a scene voice from voice.dat decodes (sceAtrac, as voice.c plays it) to mono
  *     samples that aren't silent (skipped without libavcodec).
  *
@@ -19,6 +21,7 @@
 #include "fileio.h"
 #include "gamedata.h"
 #include "heap.h"
+#include "lesson.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 #include "savedata.h"
@@ -111,6 +114,25 @@ int main(int argc, char **argv)
     CHECK(savedata_story_preset(), "loadPreset's files are on the disc");
     CHECK(savedata_card_used(0) && savedata_card_used(1) && !savedata_card_used(2), "cards 1 and 2 hold the presets");
     CHECK(savedata_team_status(0) != 0, "team card 1 holds the preset team");
+
+    /* Lessons: day one (tutorial_a) is cards 0-3, lessons 2-5. */
+    CHECK(lesson_card_of(2) == 0 && lesson_card_of(10) == 8 && lesson_card_of(11) == 11 && lesson_card_of(1) == -1,
+          "lesson numbers to cards (2 -> 0, 10 -> 8, 11 -> 11)");
+    CHECK(!strcmp(lesson_title(0), "OKE Overview") && !strcmp(lesson_title(1), "OKE Controls"), "lesson titles");
+    savedata_set_story_step(2);
+    lesson_var(6, 2, 0x10); /* offered, as tutorial01a does */
+    CHECK(lesson_listed(0) && !lesson_done(0) && lesson_test(1, 1, 0) == 1 && lesson_test(2, 1, 0) == 2 && lesson_test(7, 1, 0x10) == 2,
+          "a lesson offered, not done, and the op 0x12 tests on it (slot n - 1, as FUN_088e41e4 reads)");
+    char text[160];
+    lesson_var(6, 2, 1);
+    CHECK(lesson_done(0) && lesson_completed_text(2, 1, text, sizeof text) && strstr(text, "OKE Overview"),
+          "a lesson done, and its notice (%s)", text);
+    lesson_report_end("tutorial02b");
+    CHECK(!lesson_take_day_done() && savedata_lesson_current() == -1, "one card done doesn't end the day");
+    for (int n = 3; n <= 5; n++)
+        lesson_var(6, n, 0x11);
+    lesson_report_end("tutorial05_succeed");
+    CHECK(lesson_take_day_done(), "the day's last card ends it (FUN_089348f0)");
 
     /* The first voice of scenario01. */
     const char *voice = "voice/til/til0023380.at3";

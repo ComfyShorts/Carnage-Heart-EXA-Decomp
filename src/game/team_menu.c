@@ -19,6 +19,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "battle_menu.h"
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
@@ -162,6 +163,7 @@ static void update_top(void)
         switch (ui_menu_id(&g.top)) {
         case 0: /* -> mode 4 */
             g.mode = MODE_TEAMS;
+            battle_menu_field(0x29, 0); /* Story Mode: a lesson's script on the team cards */
             if (g.team_cursor < g.team_scroll)
                 g.team_scroll = g.team_cursor;
             break;
@@ -170,6 +172,7 @@ static void update_top(void)
                 g.message = team_string(0x44);
             } else {
                 g.mode = MODE_MEMBERS;
+                battle_menu_field(0x2A, 0); /* on the members */
                 g.slot = 0;
             }
             break;
@@ -217,6 +220,7 @@ static void update_teams(void)
         }
         g_selected = t; /* setSelect */
         g.mode = MODE_TOP;
+        battle_menu_field(0x28, 0); /* back on the top menu */
         g.message = NULL;
     } else if (pad_pressed(PSP_CTRL_SQUARE) && status != 0) {
         ui_ask_open(&g.ask, team_string(0x1A), yes_no(0x1F), yes_no(0x20), 1);
@@ -224,6 +228,7 @@ static void update_teams(void)
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;
+        battle_menu_field(0x28, 0); /* back on the top menu */
         g.message = NULL;
     }
 }
@@ -233,6 +238,7 @@ static void update_members(void)
     int team = team_menu_selected();
     if (team < 0) {
         g.mode = MODE_TOP;
+        battle_menu_field(0x28, 0); /* back on the top menu */
         return;
     }
     int old_cursor = g.slot;
@@ -269,6 +275,7 @@ static void update_members(void)
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;
+        battle_menu_field(0x28, 0); /* back on the top menu */
         g.message = NULL;
     }
 }

@@ -89,18 +89,35 @@ void savedata_set_story_completed(bool done);
 /* ---- the Story Mode block (CScenarioModeDataBase, 0x2B80 bytes) ----
  *   +0x0000 the current step (FUN_0889d498 / FUN_0889d4a0), -1 before the first
  *   +0x0088 0x34 lesson state bytes, +0x00BC 0x34 lesson-cleared words (FUN_0889d46c)
- *   +0x0190 the briefing's lesson (FUN_0889d544), -1 none
+ *   +0x018C the lesson's mode (FUN_0889d534): 0 none, 1 a review, 2 a first time
+ *   +0x0190 the lesson taken (its number, FUN_0889d544), -1 none
  *   +0x0198 the hidden scripts (CEventScriptField, FUN_0889d564)
  *   +0x2B28 set by script ops 0x2D / 0x2E (FUN_0889d574), -1 none
- *   +0x2B2C the current battle mission (FUN_0889d710), +0x2B30
+ *   +0x2B2C the current battle mission (FUN_0889d710), +0x2B30 the mission kept
+ *           while a lesson is taken on a mission step (FUN_0889d720)
  *   +0x2B34 the briefing's script file, 0x40 bytes (FUN_0889d584)
- *   +0x2B74 / +0x2B78 the most OKE / team cards (2 / 4 at first), +0x2B7C */
+ *   +0x2B74 / +0x2B78 the most OKE / team cards (2 / 4 at first)
+ *   +0x2B7C a mission's briefing script has ended (FUN_0889d730) */
 #define STORY_STEP_NONE (-1)
 int savedata_story_step(void);
 void savedata_set_story_step(int step);
 int savedata_story_battle(void);
 void savedata_story_set_2b28(int v); /* FUN_0889d574 */
 void savedata_set_story_battle(int mission);
+/* The lesson cards (CLectureCredit's 49 records): a state byte (bit 0 the lesson is
+ * done) and an offered word (bit 0 the card is listed). */
+int savedata_lesson_state(int card);
+void savedata_set_lesson_state(int card, int state);
+uint32_t savedata_lesson_offered(int card);
+void savedata_set_lesson_offered(int card, uint32_t v);
+int savedata_story_saved_battle(void);
+void savedata_set_story_saved_battle(int mission);
+bool savedata_story_briefed(void);
+void savedata_set_story_briefed(bool seen);
+int savedata_lesson_mode(void);
+void savedata_set_lesson_mode(int mode);
+int savedata_lesson_current(void);
+void savedata_set_lesson_current(int lesson);
 /* The briefing's script file (FUN_0889d584), "" none. */
 const char *savedata_story_script(void);
 void savedata_set_story_script(const char *path);
@@ -112,6 +129,7 @@ bool savedata_story_field_hide(int menu, int key, const char *id);
 const char *savedata_story_field_seek(int menu, int key);
 void savedata_story_field_clear(int menu, int key);
 bool savedata_story_field_exists(int menu, int key);
+void savedata_story_field_reset(void);
 
 /* A new Story Mode game: CScenarioModeDataBase's reset (FUN_0889d3dc), then
  * FUN_088d3d80 mode 0: the menu limits (FUN_0895ddd4), the stock (FUN_08918cb0), the

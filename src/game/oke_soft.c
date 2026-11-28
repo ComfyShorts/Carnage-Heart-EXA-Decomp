@@ -21,6 +21,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "battle_menu.h"
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
@@ -399,6 +400,7 @@ static void open_param(const PgChipCommand *chip, bool from_list)
     param_open(chip, &g.sw, savedata_card(g.card));
     g.param_from_list = from_list;
     g.mode = M_PARAM;
+    battle_menu_field(0x21, pgchip_type(chip)); /* a lesson's script by chip (FUN_08a7d324) */
 }
 
 static void open_list(void);
