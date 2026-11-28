@@ -18,10 +18,15 @@
  *
  *   chexa-chip-edit-test [--disc DIR] [--elf FILE] [--saves DIR] [-v]
  *
+ * The saves (which hold the game's ICON0.PNG / PARAM.SFO and shipped designs) go to
+ * --saves DIR, emptied first, or else to a fresh folder in $TMPDIR (or /tmp) that is
+ * removed afterwards, so a run from the source tree leaves nothing in it.
+ *
  * Exits 77 (CTest "skipped") when the game files or the EBOOT aren't there. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "battle_sim.h"
 #include "gamedata.h"
@@ -318,7 +323,7 @@ static void fight_small_program(const OkeDataBase *card)
 
 int main(int argc, char **argv)
 {
-    const char *disc = getenv("CHEXA_DISC"), *elf = "orig/EBOOT.elf", *saves = "chip-edit-test-saves";
+    const char *disc = getenv("CHEXA_DISC"), *elf = "orig/EBOOT.elf", *saves = NULL;
     if (!disc)
         disc = "/mnt/c/psp/chexa";
     for (int i = 1; i < argc; i++) {
@@ -378,10 +383,21 @@ int main(int argc, char **argv)
     small = *card2;
     PgChipCommand judge = *savedata_chip_default(0x0B);
 
-    char cmd[600];
-    snprintf(cmd, sizeof cmd, "rm -rf '%s'", saves);
-    if (system(cmd) != 0)
-        return 1;
+    char cmd[600], tmp[512];
+    bool temp_saves = !saves;
+    if (temp_saves) {
+        const char *dir = getenv("TMPDIR");
+        snprintf(tmp, sizeof tmp, "%s/chexa-chip-edit-XXXXXX", dir && *dir ? dir : "/tmp");
+        if (!mkdtemp(tmp)) {
+            printf("FAIL: can't make a temporary folder for the saves\n");
+            return 1;
+        }
+        saves = tmp;
+    } else {
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", saves);
+        if (system(cmd) != 0)
+            return 1;
+    }
     psp_savedata_set_root(saves);
     savedata_save_start("CHIPEDIT.CHE");
     CHECK(savedata_run(savedata_io_update) == 0, "saved CHIPEDIT.CHE");
@@ -403,6 +419,11 @@ int main(int argc, char **argv)
     fight_small_program(&g_save.db.card[1]);
 
     pack_close(&g_pack);
+    if (temp_saves) {
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", saves);
+        if (system(cmd) != 0)
+            printf("note: couldn't remove %s\n", saves);
+    }
     printf(g_failures ? "%d failure(s)\n" : "all passed\n", g_failures);
     return g_failures ? 1 : 0;
 }
