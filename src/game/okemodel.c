@@ -17,6 +17,8 @@
 
 /* COkeFile's table: 16-byte entries {txt path, gmo path, paint path list, paint count}. */
 #define OKE_FILE_TABLE 0x0041666Cu
+/* GetOkeFileSetName3's table (0x08c8486c): five set names per body. */
+#define OKE_SET_TABLE 0x0048086Cu
 
 typedef struct OkeBone {
     int parent, part; /* part: index among the model's intact parts */
@@ -148,6 +150,14 @@ static void *read_whole(const char *path, int32_t *size)
     return buf;
 }
 
+const char *okemodel_set_name(int oke_id, int paint)
+{
+    if (oke_id < 0 || oke_id > OKE_ID_MAX || paint < 0 || paint > 4)
+        return NULL;
+    uint32_t p = gamedata_word(OKE_SET_TABLE + (uint32_t)(oke_id * 5 + paint) * 4, 0);
+    return p ? gamedata_string(p) : NULL;
+}
+
 OkeModel *okemodel_load(int oke_id, int paint)
 {
     const char *txt = table_string(oke_id, 0), *gmo = table_string(oke_id, 1);
@@ -161,11 +171,17 @@ OkeModel *okemodel_load(int oke_id, int paint)
         paint = 0;
     const char *paint_path = paint_list ? gamedata_string(gamedata_word(paint_list + (uint32_t)paint * 4, 0)) : NULL;
 
+    /* FUN_089f3064: the body's set for this paint (from the top of the default heap,
+     * as the game's call); the models are copied out of it, so it is closed after. */
+    const char *set_name = okemodel_set_name(oke_id, paint);
+    int set = set_name ? fileset_open(set_name, &g_default_heap, 1, 0) : -1;
     OkeModel *m = SDL_calloc(1, sizeof *m);
     m->poses = SDL_calloc(MAX_POSES, sizeof *m->poses);
     m->parts = gmo_load(gmo);
     if (paint_path)
         m->paint = gmo_load(paint_path);
+    if (set >= 0)
+        fileset_close(set);
     if (!m->parts) {
         okemodel_free(m);
         return NULL;

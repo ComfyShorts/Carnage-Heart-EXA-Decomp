@@ -80,6 +80,27 @@ static int hw_word(const OkeDataBase *rec, int off)
     return v;
 }
 
+#define SKY_TABLE 0x00476598u /* 25 pointers, 0x08c7a598 */
+#define SKY_MAPS 25
+
+const char *battle_sky_path(int map)
+{
+    if (map < 0 || map >= SKY_MAPS)
+        return NULL;
+    if (gamedata_available()) {
+        uint32_t p = gamedata_word(SKY_TABLE + 4u * (uint32_t)map, 0);
+        return p ? gamedata_string(p) : NULL;
+    }
+    static const unsigned char k_own[SKY_MAPS] = {1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0,
+                                                  0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0};
+    static char path[32];
+    int m = map == 17 || map == 23 ? 16 : map;
+    if (!k_own[m])
+        return NULL;
+    snprintf(path, sizeof path, "land/map%02d/map%02d_sky.gmo", m, m);
+    return path;
+}
+
 static void scene_load(void)
 {
     int map = battle_menu_setup()->map;
@@ -87,9 +108,8 @@ static void scene_load(void)
         terrain_free(g_scene.land);
         gmo_free(g_scene.sky);
         g_scene.land = terrain_load(map);
-        char path[48];
-        snprintf(path, sizeof path, "land/map%02d/map%02d_sky.gmo", map, map);
-        g_scene.sky = gmo_load(path);
+        const char *sky = battle_sky_path(map); /* the game's table: not every map has one */
+        g_scene.sky = sky ? gmo_load(sky) : NULL;
         g_scene.map = map;
     }
     for (int i = 0; i < MAX_OKES; i++) {

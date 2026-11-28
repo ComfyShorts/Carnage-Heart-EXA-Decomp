@@ -29,4 +29,9 @@ extern int g_battle_forced_result;
 /* One main-loop step. Returns 0 when the player backs out to the title. */
 int battle_mode_update(float dt);
 
+/* FUN_088a0438: the sky model of map 0-24 from the game's table (0x08c7a598), or NULL
+ * for a map that has none (02, 04, 05, 08-14, 24); 17 and 23 use map 16's. Without the
+ * EBOOT, "land/mapNN/mapNN_sky.gmo" for the maps that have their own. */
+const char *battle_sky_path(int map);
+
 #endif
