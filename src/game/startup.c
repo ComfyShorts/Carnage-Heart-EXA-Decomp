@@ -343,16 +343,30 @@ static int application_init(void)
      * (sound.c). Music and voices aren't ported. */
     sound_init();
 
-    /* 16-21, not ported yet: the timers,
-     * utility, pad and file managers (FUN_08b1f904 .. FUN_089f2ecc); the save-data
-     * manager; the "gamecommon" file set into the default heap; the sound bank; and
-     * AssignSpecialBufferToUtilitySave, which hands the step-7 buffer to the save
-     * dialogs. */
-    SDL_Log("[startup] CApplication::Init: skipping the managers and the \"gamecommon\" file set (not ported)");
-    SDL_Log("[startup] state: default heap %u KiB used of %u, fast heap %u KiB, boot set slot %d, "
+    /* 16-21. The manager singletons aren't made here; nothing in the port needs them
+     * at this point (docs/startup.md, "The end of CApplication::Init"): the GU state
+     * (FUN_08b1f904), the save-data utility (FUN_08b24038), the texture manager
+     * (FUN_08b1fd84: picture.c), library callbacks (FUN_08b08834, FUN_08b09830),
+     * common/simple.gmo (FUN_08b22210), the game database (FUN_0889ea30: savedata.c),
+     * FUN_0885c390, the shadow manager (FUN_08a70f1c), the scene file-set manager
+     * (FUN_089f2ecc), CFontMngr (font.c, on first use), CPresetStage (FUN_08a35690),
+     * the system sound bank (FUN_08b36470: sound_init) and
+     * AssignSpecialBufferToUtilitySave (FUN_08805f38).
+     *
+     * The file sets are switched as the game does: "boot" is closed once the sound
+     * tables (its only files that aren't loose pack entries too) and the Shift-JIS
+     * tables are read, and "gamecommon" (the common menu parts, the result banners, the
+     * system sound bank, the tutorial script) is read into the top of the default
+     * heap. Every file in it is a loose entry too, so it only saves reads. */
+    if (boot_set >= 0)
+        fileset_close(boot_set);
+    int common_set = fileset_open("gamecommon", &g_default_heap, 1, 0);
+    if (common_set < 0)
+        SDL_Log("[startup] OpenFileSet(\"gamecommon\") failed");
+    SDL_Log("[startup] state: default heap %u KiB used of %u, fast heap %u KiB, gamecommon set slot %d, "
             "SJIS tables %s, first random number 0x%08X",
             (unsigned)(g_default_heap.used / 1024), (unsigned)(g_default_heap.size / 1024),
-            (unsigned)(g_fast_heap.size / 1024), boot_set,
+            (unsigned)(g_fast_heap.size / 1024), common_set,
             g_sjis_to_ucs && g_ucs_to_sjis ? "loaded" : "missing", (unsigned)rng_next(&g_rng));
     return 0;
 }

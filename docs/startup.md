@@ -41,8 +41,41 @@ are relative to it, so `D_0002D698` in the disassembly is the default heap objec
 | 13 | `CLoadModules` (`FUN_0893fb4c`, `FUN_0893fbd4`): two 128 KiB tables, `sceUtilityLoadModule` 0x305, 0x301, 0x300, 0x302, 0x304, 0x303 (the AV codec modules), `ReadFile` of `common/jis2ucs.bin` and `common/ucs2jis.bin` from the boot set, stored as the Shift-JIS conversion tables | written |
 | 14 | `FUN_08b1ecb8`: `sceCtrlSetSamplingMode(1)` and the pad state, with masks 0xF3F0, 0x3F0, 0xF0 | written |
 | 15 | `CGraphics::GetInstance` (`FUN_08b205c0`, 0x520-byte object with a `CClear` at +0x4F8) and `FUN_08b1fe38` → `FUN_08b75608`, PSPSDK's `sceGuInit`: `sceGeEdramGetAddr`, `sceKernelCreateEventFlag("SceGuSignal")`, `sceGeSetCallback`, `sceGeListEnQueue` of the initial display list, `sceGeListSync`, `sceGeDrawSync` | written (`src/game/render.c`, libgu in `src/platform/gu.c`; see `docs/graphics.md`) |
-| 16 | `CSound::GetInstance` (`new` 0x121A0, ctor `FUN_08b35c34`) and a virtual call into it | skipped: sound |
-| 17+ | about a dozen manager singletons, the "gamecommon" file set, `FUN_08b36470`, `AssignSpecialBufferToUtilitySavedataExternalMemory` | skipped |
+| 16 | `CSound::GetInstance` (`new` 0x121A0, ctor `FUN_08b35c34`) and a virtual call into it (`FUN_08b3697c`: the SE and BGM tables) | written as `sound_init` (`src/game/sound.c`, `music.c`) |
+| 17+ | the manager singletons, `CloseFileSet` of "boot", the "gamecommon" file set, `FUN_08b36470`, `AssignSpecialBufferToUtilitySavedataExternalMemory` | the file sets written; the managers skipped (see below) |
+
+### The end of CApplication::Init
+
+After CSound, `CApplication::Init` (`FUN_08805714`) makes these, in order. None is needed by the port at
+start-up; what each one is and where the port does its work:
+
+| Call | What it is | In the port |
+|---|---|---|
+| `FUN_08b1f904` | a 0x194-byte singleton that sends GE commands (`FUN_08b762bc`): GU state | `render.c`, `gu.c` |
+| `FUN_08b24038` | a 0x6158-byte singleton with a state and a 0x200-byte path, used about 200 times: the save-data utility | `savedata.c` and its own dialogs |
+| `FUN_08b1fd84` | the texture manager | `picture.c` |
+| `FUN_08b08834`, `FUN_08b09830` | callbacks handed to two libraries (three pairs each) | not needed: the port's codecs are its own |
+| `FUN_08b22210` | loads `common/simple.gmo` | not used yet |
+| `FUN_0889ea30` | the 0xD0690-byte game database | `savedata.c` (`g_save`) |
+| `FUN_0885c390` | a 0x24-byte singleton holding three default-heap blocks | not identified |
+| `FUN_08a70f1c` | `CShadowMgr`, loads `shadow/kage00.gim` | not ported: OKEs have no shadow |
+| `FUN_089f2ecc` | a 0x178-byte scene file-set manager: sets opened per id, counted, closed with `CloseFileSet` | the port's screens open and close their sets themselves (battle.c, entrance.c) |
+| `FUN_08b14f70` .. `FUN_08b150f0` | `CFontMngr`, from the boot set's font | `font.c`, on first use (the font files are loose entries too) |
+| `FUN_08a35690` | `CPresetStage`: the list of stages for a random pick (0-24 but 13, those whose table word at `0x08c39138` is below 2) | "Select Randomly" picks among the available stages (`battle_menu.c`); no reader of the list was found in the export, so it isn't known to differ |
+| `CloseFileSet(boot)`, `OpenFileSet("gamecommon", default heap, from top, sync)` | written | see below |
+| `FUN_08b36470(sound, 0)` | `CAplSound`: the system SE bank (`seset_00sys`) | `sound_init` |
+| `FUN_08805f38` | `AssignSpecialBufferToUtilitySavedataExternalMemory`: the step-7 buffer for the save dialogs | not needed: the port's dialogs don't use it |
+
+The file sets: "boot" (35 files, 703 KiB) holds two files that aren't also loose pack
+entries, `sound/sound_se_tbl.bin` and `sound/sound_bgm_tbl.bin`, and both are read in
+step 16 before the game closes it. "gamecommon" (39 files, 245 KiB: the common
+`parts/bf` menu and dialog parts, the result banners `parts/bs/rs_*`, the system sound
+bank, `adv/tutorial_a.chs`, two preset OKEs, the system save icon) is all loose entries
+too. Reads look in the open sets first and then the pack, so neither set changes what
+loads, only where from. The port now switches them as the game does: start-up ends with
+4451 KiB of the default heap in use instead of 4909.
+
+## After CApplication::Init
 
 After `CApplication::Init`, `main` creates the application object and enters the main
 loop. The port runs the graphics part of `CApplication::Start` (`FUN_08806960`: display
