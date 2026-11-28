@@ -27,6 +27,7 @@
 #include "savedata.h"
 #include "scene.h"
 #include "storydb.h"
+#include "voice.h"
 
 static int failures;
 static int verbose;
@@ -136,6 +137,9 @@ int main(int argc, char **argv)
 
     /* The first voice of scenario01. */
     const char *voice = "voice/til/til0023380.at3";
+    CHECK(SDL_fabsf(voice_volume(voice) - 0.6f) < 0.001f && SDL_fabsf(voice_volume("voice/pal/x.at3") - 0.5f) < 0.001f &&
+              voice_volume("voice/xyz/x.at3") == 1.0f,
+          "the speakers' voice volumes (til %.2f)", voice_volume(voice));
     int32_t vsize = fileio_file_size(voice);
     uint8_t *vbuf = vsize > 0 ? malloc((size_t)vsize) : NULL;
     CHECK(vbuf && fileio_read_file(voice, vbuf, (uint32_t)vsize) == vsize, "%s is in voice.dat", voice);

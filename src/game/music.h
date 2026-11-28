@@ -20,6 +20,8 @@ void music_shutdown(void);
 void music_play(int row, int kind, bool loop);
 /* FUN_08b34f44: fade out and stop. */
 void music_stop(void);
+/* FUN_0888c7cc: the next fade-out takes `seconds` (the port's default is 0.5 s). */
+void music_set_fade(float seconds);
 int music_kind(void);
 
 /* CBgmPlayer. FUN_088d3d80 builds the play lists from the save's BGM Player settings

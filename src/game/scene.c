@@ -253,7 +253,11 @@ enum { WND_NORMAL = 1, WND_NONE = 2, WND_FULL = 3 };
 
 #define COLOR_TABLE 0x004440D0u /* 0x08c480d0: three bytes a colour */
 #define MSG_TABLE 0x004766B0u   /* 0x08c7a6b0 (FUN_088af824) */
-#define MSG_HELP 0x2A           /* "#!kBacklog #sRemove Window #l#rSkip" (no backlog yet) */
+#define MSG_HELP 0x29           /* "#kBacklog #sRemove Window #l#rSkip" */
+#define MSG_HELP_NO_LOG 0x2A    /* the same with Backlog greyed: no page logged yet */
+#define MSG_LOG 0x2D            /* "#kBack #gForward #tPlay Voice #sRemove Window #oEnd Backlog" */
+#define MSG_LOG_OLDEST 0x2E     /* the same with Back greyed */
+#define LOG_MAX 128             /* the port's cap; the game's list grows with the script */
 #define MSG_SKIPPING 0x31       /* "#l#rSkipping" */
 /* Op 0x10's tables (CEventScriptVariable): the battle missions, the parts stock and the
  * menu limits (pairs of group and item). */
@@ -282,10 +286,32 @@ static struct {
     int rect[4];        /* op 0x29: a lesson's highlight (x, y, w, h), w 0 none */
     int review;         /* +0x90: 1 while a done lesson is taken again (local 10) */
     char id[0x41];      /* the script's name, for ReportEnd */
+    char voice[0x41];   /* the page's voice (op 0xE), for the backlog */
+    bool in_log;        /* the backlog is shown (state 7, FUN_088e9f68) */
+    int log_at;         /* the entry shown */
+    char saved_label[LINE_MAX], saved[LINES_FULL * LINE_MAX]; /* the page under it (+0x205C) */
+    int saved_style;
     UiAsk ask;
     float t;
     bool voice_warned;
 } w;
+
+/* CEventScriptLinkedLog: the pages turned, oldest first (FUN_088e074c copies the
+ * window's page into a new entry as the page turns). */
+static struct LogEntry {
+    char label[LINE_MAX];
+    char *text;
+    char voice[0x41];
+    int style;
+} s_log[LOG_MAX];
+static int s_log_count;
+
+static void log_clear(void)
+{
+    for (int i = 0; i < s_log_count; i++)
+        free(s_log[i].text);
+    s_log_count = 0;
+}
 
 static const char *ptr_string(uint32_t ptr_addr)
 {
@@ -469,6 +495,72 @@ static void open_notice(const char *text)
     w.t = 0.0f;
 }
 
+static void log_push(void)
+{
+    if (!w.shown_label[0] && !w.shown[0])
+        return;
+    if (s_log_count == LOG_MAX) { /* the oldest goes */
+        free(s_log[0].text);
+        memmove(s_log, s_log + 1, sizeof s_log[0] * (LOG_MAX - 1));
+        s_log_count--;
+    }
+    struct LogEntry *e = &s_log[s_log_count];
+    snprintf(e->label, sizeof e->label, "%s", w.shown_label);
+    e->text = SDL_strdup(w.shown);
+    snprintf(e->voice, sizeof e->voice, "%s", w.voice);
+    e->style = w.style;
+    if (e->text)
+        s_log_count++;
+    w.voice[0] = 0;
+}
+
+static void log_show(int i) /* FUN_088e512c */
+{
+    w.log_at = i;
+    w.style = s_log[i].style;
+    snprintf(w.shown_label, sizeof w.shown_label, "%s", s_log[i].label);
+    snprintf(w.shown, sizeof w.shown, "%s", s_log[i].text);
+}
+
+static void log_end(void)
+{
+    w.in_log = false;
+    w.style = w.saved_style;
+    snprintf(w.shown_label, sizeof w.shown_label, "%s", w.saved_label);
+    snprintf(w.shown, sizeof w.shown, "%s", w.saved);
+    sound_se(SE_CANCEL, 1.0f);
+}
+
+/* FUN_088e9f68: cross ends the backlog, square removes the window, triangle plays the
+ * entry's voice again, up an older entry, down or circle a newer one (past the
+ * newest: the end, down only on a fresh press). */
+static void log_input(void)
+{
+    if (pad_pressed(PSP_CTRL_CROSS)) {
+        log_end();
+    } else if (pad_pressed(PSP_CTRL_SQUARE)) {
+        sound_se(SE_CANCEL, 1.0f);
+        w.state = ST_HIDDEN;
+    } else if (pad_pressed(PSP_CTRL_TRIANGLE)) {
+        voice_stop();
+        if (s_log[w.log_at].voice[0])
+            voice_play(s_log[w.log_at].voice);
+    } else if (pad_repeat(PSP_CTRL_UP)) {
+        if (w.log_at > 0)
+            log_show(w.log_at - 1);
+    } else if (pad_repeat(PSP_CTRL_DOWN)) {
+        if (w.log_at + 1 < s_log_count)
+            log_show(w.log_at + 1);
+        else if (pad_trigger(PSP_CTRL_DOWN))
+            log_end();
+    } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        if (w.log_at + 1 < s_log_count)
+            log_show(w.log_at + 1);
+        else
+            log_end();
+    }
+}
+
 /* FUN_088e6e30: commands until one waits. */
 static void run_commands(void)
 {
@@ -602,16 +694,21 @@ static void run_commands(void)
                       * (FUN_088e3808 -> FUN_0888c648: CSound::BGMPlay, kind 0) */
             int track = next_int();
             next_int();
-            if (taking() && !s_headless)
+            if (taking() && !s_headless) {
+                music_set_fade(0.2f); /* FUN_0888c7cc(0.2) */
                 music_play(track, MUSIC_TITLE, true);
+            }
             break;
         }
-        case 0x0C: /* stop the music: 0x4000 fades over the given ms, else 0.2 s */
-            next_int();
-            next_int();
-            if (taking() && !s_headless)
+        case 0x0C: { /* stop the music: flag 0x4000 fades over the given ms, else 0.2 s */
+            uint32_t fl = next_word();
+            int ms = next_int();
+            if (taking() && !s_headless) {
+                music_set_fade(fl & 0x4000u ? (float)ms / 1000.0f : 0.2f);
                 music_stop();
+            }
             break;
+        }
         case 0x0D: { /* the window's style; a change clears the page */
             int style = next_int();
             if (!taking())
@@ -623,6 +720,8 @@ static void run_commands(void)
         }
         case 0x0E: { /* a voice from voice.dat */
             const char *s = next_string();
+            if (taking())
+                snprintf(w.voice, sizeof w.voice, "%s", s);
             if (taking() && !s_headless && !skipping() && !voice_play(s) && !w.voice_warned) {
                 SDL_Log("[scene] voice %s can't be played", s);
                 w.voice_warned = true;
@@ -809,6 +908,7 @@ bool scene_start(const char *path, const char *id)
     w.style = WND_NORMAL;
     w.state = ST_RUN;
     w.review = savedata_lesson_mode() == 1;
+    log_clear();
     snprintf(w.id, sizeof w.id, "%s", id);
     if (!w.window)
         w.window = picture_load("parts/bf/sd_wind1.gim");
@@ -852,11 +952,22 @@ int scene_update(float dt)
             w.state = ST_RUN;
         break;
     }
-    case ST_PAGE: /* FUN_088e9134: circle (or L/R held) next, square removes the window */
-        if (pad_pressed(PSP_CTRL_SQUARE)) {
+    case ST_PAGE: /* FUN_088e9134: circle (or L/R held) next, square removes the window,
+                   * up the backlog */
+        if (w.in_log) {
+            log_input();
+        } else if (pad_pressed(PSP_CTRL_SQUARE)) {
             sound_se(SE_CANCEL, 1.0f);
             w.state = ST_HIDDEN;
+        } else if (pad_pressed(PSP_CTRL_UP) && s_log_count > 0 && !skipping()) {
+            snprintf(w.saved_label, sizeof w.saved_label, "%s", w.shown_label);
+            snprintf(w.saved, sizeof w.saved, "%s", w.shown);
+            w.saved_style = w.style;
+            w.in_log = true;
+            log_show(s_log_count - 1);
+            sound_se(10, 1.0f);
         } else if ((w.t > 0.1f && pad_pressed(PSP_CTRL_CIRCLE)) || skipping()) {
+            log_push();
             clear_lines();
             w.state = ST_RUN;
         }
@@ -919,7 +1030,7 @@ static void draw_window(void)
         text_draw(w.shown_label, &st, x + 7, y + 0xAC, 0, NULL, NULL);
     if (w.shown[0])
         text_draw(w.shown, &st, x + 7, y + 0xC3, 0, NULL, NULL);
-    if (w.state == ST_PAGE && w.page) { /* the page cursor, blinking */
+    if (w.state == ST_PAGE && w.page && !w.in_log) { /* the page cursor, blinking */
         float a = ui_pulse(w.t);
         uint32_t alpha = (uint32_t)(a * 255.0f) & 0xFF;
         picture_draw(w.page, 0x1CE, 0xFC, 0, BLEND_ALPHA, alpha << 24 | 0xFFFFFF, 0, 0);
@@ -938,7 +1049,7 @@ static void draw_full(void)
 }
 
 /* The game's button guide with the buttons as words. */
-static const char *guide(const char *s)
+static const char *guide_as(const char *s, bool brief)
 {
     static char out[160];
     size_t n = 0;
@@ -953,12 +1064,14 @@ static const char *guide(const char *s)
             s++;
         const char *b;
         switch (*s) {
-        case 'k': b = off ? "" : "Triangle: "; break;
-        case 's': b = "Square: "; break;
+        case 'k': b = "Up: "; break;
+        case 'g': b = "Down: "; break;
+        case 't': b = brief ? "Tri: " : "Triangle: "; break;
+        case 's': b = brief ? "Sq: " : "Square: "; break;
         case 'l': b = "L/"; break;
         case 'r': b = "R: "; break;
-        case 'o': b = "Circle: "; break;
-        case 'x': b = "Cross: "; break;
+        case 'o': b = brief ? "O: " : "Circle: "; break;
+        case 'x': b = brief ? "X: " : "Cross: "; break;
         default: b = ""; break;
         }
         if (off) { /* the greyed-out item: left out up to the next full-width space */
@@ -972,6 +1085,15 @@ static const char *guide(const char *s)
     }
     out[n] = 0;
     return out;
+}
+
+/* The game draws the buttons as symbols; the port spells them out, shorter when the
+ * line wouldn't fit. */
+static const char *guide(const char *s)
+{
+    TextStyle st = text_style(0, 6, 12, 12, 0, 2, 0xFF3F3F3Fu, 0);
+    const char *g = guide_as(s, false);
+    return ui_text_width(g, &st) > 470 ? guide_as(s, true) : g;
 }
 
 void scene_draw(void)
@@ -998,7 +1120,10 @@ void scene_draw(void)
     /* The guide (FUN_0891a118 on the help line Start makes at (5, 0xF9), FUN_08919ec8):
      * on the window's last row; the port's help bar when there's no window. */
     if (w.state == ST_PAGE || w.state == ST_HIDDEN) {
-        const char *g = guide(ptr_string(MSG_TABLE + 4u * (skipping() ? MSG_SKIPPING : MSG_HELP)));
+        int msg = w.in_log ? (w.log_at > 0 ? MSG_LOG : MSG_LOG_OLDEST)
+                  : skipping() ? MSG_SKIPPING
+                  : s_log_count > 0 ? MSG_HELP : MSG_HELP_NO_LOG;
+        const char *g = guide(ptr_string(MSG_TABLE + 4u * (uint32_t)msg));
         if (w.state == ST_PAGE && w.style == WND_NORMAL && w.window && (w.shown_label[0] || w.shown[0])) {
             TextStyle st = text_style(0, 6, 12, 12, 0, 2, 0xFF3F3F3Fu, 0);
             text_draw(g, &st, 5, 0xF9 + 4, 0, NULL, NULL);

@@ -59,6 +59,7 @@ static struct {
     SDL_Mutex *lock;
     /* the request the thread picks up (under lock) */
     bool pending, pending_stop, pending_loop;
+    int fade_grains; /* the next fade-out (music_set_fade), then FADE_GRAINS again */
     int pending_row;
     int kind;
     Player p;
@@ -197,7 +198,8 @@ static int SDLCALL str_thread(void *arg)
         if (g.pending || g.pending_stop) {
             if (p->active && p->vol > 0.0f) {
                 if (p->target > 0.0f) { /* fade out first */
-                    p->step = p->vol / FADE_GRAINS;
+                    p->step = p->vol / (float)SDL_max(g.fade_grains, 1);
+                    g.fade_grains = FADE_GRAINS;
                     p->target = 0.0f;
                 }
             } else {
@@ -256,6 +258,7 @@ void music_init(void)
         SDL_SetAtomicInt(&g.running, 1);
         g.thread = SDL_CreateThread(str_thread, "SOUND_STRThread", NULL);
     }
+    g.fade_grains = FADE_GRAINS;
     g.init = true;
 }
 
@@ -285,6 +288,16 @@ void music_play(int row, int kind, bool loop)
     g.pending_row = row;
     g.pending_loop = loop;
     g.kind = kind;
+    SDL_UnlockMutex(g.lock);
+}
+
+/* FUN_0888c7cc: the next fade-out's length (CSound's BGM fade time). */
+void music_set_fade(float seconds)
+{
+    if (!g.init || !g.lock)
+        return;
+    SDL_LockMutex(g.lock);
+    g.fade_grains = seconds > 0.0f ? (int)(seconds * 44100.0f / GRAIN + 0.5f) : 1;
     SDL_UnlockMutex(g.lock);
 }
 
