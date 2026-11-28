@@ -33,7 +33,8 @@
  *                     title (--gmo-tex FILE: take its textures from another model,
  *                     --gmo-angle DEG: starting turn)
  *   --oke ID          with --startup: show an assembled OKE body (--oke-pose N)
- *   --map N           with --startup: show the generated terrain of map N
+ *   --map N           with --startup: show the generated terrain of map N (on its own,
+ *                     or with the model of --oke / --gmo standing on it)
  *   --story-step N    with --startup: start Story Mode on step N (0-84) of a new game,
  *                     85 for the ending
  *                     (the scenes and lessons before it are applied to the save)

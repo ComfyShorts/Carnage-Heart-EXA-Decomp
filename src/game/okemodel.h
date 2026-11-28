@@ -18,8 +18,15 @@
 
 typedef struct OkeModel OkeModel;
 
-/* Loads body type id (hardware block +0x240) with paint scheme (0-3). */
+/* Loads body type id (hardware block +0x240) with paint scheme (0-3). As the battle
+ * does (FUN_089f3064), the body's file set is opened around the reads: six bodies
+ * (abi, agr, gaz, gs, kei, nh) have their battle/ models only in their sets. */
 OkeModel *okemodel_load(int oke_id, int paint);
+
+/* COkeFile::GetOkeFileSetName3 (FUN_089f2dec): the file set of body oke_id with
+ * paint 0-3 ("<body>_<paint>"), or 4 for the one with every paint ("<body>"); NULL
+ * out of range or without the EBOOT. */
+const char *okemodel_set_name(int oke_id, int paint);
 void okemodel_free(OkeModel *m);
 
 int okemodel_pose_count(const OkeModel *m);
