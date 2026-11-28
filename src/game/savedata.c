@@ -37,6 +37,8 @@ SaveState g_save;
 #define STR_BATTLE_DATA 0x00437D64u
 #define STR_STORY_DATA 0x00437D58u
 #define STR_PLAYER_NAME_PTR 0x004879B0u
+#define STR_TEAM_FOLDER 0x00437D78u            /* "Team Data folder" (0x08c3bd78) */
+#define STR_TEAM_FOLDER_DETAIL_PTR 0x004879B8u /* "Team Cards for transfers are stored here." */
 #define STR_STORY_OPEN_PTR 0x004879ACu  /* "Story Mode: Not Completed" */
 #define STR_STORY_DONE_PTR 0x004879A8u
 #define STR_PLAY_TIME 0x00437ECCu       /* the play-time line, a format with three %d */
@@ -709,20 +711,29 @@ static bool g_util_busy;
 
 static uint8_t g_buf[BATTLE_SAVE_SIZE];
 _Static_assert(STORY_SAVE_SIZE <= BATTLE_SAVE_SIZE, "one buffer for both game saves");
+_Static_assert(TEAM_FILE_SIZE <= BATTLE_SAVE_SIZE, "and the team files");
+static GameDataBase g_peek;              /* From Save Data's other save */
+static uint8_t g_team_file[TEAM_FILE_SIZE];
 
 /* FUN_08a617f8: the save names at 0x08c858f8 ("T", "S", "B", ...); the system data's
  * is empty. */
 static const char *save_name(int type)
 {
-    return type == SAVE_TYPE_BATTLE ? "B" : type == SAVE_TYPE_STORY ? "S" : "";
+    return type == SAVE_TYPE_BATTLE ? "B" : type == SAVE_TYPE_STORY ? "S" : type == SAVE_TEAM ? "TEAM" : "";
 }
 
 /* A game save's size (FUN_08ab8114 type 3, by kind) and its mode block. */
-static SceSize game_save_size(SaveKind kind) { return kind == SAVE_STORY ? STORY_SAVE_SIZE : BATTLE_SAVE_SIZE; }
+static SceSize game_save_size(SaveKind kind)
+{
+    return kind == SAVE_STORY ? STORY_SAVE_SIZE : kind == SAVE_TEAM ? TEAM_FILE_SIZE : BATTLE_SAVE_SIZE;
+}
 static uint8_t *mode_block(SaveKind kind) { return kind == SAVE_STORY ? g_save.story : g_save.battle; }
 static size_t mode_block_size(SaveKind kind) { return kind == SAVE_STORY ? STORY_DATA_SIZE : BATTLE_DATA_SIZE; }
 static char *kind_file(SaveKind kind) { return kind == SAVE_STORY ? g_save.story_file : g_save.battle_file; }
-static const char *kind_label(SaveKind kind) { return kind == SAVE_STORY ? "Story Data" : "Battle Data"; }
+static const char *kind_label(SaveKind kind)
+{
+    return kind == SAVE_STORY ? "Story Data" : kind == SAVE_TEAM ? "Team Data" : "Battle Data";
+}
 
 /* FUN_08b25354 + FUN_08b24da4: the common header and the default file. */
 static void param_begin(int type, int mode)
@@ -845,6 +856,9 @@ static void sfo_strings(int type, char *title, size_t tn, char *detail, size_t d
         /* The step's full progress title (FUN_08a69b74 with 1): "Progress :Chapter 1". */
         snprintf(title, tn, "%s", or_empty(gamedata_string(STR_STORY_DATA)));
         snprintf(detail, dn, "%s", or_empty(storydb_progress(savedata_story_step(), true)));
+    } else if (type == SAVE_TEAM) {
+        snprintf(title, tn, "%s", or_empty(gamedata_string(STR_TEAM_FOLDER)));
+        snprintf(detail, dn, "%s", or_empty(ptr_string(STR_TEAM_FOLDER_DETAIL_PTR)));
     } else {
         snprintf(title, tn, "%s", or_empty(gamedata_string(STR_BATTLE_DATA)));
         /* "%s%s": "Player Name:" and the name at the battle block's start. */
@@ -937,6 +951,7 @@ static struct {
     char file[SAVE_FILE_MAX];
     SaveListEntry list[SAVE_LIST_MAX];
     int list_count;
+    bool peek;      /* the load goes to g_peek, not the game */
 } g_seq;
 
 static void seq_begin(SeqKind kind, int state)
@@ -1082,6 +1097,11 @@ static void call_game_write(void)
     /* FUN_08abb680, types 0-2: the version string without its NUL, the shared block,
      * then the mode's block. */
     SaveKind k = g_seq.save_kind;
+    if (k == SAVE_TEAM) { /* FUN_08abb680 type 5: built by the caller */
+        memcpy(g_buf, g_team_file, TEAM_FILE_SIZE);
+        util_write((int)k, g_seq.file, g_buf, TEAM_FILE_SIZE, !g_seq.exists, false);
+        return;
+    }
     size_t v = strlen(SAVE_VERSION);
     memcpy(g_buf, SAVE_VERSION, v);
     memcpy(g_buf + v, &g_save.db, GAME_DB_SIZE);
@@ -1149,9 +1169,31 @@ int savedata_list(const SaveListEntry **out)
 
 void savedata_load_start(SaveKind kind, const char *file)
 {
+    g_seq.peek = false;
     seq_begin(SEQ_LOAD, ST_GAME_READ);
     g_seq.save_kind = kind;
     snprintf(g_seq.file, sizeof g_seq.file, "%s", file);
+}
+
+void savedata_peek_start(SaveKind kind, const char *file)
+{
+    savedata_load_start(kind, file);
+    g_seq.peek = true;
+}
+
+const GameDataBase *savedata_peeked(void)
+{
+    return &g_peek;
+}
+
+const uint8_t *savedata_team_file(void)
+{
+    return g_team_file;
+}
+
+void savedata_team_file_set(const uint8_t *data)
+{
+    memcpy(g_team_file, data, TEAM_FILE_SIZE);
 }
 
 void savedata_save_start(SaveKind kind, const char *file)
@@ -1172,8 +1214,16 @@ static bool unpack_game(void)
                 (unsigned)game_save_size(k));
         return false;
     }
+    if (k == SAVE_TEAM) { /* checked and installed by the caller (FUN_08abba9c type 5) */
+        memcpy(g_team_file, g_buf, TEAM_FILE_SIZE);
+        return true;
+    }
     if (memcmp(g_buf, SAVE_VERSION, v)) /* FUN_08ab8604 compares, the game goes on anyway */
         SDL_Log("[save] %s: version \"%.6s\", expected \"%s\"", g_seq.file, (const char *)g_buf, SAVE_VERSION);
+    if (g_seq.peek) {
+        memcpy(&g_peek, g_buf + v, GAME_DB_SIZE);
+        return true;
+    }
     memcpy(&g_save.db, g_buf + v, GAME_DB_SIZE);
     memcpy(mode_block(k), g_buf + v + GAME_DB_SIZE, mode_block_size(k));
     snprintf(kind_file(k), SAVE_FILE_MAX, "%s", g_seq.file);
@@ -1190,6 +1240,8 @@ static int io_update(void)
         if (r != 0 || !unpack_game()) {
             g_seq.result = r ? r : -1;
             SDL_Log("[save] loading %s failed (0x%08X)", g_seq.file, (unsigned)r);
+        } else if (g_seq.peek || g_seq.save_kind == SAVE_TEAM) {
+            SDL_Log("[save] %s %s read", kind_label(g_seq.save_kind), g_seq.file);
         } else {
             int used = 0;
             for (int i = 0; i < SAVE_CARDS; i++)
@@ -1219,7 +1271,8 @@ static int io_update(void)
             return 1;
         g_seq.result = r;
         if (r == 0) {
-            snprintf(kind_file(g_seq.save_kind), SAVE_FILE_MAX, "%s", g_seq.file);
+            if (g_seq.save_kind != SAVE_TEAM)
+                snprintf(kind_file(g_seq.save_kind), SAVE_FILE_MAX, "%s", g_seq.file);
             SDL_Log("[save] %s saved as %s/%s%s/%s", kind_label(g_seq.save_kind), psp_savedata_root(),
                     SAVE_GAME_NAME, save_name((int)g_seq.save_kind), g_seq.file);
         } else {

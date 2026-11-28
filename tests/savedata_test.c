@@ -3,7 +3,9 @@
  *   chexa-savedata-test [DIR]   (default: a fresh folder under the build directory)
  * Start-up check on an empty folder creates the system data, the next one loads it;
  * a Battle Data save round-trips its cards; FILES lists it and tells broken files;
- * a Story Data save round-trips the Story Mode block in its own folder. */
+ * a Story Data save round-trips the Story Mode block in its own folder; Team
+ * Formation's transfers (team_trade.c) export a team file, import it and install a
+ * team of another save. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +15,7 @@
 #include "psp_imports.h"
 #include "psp_shim.h"
 #include "savedata.h"
+#include "team_trade.h"
 
 static int failures;
 
@@ -171,6 +174,60 @@ int main(int argc, char **argv)
     CHECK(!strcmp(g_save.story_file, "STORY.CHE"), "the loaded story file is remembered");
     savedata_load_start(SAVE_BATTLE, "STORY.CHE");
     CHECK(savedata_run(savedata_io_update) != 0, "STORY.CHE isn't Battle Data");
+
+    /* Transfer Team Data: team 1 on cards 4, 1 and 4 again, exported, then imported
+     * into a game whose cards 1-2 are taken. */
+    savedata_new_game();
+    for (int i = 0; i < 4; i++)
+        g_save.db.card[i].header[0] = i == 0 || i == 3;
+    snprintf((char *)g_save.db.card[3].header + 4, 0x1C, "Four");
+    savedata_team_create(0, "Trade", "Owner");
+    savedata_team_set_member(0, 0, 3, 4);
+    savedata_team_set_member(0, 1, 0, 3);
+    savedata_team_set_member(0, 2, 3, 5);
+    static uint8_t file[TEAM_FILE_SIZE];
+    bool exported = team_trade_export(0, file);
+    CHECK(exported, "team 1 exported");
+    uint32_t count, member0, member2;
+    memcpy(&count, file + 8, 4);
+    memcpy(&member0, file + 0x30 + 0x290 + 0x20, 4);
+    memcpy(&member2, file + 0x30 + 0x290 + 0x60 + 0x20, 4);
+    CHECK(!memcmp(file, "CETD", 4) && count == 2 && member0 == 0 && member2 == 0,
+          "the file: CETD, 2 cards, the third member on the first's card (%u, %u, %u)", count, member0, member2);
+    savedata_team_file_set(file);
+    savedata_save_start(SAVE_TEAM, "TEAM1.CHE");
+    CHECK(savedata_run(savedata_io_update) == 0, "save TEAM1.CHE");
+    snprintf(path, sizeof path, "%s/%sTEAM/TEAM1.CHE", root, SAVE_GAME_NAME);
+    CHECK(size_of(path) == TEAM_FILE_SIZE, "TEAM1.CHE is 0x%X bytes (%ld)", TEAM_FILE_SIZE, size_of(path));
+    savedata_new_game();
+    g_save.db.card[0].header[0] = g_save.db.card[1].header[0] = 1;
+    savedata_team_create(0, "Mine", "Me");
+    savedata_load_start(SAVE_TEAM, "TEAM1.CHE");
+    CHECK(savedata_run(savedata_io_update) == 0, "load TEAM1.CHE");
+    int t = team_trade_import(savedata_team_file());
+    char card_name[32];
+    savedata_card_name(2, card_name, sizeof card_name);
+    CHECK(t == 1 && savedata_team_status(1) == 2 && savedata_team_count(1) == 3, "installed as team 2, status 2");
+    CHECK(savedata_team_member(1, 0) == 2 && savedata_team_member(1, 2) == 2 && savedata_team_member(1, 1) == 3,
+          "members on the new cards (%d, %d, %d)", savedata_team_member(1, 0), savedata_team_member(1, 1),
+          savedata_team_member(1, 2));
+    CHECK(savedata_card_status(2) == 2 && savedata_card_status(3) == 2 && !strcmp(card_name, "Four") &&
+              team_trade_cards_used() == 4,
+          "two cards installed, status 2 (\"%s\")", card_name);
+    file[0x40] ^= 1;
+    int bad_import = team_trade_import(file);
+    CHECK(bad_import < 0 && team_trade_teams_used() == 2, "a file whose sum is off isn't installed");
+
+    /* From Save Data: UNIT.CHE's team 3 (cards 6 and 1) read without loading it. */
+    savedata_peek_start(SAVE_BATTLE, "UNIT.CHE");
+    int32_t peeked = savedata_run(savedata_io_update);
+    CHECK(peeked == 0 && savedata_team_count(1) == 3, "UNIT.CHE peeked, the game kept");
+    bool unused = team_trade_install(savedata_peeked(), 0);
+    CHECK(!unused, "an unused team isn't installed");
+    bool installed = team_trade_install(savedata_peeked(), 2);
+    CHECK(installed && savedata_team_status(2) == 2 &&
+              savedata_team_member(2, 0) == 4 && savedata_team_member(2, 1) == 5 && team_trade_cards_used() == 6,
+          "UNIT.CHE's team 3 installed as team 3 on cards 5 and 6");
 
     printf(failures ? "%d failure(s)\n" : "all passed\n", failures);
     return failures ? 1 : 0;
