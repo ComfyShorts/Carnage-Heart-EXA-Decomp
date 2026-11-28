@@ -110,7 +110,14 @@ From the entrance code (`FUN_088d5510`, `FUN_088d497c`, `FUN_088d5a70`,
 - `CBattleModeFlow`'s sub-flows (`FUN_08837c64`): 0 `CDesignFlow`, 1
   `CTeamFormationFlow`, 2 `CBattleSelectFlow` (ported), 3 `CShopFlow` (ported), 4 system.
   `CBattleSelectFlow`'s (`FUN_08880bc4`): 3 `CBattleTestFlow` (ported), 4
-  `CBattleMissionFlow`, 5 `CBattleArenaFlow` (ported), 6 `CMatchMakeFlow`.
+  `CBattleMissionFlow` (Story Mode's missions, ported: docs/story.md), 5
+  `CBattleArenaFlow` (ported), 6 `CMatchMakeFlow`.
+- Story Mode reaches the same screens from its briefing hub (`CBriefingMngr`) and
+  runs the same battle for its missions: `CBattleMissionFlow::buildBattle`
+  (`FUN_08819478`) fills the battle from a mission record (stage, enemies, spots,
+  time limit), and a win on a mission stage (0x40-0x4A) moves the story on
+  (`FUN_08818ff0`). `--battle-result win|lose|draw` ends every battle a second in,
+  for scripted runs of either mode.
 - The battle itself is `CBattleScene` / `CBattleSceneMngr` (file set "battlescene":
   3D effect models `effect/*.gmo`, HUD art `parts/bs/*`), with `CBattleOke` behind
   each robot.

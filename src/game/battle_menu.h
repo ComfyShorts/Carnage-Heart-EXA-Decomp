@@ -42,8 +42,17 @@ typedef struct BattleSetup {
 
 void battle_menu_start(void);
 
+/* Story Mode's briefing hub (CBriefingMngr, FUN_08892c1c): the same screens with the
+ * hub's six items, Mission under Battle, and the scripts hidden on the screens. */
+void battle_menu_start_story(void);
+/* After a battle: a won mission moves the story on (FUN_08818ff0). */
+void battle_menu_battle_over(int result);
+/* The hub has ended because the step is done (battle_menu_update returned 0). */
+bool battle_menu_story_advanced(void);
+
 /* One step. Returns 1 while the menus run, 2 when a battle should start
- * (battle_menu_setup() has it), 0 when the player backs out to the title. */
+ * (battle_menu_setup() has it), 0 when the player backs out to the title (Story
+ * Mode: when the step is done). */
 int battle_menu_update(float dt);
 
 void battle_menu_draw(void);

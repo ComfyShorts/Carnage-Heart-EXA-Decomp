@@ -59,7 +59,28 @@ The kinds of step:
   version of the Battle Mode top menu. Its items open: 0 `CLectureFlow` (lessons),
   1 `CDesignFlow` (OKE Configuration), 2 `CTeamFormationFlow`, 3 `CBattleSelectFlow`,
   4 `CShopFlow`, 5 `CSystemMngr` (System Menu), 7 `CBriefingPresetFlow`. Items 1, 2
-  and 4 are the screens Battle Mode already uses.
+  and 4 are the screens Battle Mode already uses. The menu (`FUN_08894664`) lists
+  the six ids at `0x08bfe330` with the Battle Mode buttons (parts 0x87 + id,
+  0x8D + id), text id + 4 and help id + 10 of `0x08c7a6b0` (`FUN_08894300`); an item
+  shows when its menu limit (group 0, `FUN_0895e2fc`) is 1, with the "new" mark when
+  it is 2, and choosing it turns 2 into 1 (`FUN_0893b748`). A new story has only
+  Lesson; the lessons' scripts unlock the rest (op 0x10, flag 0x40000000).
+- When a child of the hub ends, the game-common word `+0x45D4C` (`FUN_0889e214`,
+  set by `FUN_0889e170`) says the step is done: the hub ends and `CTutorialFlow`
+  goes to the next step. Two kinds of child set it: a lesson finished
+  (`FUN_08934480`) and a won mission battle (`FUN_08818ff0`: result 1 at
+  `+0x45D24`, the stage between 0x40 and 0x4A, the step not a lesson's).
+- **Missions.** The scene before a mission picks its record (op 0x10 with flag
+  0x80000000, through the table at `0x08c7d280`: `scenario21` sets 0x33 → record 38)
+  and hides the mission's briefing on Battle → Mission (op 0x1F on menu 0x34,
+  `mission01`). Battle → Mission (`CBattleSelectFlow` kind 4, `FUN_08880bc4`) opens
+  `CBattleMissionFlow` and its manager (`CBattleMissionMngr`, `FUN_0881a26c`): the
+  hidden briefing plays from the step's script file, then a team list
+  (`FUN_0881a428`), then the battle.
+- **CEventScriptField menus.** Op 0x1F / 0x20's menu numbers are screens: 10 Lesson,
+  0x14 and 0x1E-0x23 OKE Configuration and its parts (0x21 the chip editor, whose
+  keys are chip ids), 0x32 Battle, 0x34 Mission, 0x46 and 0x5A others the lessons
+  use.
 
 ## Scene scripts (`.chs`)
 
@@ -146,7 +167,7 @@ bytes (`FUN_0889eac8`; constructor `FUN_0889d3a0`):
 | +0x00BC | 0x34 lesson-cleared flags |
 | +0x0198 | the hidden-script field (`CEventScriptField`) |
 | +0x2B28 | the value ops 0x2D / 0x2E set (-1 in a new game) |
-| +0x2B2C | the current battle mission |
+| +0x2B2C | the current battle mission (a record, 0-48; -1 none) |
 | +0x2B34 | the briefing script path |
 | +0x2B74 / +0x2B78 | the most OKE / team cards (2-32 / 4-16) |
 | +0x2B7C | |
@@ -181,7 +202,7 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Story Data | Kind `S`: `ULJM05698S/<NAME>.CHE`, the version, the shared block and the story block, 0x4AF26 bytes; the SFO's title "Story Data" and the step's progress title; icon `icon0_scenario.png` | |
 | Continue | Story Data or Battle Data, the kind's files, then the story resumes on its saved step (`FUN_088d3d80` mode 3, `CTutorialFlow` type 2): a scene or card, or the briefing for a lesson or mission step | Plain menus (see screens.md, "Save data") |
 | The clear data | After the ending: Story Mode completed in the system data, step 0x53, mission 11's briefing and battle 0x30, then "Save cleared data?" (string 0x39) | |
-| The briefing hub, the ending | | A black screen naming the step; circle goes on (part 3) |
+| The ending | | A black screen naming the step; circle goes on |
 
 ### 2. The scene player
 
@@ -200,6 +221,35 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Hidden scripts (ops 0x1F / 0x20) | Stored on and removed from the menu points of the save (`CEventScriptField`, menu numbers `FUN_088df724`) | |
 | Sound | Effects (op 0x1A) from the story bank (`seset_02adv`, opened with Story Mode) | Music (ops 0xB / 0xC) and voices (op 0xE) aren't played yet: part 4 |
 | Lesson commands (0x23-0x2A) | Read and skipped | Part 5 |
+
+### 3. The briefing hub and mission battles
+
+`src/game/battle_menu.c` (`battle_menu_start_story`) and `src/game/battle.c`
+(`battle_mode_start_story`): the Battle Mode screens and battle, in the hub's variant.
+
+| Part | Real | Stand-in |
+|---|---|---|
+| The hub | The six items with the game's buttons, picture, text and help; which show and which are "new" from the save's menu limits; "new" cleared when chosen; cross does nothing (the hub has no way back) | The game's own hub layout (`FUN_08894664` places the list and a help window `FUN_088ffcac` differently) is the Battle Mode top menu's |
+| OKE Configuration, Team Formation, Shop | The screens Battle Mode uses, on the story's cards, teams and stock | As in Battle Mode |
+| Battle | Test Program, Mission, Battle Arena, Matchmaking (strings `0x08c79410`); Mission is enabled while the save has a mission | Battle Arena offers all opponents, as in Battle Mode |
+| Mission | The briefing hidden on menu 0x34 plays over the menu with the scene player (`adv/missionNN.chs`), once; then the 16 team cards; then "Start battle?" | The game's mission screen (`CBattleMissionMngr`: its own team window at (0xBE, 0x10) and layout) is the port's team list |
+| The mission battle | `buildBattle` from the record of `0x08c6b110`: stage `+0`, enemy count `+8`, designs `+0xC + 0x40 n` (`preset/mission/oke_mNN_n.bin`), spots `+0xCC + 4 n`, time limit `+0x114`; the chosen team on its spots; the battle and chip interpreter Battle Mode runs | The robots' side of the battle is Battle Mode's stand-in simulation (battle.md) |
+| After the battle | A win on a mission's stage (0x40-0x4A) on a step that isn't a lesson's ends the hub, and the story goes on; a loss or draw goes back to the Battle menu | |
+| System Menu | Saves Story Data (to the file loaded, else `NEWDATA.CHE`) | As in Battle Mode: the port's question in place of `CSystemMngr`'s menu |
+| Lesson | | Lessons come last. On a lesson step, Lesson asks (the port's text) whether to count the lesson as completed; Yes runs all of that day's scripts (`adv/tutorial_X.chs`) for their effects, the items, parts and missions they unlock, and the story goes on |
+
+`--story-step N` also runs the scenes and lesson days before step N for their
+effects, so a mission step starts with its record, its hidden briefing and the
+unlocked hub. `--battle-result win|lose|draw` ends every battle a second in, for
+scripted runs:
+
+```sh
+B="--press 90 circle --press 120 down --press 140 circle"        # Battle, Mission
+B="$B --press 220 circle --press 260 circle --press 300 circle"   # the briefing's pages
+B="$B --press 400 circle --press 440 circle"                      # Kyle's Team, Start battle?
+build/pc-m32/chexa-pc --disc DIR --startup --story-step 48 --battle-result win $B \
+    --press 760 circle --frames 900          # scenario22 starts: the story goes on
+```
 
 `chexa-story-test` (CTest `story_steps`) reads every step's script from the disc to
 its end with the player's argument table (85 steps, 23,732 commands), checks the

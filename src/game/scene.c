@@ -124,6 +124,9 @@ typedef struct ScenePic {
 
 #define PORTRAITS 3
 
+/* scene_apply: the commands' effects on the save only, nothing drawn or played. */
+static bool s_headless;
+
 /* A translucent rectangle: alpha blending on for the untextured sprite. */
 static void fill_alpha(int x, int y, int fw, int fh, uint32_t abgr)
 {
@@ -147,6 +150,8 @@ static void pic_load(ScenePic *p, const char *path, int pos)
     p->color = 0xFFFFFFFFu;
     p->visible = true;
     p->fade = 100;
+    if (s_headless)
+        return;
     p->pic = path && *path ? picture_load(path) : NULL;
     if (!p->pic) {
         SDL_Log("[scene] picture %s missing", path ? path : "(none)");
@@ -555,7 +560,7 @@ static void run_commands(void)
         case 0x0B: { /* music (story.c / part 4) */
             int track = next_int();
             next_int();
-            if (taking())
+            if (taking() && !s_headless)
                 SDL_Log("[scene] music track %d (not played yet)", track);
             break;
         }
@@ -574,7 +579,7 @@ static void run_commands(void)
         }
         case 0x0E: { /* a voice */
             const char *s = next_string();
-            if (taking() && !w.voice_warned) {
+            if (taking() && !w.voice_warned && !s_headless) {
                 SDL_Log("[scene] voices aren't played yet (first: %s)", s);
                 w.voice_warned = true;
             }
@@ -589,9 +594,10 @@ static void run_commands(void)
             if (!taking())
                 break;
             int index = (int)(fl & 0xFFFF);
-            if (fl & 0x10000000u)
-                SDL_Log("[scene] lesson state %d op %d value %d: lessons aren't ported", index, vop, value);
-            else if (fl & 0x20000000u)
+            if (fl & 0x10000000u) {
+                if (!s_headless)
+                    SDL_Log("[scene] lesson state %d op %d value %d: lessons aren't ported", index, vop, value);
+            } else if (fl & 0x20000000u)
                 var_stock(vop, index, value);
             else if (fl & 0x40000000u)
                 var_limit(vop, index, value);
@@ -628,7 +634,7 @@ static void run_commands(void)
             break;
         case 0x1A: { /* a sound effect: id, volume % in the high half */
             uint32_t v = next_word();
-            if (taking() && !skipping())
+            if (taking() && !skipping() && !s_headless)
                 sound_se((int)(v & 0xFFFF), (v >> 16) ? (float)(v >> 16) / 100.0f : 1.0f);
             break;
         }
@@ -676,7 +682,8 @@ static void run_commands(void)
             const char *s = next_string();
             int se = next_int();
             if (taking()) {
-                sound_se(se < 1 ? 10 : se, 1.0f);
+                if (!s_headless)
+                    sound_se(se < 1 ? 10 : se, 1.0f);
                 open_notice(s);
                 return;
             }
@@ -931,6 +938,59 @@ void scene_draw(void)
             ui_help_draw(g);
         }
     }
+}
+
+bool scene_apply(const char *path, const char *id)
+{
+    scene_stop();
+    if (!file_open(path, id))
+        return false;
+    s_headless = true;
+    w.active = true;
+    w.style = WND_NORMAL;
+    w.state = ST_RUN;
+    for (int guard = 0; guard < 100000 && w.state != ST_DONE; guard++) {
+        if (w.state == ST_PAGE)
+            clear_lines();
+        w.state = ST_RUN;
+        run_commands();
+    }
+    scene_stop();
+    s_headless = false;
+    return true;
+}
+
+int scene_apply_file(const char *path)
+{
+    static char names[128][0x41];
+    int n = 0;
+    scene_stop();
+    int32_t size = fileio_file_size(path);
+    uint8_t *data = size > 0x20 && size <= CHS_MAX ? malloc((size_t)size + 1) : NULL;
+    if (!data || fileio_read_file(path, data, (uint32_t)size) != size) {
+        free(data);
+        return 0;
+    }
+    data[size] = 0;
+    if (memcmp(data, "CHS 1.10", 8)) {
+        free(data);
+        return 0;
+    }
+    uint32_t count, table, pool;
+    memcpy(&count, data + 8, 4);
+    memcpy(&table, data + 0x10, 4);
+    memcpy(&pool, data + 0x1C, 4);
+    for (uint32_t i = 0; i < count && n < 128 && table + 8 * i + 4 <= (uint32_t)size; i++) {
+        uint32_t off;
+        memcpy(&off, data + table + 8 * i, 4);
+        if (pool + off < (uint32_t)size)
+            snprintf(names[n++], sizeof names[0], "%s", (const char *)data + pool + off);
+    }
+    free(data);
+    int done = 0;
+    for (int i = 0; i < n; i++)
+        done += scene_apply(path, names[i]);
+    return done;
 }
 
 int scene_dry_run(const char *path, const char *id)

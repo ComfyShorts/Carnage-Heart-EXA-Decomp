@@ -30,6 +30,15 @@ void scene_draw(void);
 /* Frees the script and the pictures. */
 void scene_stop(void);
 
+/* Runs the script to its end at once for its effects on the save (variables, the
+ * mission, hidden scripts), drawing and playing nothing: --story-step uses it for the
+ * scenes before the step it starts at. */
+bool scene_apply(const char *path, const char *id);
+
+/* The same for every script of a file, in the file's order (a lesson day's scripts:
+ * the stand-in for a lesson until CLectureFlow is ported). Returns how many ran. */
+int scene_apply_file(const char *path);
+
 /* For tools and tests: run the loaded script's commands to the end without waiting,
  * counting them. Returns the number of commands, -1 on a bad command. */
 int scene_dry_run(const char *path, const char *id);

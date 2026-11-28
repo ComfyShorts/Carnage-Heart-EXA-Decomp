@@ -18,6 +18,14 @@
 /* Starts at the Battle Mode top menu. Registers its own render node. */
 void battle_mode_start(void);
 
+/* Story Mode's briefing hub on the same screens (battle_menu_start_story); it ends
+ * when the step is done (battle_menu_story_advanced). */
+void battle_mode_start_story(void);
+
+/* For scripted runs (--battle-result): -1 plays battles out; 0, 1 or 2 ends each one
+ * a second in as won, lost or drawn. */
+extern int g_battle_forced_result;
+
 /* One main-loop step. Returns 0 when the player backs out to the title. */
 int battle_mode_update(float dt);
 

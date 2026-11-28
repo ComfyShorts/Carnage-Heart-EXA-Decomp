@@ -35,6 +35,8 @@
  *   --oke ID          with --startup: show an assembled OKE body (--oke-pose N)
  *   --map N           with --startup: show the generated terrain of map N
  *   --story-step N    with --startup: start Story Mode on step N (0-84) of a new game
+ *                     (the scenes and lessons before it are applied to the save)
+ *   --battle-result R for scripted runs: every battle ends 1 s in, as R (win, lose, draw)
  *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)
  *   --scale N         window scale (default 2, i.e. 960x544)
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
@@ -53,6 +55,7 @@
 #include "startup.h"
 #include "modelview.h"
 #include "story.h"
+#include "battle.h"
 #include "gamedata.h"
 #include "savedata.h"
 #include "movie.h"
@@ -199,6 +202,10 @@ int main(int argc, char **argv)
             g_modelview_map = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--story-step") && i + 1 < argc)
             g_story_step = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--battle-result") && i + 1 < argc) {
+            const char *r = argv[++i];
+            g_battle_forced_result = !strcmp(r, "win") ? 0 : !strcmp(r, "lose") ? 1 : !strcmp(r, "draw") ? 2 : -1;
+        }
         else if (!strcmp(argv[i], "--oke-pose") && i + 1 < argc)
             g_modelview_pose = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gmo-angle") && i + 1 < argc)
@@ -222,7 +229,7 @@ int main(int argc, char **argv)
                                                                                        : "orig/first_frame.png");
         else {
             fprintf(stderr,
-                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--story-step N] [--perf] [--startup] [--trace] [--frames N] [--scale N] "
+                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--story-step N] [--battle-result R] [--perf] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
                     "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
                     argv[0]);

@@ -25,6 +25,8 @@
 #include "render.h"
 #include "savedata.h"
 #include "scene.h"
+#include "battle.h"
+#include "battle_menu.h"
 #include "sound.h"
 #include "storydb.h"
 #include "ui.h"
@@ -91,6 +93,7 @@ enum { MNGR_ASK = 0, MNGR_SAVE = 1, MNGR_TITLE = 2, MNGR_SCRIPT = 3 };
 static struct {
     bool running;
     bool node_added;
+    bool in_hub;     /* the briefing hub (battle.c) draws itself */
     int type;      /* CTutorialFlow +0x18: 1 new, 2 continued */
     bool started;  /* the first child was made (Update's default case) */
     Child child;   /* +0x14 */
@@ -190,7 +193,13 @@ static void move_briefing(void)
     g.t = 0.0f;
     g.note = "Briefing";
     snprintf(g.script_id, sizeof g.script_id, "%s", storydb_script_id(step) ? storydb_script_id(step) : "");
+    /* A lesson's first script is hidden on Lesson (FUN_088df4b0 on menu 0, key 0). */
+    if (storydb_lecture_part(step) && g.script_id[0])
+        savedata_story_field_hide(0, 0, g.script_id);
     SDL_Log("[story] step %d: briefing for %s (%s)", step, g.script_id, savedata_story_script());
+    /* CBriefingMngr: the Battle Mode screens with the hub's items (battle_menu.c). */
+    battle_mode_start_story();
+    g.in_hub = true;
 }
 
 /* After the last step: the ending, then the clear data (Update state 3). */
@@ -306,7 +315,7 @@ static TextStyle note_style(uint32_t color) { return text_style(0, 6, 12, 12, 0,
 static void draw(void *ctx)
 {
     (void)ctx;
-    if (!g.running)
+    if (!g.running || g.in_hub)
         return;
     ui_fill(0, 0, 480, 272, 0xFF000000);
     if (g.child == CHILD_ADVENTURE && g.title) {
@@ -318,7 +327,7 @@ static void draw(void *ctx)
     } else if (g.child == CHILD_ADVENTURE) {
         scene_draw(); /* FUN_08ab2c58 */
     } else if (g.child != CHILD_NONE && g.child != CHILD_CLEAR) {
-        /* The stand-ins until the scene player, the hub and the ending are written. */
+        /* The stand-in until the ending is written. */
         TextStyle st = note_style(0xFFFFFFFF);
         char line[160];
         int step = savedata_story_step();
@@ -373,6 +382,22 @@ void story_start_at(int step)
     font_init();
     story_start(false);
     savedata_story_preset();
+    /* The scenes before it, for their effects only (the mission, hidden scripts,
+     * stock and menus), as if they had been played. */
+    int applied = 0;
+    for (int i = 0; i < step && i < STORY_STEPS; i++) {
+        if (storydb_title(i) || !storydb_script(i) || !storydb_script_id(i))
+            continue;
+        if (!storydb_briefing(i)) {
+            applied += scene_apply(storydb_script(i), storydb_script_id(i));
+        } else if (storydb_lecture_part(i)) { /* as the lesson stand-in does */
+            applied += scene_apply_file(storydb_script(i));
+            savedata_story_field_clear(0, 0);
+        }
+    }
+    if (applied)
+        SDL_Log("[story] the %d scenes before step %d applied (mission %d)", applied, step,
+                savedata_story_battle());
     savedata_set_story_step(step);
     g.started = true;
     if (storydb_briefing(step))
@@ -405,7 +430,15 @@ int story_update(float dt)
     case CHILD_ADVENTURE:
         adventure_update(dt);
         break;
-    case CHILD_BRIEFING:
+    case CHILD_BRIEFING: /* FUN_08892c1c: until the step is done */
+        if (!battle_mode_update(dt)) {
+            g.in_hub = false;
+            if (battle_menu_story_advanced())
+                child_finish();
+            else
+                g.running = false; /* the hub can only end with the step done */
+        }
+        break;
     case CHILD_ENDING:
         stand_in_update(dt);
         break;

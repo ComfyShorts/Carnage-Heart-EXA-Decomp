@@ -17,6 +17,8 @@
 #include "music.h"
 #include "psp_shim.h"
 #include "savedata.h"
+#include "scene.h"
+#include "storydb.h"
 #include "oke_menu.h"
 #include "shop_menu.h"
 #include "team_menu.h"
@@ -36,6 +38,18 @@
 #define ARENA_NAMES 0x0044D8F0u /* the opponents' names, 100 pointers */
 #define ARENA_RECORDS 0x0044DC10u /* their CBattleSettingInfo records (FUN_08807dbc) */
 #define ARENA_STRIDE 0x3C0u
+
+/* Story Mode (docs/story.md, "The briefing hub" and "Battles"). */
+#define STORY_ITEMS 0x003FA330u     /* 0x08bfe330: CBriefingMngr's item ids, 6 words */
+#define MISSION_RECORDS 0x00467110u /* 0x08c6b110: CBattleMissionDataBase, 49 records */
+#define MISSION_NAMES 0x00467040u   /* 0x08c6b040: "Battle Mission 1".. */
+#define MISSION_STRIDE 0x3D0u
+#define MISSION_COUNT 49
+#define FIELD_LESSON 0   /* CEventScriptField menu 10: Lesson (CLectureFlow) */
+#define FIELD_MISSION 13 /* menu 0x34: Battle, Mission (CBattleMissionMngr) */
+/* The battles that move the story on (FUN_08818ff0): the missions' stages. */
+#define MISSION_STAGE_FIRST 0x40
+#define MISSION_STAGE_LAST 0x4A
 
 #define ARENA_COUNT 100
 #define STAGE_LIST 26 /* CStageSelectWnd: stages 0-24 and 25, "Select Randomly" */
@@ -170,6 +184,7 @@ typedef enum {
     SCR_TEAMS,      /* the arena's Select Team: the team cards */
     SCR_OKECONFIG,  /* OKE Configuration (oke_menu.c) */
     SCR_SHOP,       /* the Shop (shop_menu.c) */
+    SCR_SCENE,      /* Story Mode: a script hidden on the screen (scene.c) */
 } ScreenId;
 
 enum { TEAM_ENEMY, TEAM_FRIEND };
@@ -198,6 +213,11 @@ static struct {
     char value[4][24];
     BattleSetup setup;
     bool back_to_title;
+    /* Story Mode: the hub (CBriefingMngr) instead of the Battle Mode top menu. */
+    bool story;
+    bool story_advance;     /* the step is done: back to CTutorialFlow */
+    bool teams_for_mission; /* SCR_TEAMS chooses the mission's team */
+    bool scene_then_teams;  /* after the scene: the mission's team */
 } g;
 
 static ScreenId top(void)
@@ -254,12 +274,40 @@ static void build_mode_menu(void)
     g.mode.cursor = 2; /* Battle */
 }
 
+/* CBriefingMngr's menu (FUN_08894664): the six items of 0x08bfe330 (Lesson, OKE
+ * Configuration, Team Formation, Battle, Shop, System Menu) with the same pictures,
+ * text id + 4 and help id + 10 (FUN_08894300). An item shows when its menu limit
+ * (group 0, FUN_0895e2fc) is 1, and with the "new" mark when it is 2. */
+static void build_story_menu(void)
+{
+    ui_menu_init(&g.mode, -8, 0x18 + 12, 30, 40, text_style(0, 7, 14, 14, 0, 0, 0xFFFFFFFF, 0));
+    for (int i = 0; i < 6; i++) {
+        int id = (int)gamedata_word(STORY_ITEMS + 4u * (uint32_t)i, (uint32_t)i);
+        int state = savedata_menu_limit(i);
+        if (state == 0)
+            continue;
+        ui_menu_add(&g.mode, s_mode(id + 4), id, id + 10, PART_BF_SCMB1 + id, PART_BF_SCML1 + id);
+        g.mode.item[g.mode.count - 1].is_new = state == 2;
+    }
+    g.mode.cursor = 0;
+    for (int i = 0; i < g.mode.count; i++)
+        if (g.mode.item[i].id == 3)
+            g.mode.cursor = i; /* Battle */
+}
+
 /* CBattleSelectMngr::setupTopMenu (FUN_088838f8): items 0-3 (Test Program, Mission,
  * Battle Arena, Matchmaking), text id + 3; in Battle Mode (game mode 2) Mission is
  * left out. Help from FUN_088832a0. */
 static void build_select_menu(void)
 {
     top_menu(&g.select, 0);
+    if (g.story) { /* Story Mode (game mode 1) has Mission, enabled while one is set */
+        static const int k_ids[4] = {0, 1, 2, 3}, k_help[4] = {0x10, 0x11, 0x12, 0x14};
+        for (int i = 0; i < 4; i++)
+            ui_menu_add(&g.select, s_select(k_ids[i] + 3), k_ids[i], k_help[i], PART_BF_MENB4, PART_BF_MENL4);
+        g.select.item[1].disabled = savedata_story_battle() < 0 || savedata_story_battle() >= MISSION_COUNT;
+        return;
+    }
     static const int k_ids[3] = {0, 2, 3}, k_help[3] = {0x10, 0x12, 0x14};
     for (int i = 0; i < 3; i++)
         ui_menu_add(&g.select, s_select(k_ids[i] + 3), k_ids[i], k_help[i], PART_BF_MENB4, PART_BF_MENL4);
@@ -303,11 +351,17 @@ static void refresh_values(void)
     g.field.item[2].value = s_test(17 + g.barricade);
 }
 
-void battle_menu_start(void)
+static bool play_field(int field);
+
+static void menu_start(bool story)
 {
     memset(&g, 0, sizeof g);
-    music_menu(); /* FUN_0888d2ac, from the Battle Mode screens */
-    build_mode_menu();
+    g.story = story;
+    music_menu(); /* FUN_0888d2ac, from the Battle Mode screens and the hub */
+    if (story)
+        build_story_menu();
+    else
+        build_mode_menu();
     build_select_menu();
     build_test_menu();
     build_field_menu();
@@ -326,7 +380,46 @@ void battle_menu_start(void)
     g.stack[0] = SCR_MODE;
     g.depth = 1;
     ui_menu_open(&g.mode);
-    SDL_Log("[battle-menu] Battle Mode top menu (CBattleModeMngr)");
+    if (!story) {
+        SDL_Log("[battle-menu] Battle Mode top menu (CBattleModeMngr)");
+        return;
+    }
+    SDL_Log("[battle-menu] the briefing hub (CBriefingMngr), %d items", g.mode.count);
+}
+
+void battle_menu_start(void) { menu_start(false); }
+void battle_menu_start_story(void) { menu_start(true); }
+
+bool battle_menu_story_advanced(void) { return g.story_advance; }
+
+/* CBattleMissionFlow's result (FUN_08818ff0): a won battle on a mission's stage moves
+ * the story on, unless the step is a lesson's (FUN_08a69a64). */
+void battle_menu_battle_over(int result)
+{
+    if (!g.story || result != 0)
+        return;
+    int stage = g.setup.stage;
+    if (stage >= MISSION_STAGE_FIRST && stage <= MISSION_STAGE_LAST &&
+        !storydb_lecture_part(savedata_story_step())) {
+        g.story_advance = true;
+        SDL_Log("[battle-menu] mission won (stage %d): the story goes on", stage);
+    }
+}
+
+/* A script hidden on a screen (CEventScriptField, ops 0x1F / 0x20) plays over it from
+ * the briefing's script file, once. */
+static bool play_field(int field)
+{
+    const char *hidden = savedata_story_field_seek(field, 0);
+    if (!g.story || !hidden || !*hidden)
+        return false;
+    char id[0x41];
+    snprintf(id, sizeof id, "%s", hidden);
+    savedata_story_field_clear(field, 0);
+    if (!scene_start(savedata_story_script(), id))
+        return false;
+    push(SCR_SCENE);
+    return true;
 }
 
 const BattleSetup *battle_menu_setup(void)
@@ -338,6 +431,11 @@ void battle_menu_resume(void)
 {
     music_menu();
     g.message = NULL;
+    if (g.story) { /* Mission's state */
+        int cursor = g.select.cursor;
+        build_select_menu();
+        g.select.cursor = cursor;
+    }
     UiMenu *m = menu_of(top());
     if (m)
         ui_menu_open(m);
@@ -427,9 +525,67 @@ static void build_arena_battle(void)
             s->count[0], s->team_label[1], s->count[1], s->stage, s->map, s->time_limit);
 }
 
+/* CBattleMissionFlow::buildBattle (FUN_08819478) from CBattleMissionDataBase
+ * (FUN_08836ed4): the record of the save's current mission: stage at +0, enemy count
+ * at +8, their designs at +0xC + 0x40 n with spots at +0xCC + 4 n, the time limit at
+ * +0x114. The player's side is the team card chosen on the mission screen. */
+static void build_mission_battle(void)
+{
+    BattleSetup *s = &g.setup;
+    memset(s, 0, sizeof *s);
+    int rec = savedata_story_battle();
+    uint32_t base = MISSION_RECORDS + MISSION_STRIDE * (uint32_t)rec;
+    for (int m = 0; m < TEAM_MEMBERS; m++) {
+        int card = savedata_team_member(g.arena_team, m);
+        if (card >= 0)
+            setup_card(s, 0, s->count[0], card, savedata_team_spot(g.arena_team, m));
+    }
+    savedata_team_name(g.arena_team, s->team_label[0], sizeof s->team_label[0]);
+    const char *name = table_string(MISSION_NAMES, rec, MISSION_COUNT);
+    snprintf(s->team_label[1], sizeof s->team_label[1], "%s", name ? name : "?");
+    int n = SDL_clamp((int)gamedata_word(base + 8, 1), 1, SETUP_TEAM_MAX);
+    for (int m = 0; m < n; m++) {
+        uint32_t at = base + 0xC + 0x40u * (uint32_t)m;
+        const char *oke = gamedata_string(at);
+        if (!oke || !*oke)
+            continue;
+        BattleOke *o = &s->oke[1][s->count[1]];
+        o->card = -1;
+        snprintf(o->path, sizeof o->path, "%s", oke);
+        snprintf(o->label, sizeof o->label, "%.40s %c", name ? name : "?", '1' + m);
+        int spot = (int)gamedata_word(base + 0xCC + 4u * (uint32_t)m, 0xFFFFFFFFu);
+        o->spot = spot >= 0 && spot < 9 ? spot : -1;
+        s->count[1]++;
+    }
+    s->stage = (int)gamedata_word(base, 64);
+    s->map = resolve_map(s->stage);
+    uint32_t tw = gamedata_word(base + 0x114, 0);
+    float t;
+    memcpy(&t, &tw, sizeof t);
+    s->time_limit = t >= 30.0f && t <= 300.0f ? t : 300.0f;
+    s->map_size = 540.0f;
+    s->barricade = 1;
+    s->arena = true;
+    SDL_Log("[battle-menu] %s: %s (%d) vs %d OKEs on stage %d (map %02d), %.0f s", name ? name : "Mission",
+            s->team_label[0], s->count[0], s->count[1], s->stage, s->map, s->time_limit);
+}
+
+/* The mission screen (CBattleMissionMngr, FUN_0881a26c): the briefing hidden on it
+ * plays, then the team list (FUN_0881a428), then "Start battle?". */
+static void open_mission(void)
+{
+    g.teams_for_mission = true;
+    g.team_cursor = g.arena_team >= 0 ? g.arena_team : SDL_max(team_menu_selected(), 0);
+    if (play_field(FIELD_MISSION))
+        g.scene_then_teams = true;
+    else
+        push(SCR_TEAMS);
+}
+
 /* ---- per-screen input ---- */
 
 static void open_save_ask(void);
+static void open_lesson_ask(void);
 
 static int update_mode(void)
 {
@@ -437,6 +593,13 @@ static int update_mode(void)
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
         sound_se(SE_DECIDE, 1.0f);
         UiMenuItem *it = &m->item[m->cursor];
+        if (g.story && it->is_new && !it->disabled) { /* FUN_0893b748: seen */
+            for (int i = 0; i < 6; i++)
+                if ((int)gamedata_word(STORY_ITEMS + 4u * (uint32_t)i, (uint32_t)i) == it->id &&
+                    savedata_menu_limit(i) == 2)
+                    savedata_set_menu_limit(i, 1);
+            it->is_new = false;
+        }
         if (it->disabled) {
             g.message = s_mode(0x16);
         } else if (it->id == 3) { /* eTOP_MENU_TYPE 2: CBattleSelectFlow */
@@ -453,11 +616,13 @@ static int update_mode(void)
         } else if (it->id == 4) { /* eTOP_MENU_TYPE 3: CShopFlow */
             shop_menu_open();
             push(SCR_SHOP);
+        } else if (g.story && it->id == 0) { /* CLectureFlow: not ported yet */
+            open_lesson_ask();
         } else {
             SDL_Log("[battle-menu] \"%s\" chosen: that flow isn't ported", it->text ? it->text : "?");
             g.message = it->text;
         }
-    } else if (pad_pressed(PSP_CTRL_CROSS)) {
+    } else if (pad_pressed(PSP_CTRL_CROSS) && !g.story) { /* the hub has no way back */
         sound_se(SE_CANCEL, 1.0f);
         /* The game asks whether to go back to the title (CSystemMngr); the port
          * goes back at once. */
@@ -480,6 +645,12 @@ static int update_select(void)
             push(SCR_ARENA);
             ui_menu_open(&g.arena);
             break;
+        case 1: /* CBattleMissionFlow (FUN_08880bc4 kind 4) */
+            if (m->item[m->cursor].disabled)
+                g.message = s_mode(0x16);
+            else
+                open_mission();
+            break;
         default:
             SDL_Log("[battle-menu] Matchmaking (CMatchMakeFlow, network play) isn't ported");
             g.message = s_select(6);
@@ -493,7 +664,7 @@ static int update_select(void)
     return 1;
 }
 
-enum { ASK_TEST, ASK_ARENA, ASK_SAVE };
+enum { ASK_TEST, ASK_ARENA, ASK_SAVE, ASK_MISSION, ASK_LESSON };
 
 static void open_ask(bool arena)
 {
@@ -506,6 +677,24 @@ static void open_ask(bool arena)
  * load, settings: FUN_088b6cb0); the port asks string 56, "Save your progress?", and
  * saves the Battle Data through CSaveMngr's save path: to the file it was loaded from,
  * else NEWDATA.CHE (the name the game's keyboard starts with, FUN_08a62160). */
+/* Lessons (CLectureFlow) come last; until then a lesson step can be counted as done
+ * so the story goes on. The question is the port's. */
+static void open_lesson_ask(void)
+{
+    int step = savedata_story_step();
+    if (!storydb_lecture_part(step)) {
+        SDL_Log("[battle-menu] Lesson (CLectureFlow) isn't ported yet");
+        g.message = "Lessons aren't ported yet.";
+        return;
+    }
+    static char q[160];
+    snprintf(q, sizeof q, "Lessons aren't ported yet.\nCount this lesson (%s) as completed?",
+             storydb_script_id(step) ? storydb_script_id(step) : "?");
+    g.ask_kind = ASK_LESSON;
+    ui_ask_open(&g.ask, q, design_string(5, 1), s_test(32), 1);
+    push(SCR_ASK);
+}
+
 static void open_save_ask(void)
 {
     g.ask_kind = ASK_SAVE;
@@ -519,7 +708,7 @@ static void update_save(void)
         return;
     g.saving = false;
     if (savedata_result() == 0)
-        snprintf(g.save_msg, sizeof g.save_msg, "Saved as %s.", g_save.battle_file);
+        snprintf(g.save_msg, sizeof g.save_msg, "Saved as %s.", g.story ? g_save.story_file : g_save.battle_file);
     else
         snprintf(g.save_msg, sizeof g.save_msg, "The save failed (0x%08X).", (unsigned)savedata_result());
     g.message = g.save_msg;
@@ -792,9 +981,16 @@ static int update_teams(void)
         else {
             g.arena_team = g.team_cursor;
             pop();
+            if (g.teams_for_mission) {
+                g.teams_for_mission = false;
+                g.ask_kind = ASK_MISSION;
+                ui_ask_open(&g.ask, s_test(33), s_test(31), s_test(32), 0);
+                push(SCR_ASK);
+            }
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         sound_se(SE_CANCEL, 1.0f);
+        g.teams_for_mission = false;
         pop();
     }
     return 1;
@@ -845,6 +1041,27 @@ static int update_ask(float dt)
     pop();
     if (r == 0)
         return 1;
+    if (g.ask_kind == ASK_LESSON) {
+        /* The day's scripts for their effects (the items, parts and missions the
+         * lessons unlock), and the lesson's first script taken off Lesson. */
+        int n = scene_apply_file(savedata_story_script());
+        savedata_story_field_clear(FIELD_LESSON, 0);
+        SDL_Log("[battle-menu] lesson counted as completed (a stand-in for CLectureFlow): %d scripts of %s applied",
+                n, savedata_story_script());
+        g.story_advance = true;
+        return 1;
+    }
+    if (g.ask_kind == ASK_MISSION) {
+        build_mission_battle();
+        return 2;
+    }
+    if (g.ask_kind == ASK_SAVE && g.story) {
+        savedata_save_start(SAVE_STORY, g_save.story_file[0] ? g_save.story_file : "NEWDATA.CHE");
+        g.saving = true;
+        snprintf(g.save_msg, sizeof g.save_msg, "Saving...");
+        g.message = g.save_msg;
+        return 1;
+    }
     if (g.ask_kind == ASK_SAVE) {
         savedata_save_start(SAVE_BATTLE, g_save.battle_file[0] ? g_save.battle_file : "NEWDATA.CHE");
         g.saving = true;
@@ -907,6 +1124,20 @@ int battle_menu_update(float dt)
             ui_menu_open(&g.mode);
         }
         break;
+    case SCR_SCENE:
+        if (!scene_update(dt)) {
+            scene_stop();
+            pop();
+            if (g.scene_then_teams) {
+                g.scene_then_teams = false;
+                push(SCR_TEAMS);
+            }
+        }
+        break;
+    }
+    if (g.story_advance) {
+        SDL_Log("[battle-menu] the briefing ends: next step");
+        return 0;
     }
     for (int i = 0; i < g.depth - 1; i++) { /* only the top menu takes input */
         UiMenu *under = menu_of(g.stack[i]);
@@ -954,6 +1185,7 @@ static const char *help_text(void)
     case SCR_STAGES: return s_test(68);
     case SCR_OPPONENTS: return s_arena(45);
     case SCR_TEAMS: return team_string(0x41);
+    case SCR_SCENE: return NULL;
     default: return NULL;
     }
 }
@@ -1079,7 +1311,7 @@ static void draw_screen(ScreenId s, bool is_top)
         int id = g.mode.item[g.mode.cursor].id;
         if (is_top)
             ui_pic(ui_part(PART_BF_TTL1_PIC + id), 480 - 288, 32, 1.0f, false);
-        draw_title(PART_BF_TTL0, s_mode(3));
+        draw_title(PART_BF_TTL0, s_mode(g.story ? 2 : 3));
         ui_menu_draw(&g.mode);
         break;
     }
@@ -1121,6 +1353,9 @@ static void draw_screen(ScreenId s, bool is_top)
     case SCR_TEAMS:
         draw_list_window(130, 30, 170, TEAM_ROWS, g.team_scroll, SAVE_TEAMS, g.team_cursor, team_label, s_arena(4), NULL);
         break;
+    case SCR_SCENE:
+        scene_draw();
+        break;
     case SCR_TEAMFORM:
     case SCR_OKECONFIG:
     case SCR_SHOP:
@@ -1156,6 +1391,7 @@ void battle_menu_draw(void)
             from = i;
     for (int i = from; i < g.depth; i++)
         draw_screen(g.stack[i], i == g.depth - 1);
-    ui_help_draw(help_text());
+    if (top() != SCR_SCENE) /* the scene draws its own guide */
+        ui_help_draw(help_text());
     sceGuEnable(GU_TEXTURE_2D);
 }
