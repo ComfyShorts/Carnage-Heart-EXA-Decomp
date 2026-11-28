@@ -234,7 +234,6 @@ screen. See "Music" in `docs/screens.md`.
   ammunition; flying types; collision) isn't ported, so who wins says little about the
   real game.
 - **Flow**: name entry, the parts of OKE Configuration listed as stand-ins in
-  `docs/screens.md` (chip editing, emblem samples and range selection, note templates,
-  Snapshot), the colours, polish and emblem on the battle models,
+  `docs/screens.md` (chip editing, note templates, Snapshot), the colours, polish and emblem on the battle models,
   the Shop's stand-ins (`docs/screens.md`), Victory Points won in battles, missions and
   matchmaking.

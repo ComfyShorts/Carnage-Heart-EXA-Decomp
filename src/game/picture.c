@@ -225,6 +225,19 @@ void picture_release(Picture *p)
     SDL_free(p);
 }
 
+bool picture_index4_data(const Picture *p, int w, int h, const uint8_t **pixels, const uint8_t **palette,
+                         int *palette_format)
+{
+    /* rows of w / 2 bytes; a swizzled image is the same when a row is one 16-byte block */
+    if (!p || p->image.format != 4 || p->image.width != w || p->image.height != h || !p->has_palette ||
+        p->image.pitch_px != w || (p->image.swizzled && w != 32))
+        return false;
+    *pixels = p->image.frame_data[0];
+    *palette = p->palette.frame_data[0];
+    *palette_format = p->palette.format;
+    return true;
+}
+
 int picture_width(const Picture *p)
 {
     return p ? p->image.width : 0;
