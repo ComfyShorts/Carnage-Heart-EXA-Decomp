@@ -604,7 +604,9 @@ static void battle_draw(void *ctx)
     sceGuEnable(GU_TEXTURE_2D);
 }
 
-void battle_mode_start(void)
+int g_battle_forced_result = -1;
+
+static void mode_start(bool story)
 {
     memset(&g, 0, sizeof g);
     g_scene.map = -1;
@@ -616,9 +618,15 @@ void battle_mode_start(void)
         SDL_Log("[battle] OpenFileSet(\"battlescene\") failed: no HUD art");
     render_add_node(render_instance(), 2, battle_draw, &g);
     g.node_added = true;
-    battle_menu_start();
+    if (story)
+        battle_menu_start_story();
+    else
+        battle_menu_start();
     enter(SCR_MENU);
 }
+
+void battle_mode_start(void) { mode_start(false); }
+void battle_mode_start_story(void) { mode_start(true); }
 
 int battle_mode_update(float dt)
 {
@@ -647,6 +655,13 @@ int battle_mode_update(float dt)
             g_scene.cam_valid = false;
             SDL_Log("[battle] watching %s", g.label[g.watch] ? g.label[g.watch] : "?");
         }
+        if (g_battle_forced_result >= 0 && g_battle_forced_result <= 2 && g.t >= START_BANNER + 1.0f &&
+            g_b.result < 0) {
+            g_b.result = g_battle_forced_result;
+            SDL_Log("[battle] ended as result %d (--battle-result)", g_b.result);
+            enter(SCR_RESULT);
+            break;
+        }
         if (g.t >= START_BANNER) {
             battle_sim_step(&g_b, dt);
             if (g_b.result >= 0) {
@@ -662,6 +677,7 @@ int battle_mode_update(float dt)
         if (g.t > 1.0f && pad_pressed(PSP_CTRL_CIRCLE)) {
             sound_se(SE_DECIDE, 1.0f);
             sound_bank_close(SE_BANK_BATTLE);
+            battle_menu_battle_over(g_b.result);
             battle_menu_resume();
             enter(SCR_MENU);
         }

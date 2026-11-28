@@ -105,6 +105,10 @@ add_executable(chexa-movie-test tests/movie_test.c)
 chexa_target_setup(chexa-movie-test)
 target_link_libraries(chexa-movie-test PRIVATE chexa_core)
 
+add_executable(chexa-story-test tests/story_test.c)
+chexa_target_setup(chexa-story-test)
+target_link_libraries(chexa-story-test PRIVATE chexa_core)
+
 add_executable(chexa-gu-test tests/gu_test.c)
 chexa_target_setup(chexa-gu-test)
 target_link_libraries(chexa-gu-test PRIVATE chexa_core)
@@ -122,6 +126,8 @@ add_test(NAME battle_presets COMMAND chexa-battle-test --all
 add_test(NAME battle_teams COMMAND chexa-battle-test --teams
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME oke_parts COMMAND chexa-oke-parts-test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_test(NAME story_steps COMMAND chexa-story-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME chip_edit_roundtrip COMMAND chexa-chip-edit-test
          --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/chip-edit
@@ -145,7 +151,7 @@ set_tests_properties(movie_skip PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscre
                      PASS_REGULAR_EXPRESSION "movie/che_op.pmf skipped after [0-9]+ pictures")
 set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;SDL_AUDIO_DRIVER=dummy"
                      PASS_REGULAR_EXPRESSION "the game called sceKernelExitGame")
-set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts chip_edit_roundtrip sound_effects music_decode movie_decode startup_path movie_skip PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts story_steps chip_edit_roundtrip sound_effects music_decode movie_decode startup_path movie_skip PROPERTIES SKIP_RETURN_CODE 77)
 
 # SDL loads libX11 and friends at runtime with dlopen. With the user-local sysroot those
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not
@@ -154,7 +160,7 @@ if(PCPORT_I386_LIBDIR)
   # libpulse.so.0 finds its private libpulsecommon through its own RUNPATH, a system
   # path; audio.c loads it from here first (see psp_audio_preload_pulse).
   target_compile_definitions(chexa_core PRIVATE PCPORT_I386_LIBDIR="${PCPORT_I386_LIBDIR}")
-  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test chexa-battle-test chexa-savedata-test chexa-sound-test chexa-movie-test)
+  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test chexa-battle-test chexa-savedata-test chexa-sound-test chexa-movie-test chexa-story-test)
     set_target_properties(${exe} PROPERTIES BUILD_RPATH "${PCPORT_I386_LIBDIR}")
     target_link_options(${exe} PRIVATE "-Wl,--disable-new-dtags")
   endforeach()

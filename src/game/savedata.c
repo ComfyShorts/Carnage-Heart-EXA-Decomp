@@ -9,7 +9,10 @@
  *     buffer FUN_08abb680, the version check FUN_08ab8604, and the load that unpacks
  *     a game save (FUN_088b7xxx at 0x088b7590).
  *   CCarnageHeart: the blocks' constructors FUN_0889c0c0 (system), FUN_0889c92c
- *     (shared), FUN_08ad321c (team card), FUN_0889d794 (battle). */
+ *     (shared), FUN_08ad321c (team card), FUN_0889d794 (battle), FUN_0889d3dc (story;
+ *     its CEventScriptField FUN_088df3bc / FUN_088df878).
+ *   The Story Mode new game: FUN_088d3d80 mode 0 (FUN_0895ddd4, FUN_08918cb0,
+ *     FUN_0882f64c). */
 #include "savedata.h"
 
 #include <stdio.h>
@@ -23,6 +26,7 @@
 #include "pgchip_edit.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
+#include "storydb.h"
 
 SaveState g_save;
 
@@ -31,6 +35,7 @@ SaveState g_save;
 #define STR_GAME_TITLE_PTR 0x004818C8u  /* "CARNAGE HEART EXA" (SFO title) */
 #define STR_SYSTEM_DATA 0x00437D40u
 #define STR_BATTLE_DATA 0x00437D64u
+#define STR_STORY_DATA 0x00437D58u
 #define STR_PLAYER_NAME_PTR 0x004879B0u
 #define STR_STORY_OPEN_PTR 0x004879ACu  /* "Story Mode: Not Completed" */
 #define STR_STORY_DONE_PTR 0x004879A8u
@@ -43,7 +48,7 @@ SaveState g_save;
 #define TEAM_NAMES 0x00487A08u          /* "Team 01".. (PTR_s_Team_01_08c8ba08), 16 */
 #define TEAM_STRINGS 0x00487A60u        /* CTeamFormationString (FUN_08ac7d54), 0x4B */
 
-enum { SAVE_TYPE_BATTLE = 2, SAVE_TYPE_SYSTEM = 4 };
+enum { SAVE_TYPE_STORY = 1, SAVE_TYPE_BATTLE = 2, SAVE_TYPE_SYSTEM = 4 };
 
 static const char *ptr_string(uint32_t ptr_addr)
 {
@@ -143,6 +148,66 @@ void savedata_set_chip_page_cursor(int page, int index)
         put_word((uint8_t *)&g_save.db + SOFT_SCENE + SOFT_CURSORS + 4 * page, (uint32_t)index);
 }
 
+/* ---- the Story Mode block ---- */
+
+#define STORY_STEP 0x0000
+#define STORY_LESSON_STATE 0x0088
+#define STORY_LESSON_CLEAR 0x00BC
+#define STORY_LESSONS 0x34
+#define STORY_BRIEF_LESSON 0x0190
+#define STORY_FIELD 0x0198
+#define STORY_2B28 0x2B28
+#define STORY_BATTLE 0x2B2C
+#define STORY_SCRIPT 0x2B34
+#define STORY_SCRIPT_MAX 0x40
+#define STORY_MAX_OKE 0x2B74
+#define STORY_MAX_TEAM 0x2B78
+/* CEventScriptField: 0x13 menus of 0x230 bytes, each 8 keys (-1 free), 8 script ids
+ * of 0x41 bytes from +0x20 and the count at +0x228 (CEventScriptFieldData). */
+#define FIELD_MENUS 0x13
+#define FIELD_SIZE 0x230
+#define FIELD_IDS 0x20
+#define FIELD_COUNT 0x228
+
+_Static_assert(STORY_FIELD + FIELD_MENUS * FIELD_SIZE == STORY_2B28, "CEventScriptField size");
+
+/* FUN_0889d3dc */
+static void story_reset(void)
+{
+    uint8_t *b = g_save.story;
+    memset(b, 0, STORY_DATA_SIZE);
+    put_word(b + STORY_STEP, (uint32_t)STORY_STEP_NONE);
+    put_word(b + STORY_BRIEF_LESSON, 0xFFFFFFFFu);
+    for (int m = 0; m < FIELD_MENUS; m++) /* FUN_088df878 */
+        memset(b + STORY_FIELD + m * FIELD_SIZE, 0xFF, 0x20);
+    put_word(b + STORY_2B28, 0xFFFFFFFFu);
+    put_word(b + STORY_BATTLE, 0xFFFFFFFFu);
+    put_word(b + 0x2B30, 0xFFFFFFFFu);
+    put_word(b + STORY_MAX_OKE, 2);
+    put_word(b + STORY_MAX_TEAM, 4);
+    g_save.story_file[0] = 0;
+}
+
+int savedata_story_step(void) { return (int)get_word(g_save.story + STORY_STEP); }
+void savedata_set_story_step(int step) { put_word(g_save.story + STORY_STEP, (uint32_t)step); }
+void savedata_story_set_2b28(int v) { put_word(g_save.story + STORY_2B28, (uint32_t)v); }
+int savedata_story_battle(void) { return (int)get_word(g_save.story + STORY_BATTLE); }
+void savedata_set_story_battle(int mission) { put_word(g_save.story + STORY_BATTLE, (uint32_t)mission); }
+
+const char *savedata_story_script(void)
+{
+    g_save.story[STORY_SCRIPT + STORY_SCRIPT_MAX - 1] = 0;
+    return (const char *)g_save.story + STORY_SCRIPT;
+}
+
+void savedata_set_story_script(const char *path)
+{
+    /* FUN_0889d584 wants 1..0x3F characters. */
+    memset(g_save.story + STORY_SCRIPT, 0, STORY_SCRIPT_MAX);
+    if (path)
+        snprintf((char *)g_save.story + STORY_SCRIPT, STORY_SCRIPT_MAX, "%s", path);
+}
+
 void savedata_new_game(void)
 {
     GameDataBase *db = &g_save.db;
@@ -163,6 +228,7 @@ void savedata_new_game(void)
     memset(g_save.battle, 0, sizeof g_save.battle);
     put_word(g_save.battle + 0x4230, 0xFFFFFFFF);
     g_save.battle_file[0] = 0;
+    story_reset();
 }
 
 bool savedata_card_used(int card)
@@ -278,6 +344,77 @@ static void stock_keep_none(void)
     put_word(stock_word(STOCK_CHIP, 0), 2);
 }
 
+/* ---- CEventScriptField (FUN_088df4b0 Hide, FUN_088df540 Seek, FUN_088df5d4 Clear,
+ * FUN_088df690 IsExist; the entries FUN_088df8c8 / FUN_088dfa64 / FUN_088dfab0 /
+ * FUN_088dfbcc) ---- */
+
+static uint8_t *field_menu(int menu)
+{
+    return menu >= 0 && menu < FIELD_MENUS ? g_save.story + STORY_FIELD + FIELD_SIZE * menu : NULL;
+}
+
+bool savedata_story_field_hide(int menu, int key, const char *id)
+{
+    uint8_t *f = field_menu(menu);
+    size_t n = id ? strlen(id) : 0;
+    if (!f || n < 1 || n > 0x40)
+        return false;
+    int count = (int)get_word(f + FIELD_COUNT);
+    for (int i = 0; i < count; i++)
+        if ((int)get_word(f + 4 * i) == key) { /* the key's script is replaced */
+            memset(f + FIELD_IDS + 0x41 * i, 0, 0x41);
+            memcpy(f + FIELD_IDS + 0x41 * i, id, n);
+            return true;
+        }
+    if (count >= 8)
+        return false;
+    put_word(f + 4 * count, (uint32_t)key);
+    memset(f + FIELD_IDS + 0x41 * count, 0, 0x41);
+    memcpy(f + FIELD_IDS + 0x41 * count, id, n);
+    put_word(f + FIELD_COUNT, (uint32_t)(count + 1));
+    return true;
+}
+
+const char *savedata_story_field_seek(int menu, int key)
+{
+    uint8_t *f = field_menu(menu);
+    if (!f)
+        return NULL;
+    int count = (int)get_word(f + FIELD_COUNT);
+    for (int i = 0; i < count && i < 8; i++)
+        if ((int)get_word(f + 4 * i) == key)
+            return (const char *)f + FIELD_IDS + 0x41 * i;
+    return NULL;
+}
+
+void savedata_story_field_clear(int menu, int key)
+{
+    uint8_t *f = field_menu(menu);
+    if (!f)
+        return;
+    int count = (int)get_word(f + FIELD_COUNT);
+    for (int i = 0; i < count && i < 8; i++)
+        if ((int)get_word(f + 4 * i) == key) { /* the later entries move up one */
+            for (int j = i; j + 1 < count; j++) {
+                put_word(f + 4 * j, get_word(f + 4 * (j + 1)));
+                memcpy(f + FIELD_IDS + 0x41 * j, f + FIELD_IDS + 0x41 * (j + 1), 0x41);
+            }
+            put_word(f + 4 * (count - 1), 0xFFFFFFFFu);
+            memset(f + FIELD_IDS + 0x41 * (count - 1), 0, 0x41);
+            put_word(f + FIELD_COUNT, (uint32_t)(count - 1));
+            return;
+        }
+}
+
+bool savedata_story_field_exists(int menu, int key) { return savedata_story_field_seek(menu, key) != NULL; }
+
+static void stock_set_all(int value)
+{
+    for (int g = 0; g < STOCK_GROUPS; g++)
+        for (int id = 0; id < k_stock[g].count; id++)
+            put_word(stock_word(g, id), (uint32_t)value);
+}
+
 void savedata_set_stock(int group, int id, int value)
 {
     uint8_t *w = stock_word(group, id);
@@ -331,6 +468,30 @@ bool savedata_stage_available(int stage)
     return stage != 13 && savedata_map_state(stage) == 1;
 }
 
+void savedata_story_new(void)
+{
+    story_reset();
+    /* FUN_0895ddd4: every menu word off, then words 0 and 0x68 = 2. */
+    for (int w = 0; w < LIMIT_WORDS; w++)
+        savedata_set_menu_limit(w, 0);
+    savedata_set_menu_limit(0, 2);
+    savedata_set_menu_limit(0x68, 2);
+    /* FUN_08918cb0: nothing owned; bodies 0xE and 0x20-0x24 at 3; the Other items
+     * 7, 8 and 11-19 for sale, 9, 10 and 20-30 owned. */
+    stock_set_all(0);
+    static const uint8_t k_bodies[] = {0x0E, 0x20, 0x21, 0x22, 0x23, 0x24};
+    for (unsigned i = 0; i < sizeof k_bodies; i++)
+        put_word(stock_word(STOCK_BODY, k_bodies[i]), 3);
+    for (int id = 7; id < 0x1F; id++)
+        put_word(stock_word(STOCK_OTHER, id), (id == 7 || id == 8 || (id >= 11 && id <= 19)) ? 1 : 2);
+    /* FUN_0882f64c: maps 2 and 12. */
+    for (int st = 0; st < SAVE_STAGES; st++)
+        savedata_set_map_state(st, 0);
+    savedata_set_map_state(2, 1);
+    savedata_set_map_state(12, 1);
+    put_word(g_save.story + STORY_2B28, 0xFFFFFFFFu); /* FUN_0889d574(-1) */
+}
+
 void savedata_battle_mode_new(void)
 {
     /* FUN_0895de04: groups of menu words switched on, a few left off. */
@@ -346,9 +507,7 @@ void savedata_battle_mode_new(void)
     for (unsigned i = 0; i < sizeof k_off; i++)
         savedata_set_menu_limit(k_off[i], 0);
     /* FUN_08918d5c: FUN_08919594 owns everything, then some go on sale. */
-    for (int g = 0; g < STOCK_GROUPS; g++)
-        for (int id = 0; id < k_stock[g].count; id++)
-            put_word(stock_word(g, id), 2);
+    stock_set_all(2);
     stock_keep_none();
     put_word(stock_word(STOCK_BODY, 14), 1);
     put_word(stock_word(STOCK_BODY, 33), 1);
@@ -474,6 +633,11 @@ bool savedata_story_completed(void)
     return get_word(g_save.system + 0x74) != 0;
 }
 
+void savedata_set_story_completed(bool done)
+{
+    put_word(g_save.system + 0x74, done ? 1u : 0u);
+}
+
 /* ---- CUtility ---- */
 
 static SceUtilitySavedataParam g_param;             /* CUtility + 0x648 */
@@ -488,8 +652,21 @@ static int g_icon_type = -1;
 static bool g_util_busy;
 
 static uint8_t g_buf[BATTLE_SAVE_SIZE];
+_Static_assert(STORY_SAVE_SIZE <= BATTLE_SAVE_SIZE, "one buffer for both game saves");
 
-static const char *save_name(int type) { return type == SAVE_TYPE_BATTLE ? "B" : ""; } /* FUN_08a617f8 */
+/* FUN_08a617f8: the save names at 0x08c858f8 ("T", "S", "B", ...); the system data's
+ * is empty. */
+static const char *save_name(int type)
+{
+    return type == SAVE_TYPE_BATTLE ? "B" : type == SAVE_TYPE_STORY ? "S" : "";
+}
+
+/* A game save's size (FUN_08ab8114 type 3, by kind) and its mode block. */
+static SceSize game_save_size(SaveKind kind) { return kind == SAVE_STORY ? STORY_SAVE_SIZE : BATTLE_SAVE_SIZE; }
+static uint8_t *mode_block(SaveKind kind) { return kind == SAVE_STORY ? g_save.story : g_save.battle; }
+static size_t mode_block_size(SaveKind kind) { return kind == SAVE_STORY ? STORY_DATA_SIZE : BATTLE_DATA_SIZE; }
+static char *kind_file(SaveKind kind) { return kind == SAVE_STORY ? g_save.story_file : g_save.battle_file; }
+static const char *kind_label(SaveKind kind) { return kind == SAVE_STORY ? "Story Data" : "Battle Data"; }
 
 /* FUN_08b25354 + FUN_08b24da4: the common header and the default file. */
 static void param_begin(int type, int mode)
@@ -594,7 +771,7 @@ static bool three_ints(const char *fmt)
     return fmt && n == 3;
 }
 
-/* CSystemMngr::GetSaveGameDataName (FUN_08ab82f0) for types 4 and 2. */
+/* CSystemMngr::GetSaveGameDataName (FUN_08ab82f0) for types 4, 1 and 2. */
 static void sfo_strings(int type, char *title, size_t tn, char *detail, size_t dn)
 {
     if (type == SAVE_TYPE_SYSTEM) {
@@ -608,6 +785,10 @@ static void sfo_strings(int type, char *title, size_t tn, char *detail, size_t d
         size_t n = strlen(detail);
         snprintf(detail + n, dn - n, "%s",
                  or_empty(ptr_string(savedata_story_completed() ? STR_STORY_DONE_PTR : STR_STORY_OPEN_PTR)));
+    } else if (type == SAVE_TYPE_STORY) {
+        /* The step's full progress title (FUN_08a69b74 with 1): "Progress :Chapter 1". */
+        snprintf(title, tn, "%s", or_empty(gamedata_string(STR_STORY_DATA)));
+        snprintf(detail, dn, "%s", or_empty(storydb_progress(savedata_story_step(), true)));
     } else {
         snprintf(title, tn, "%s", or_empty(gamedata_string(STR_BATTLE_DATA)));
         /* "%s%s": "Player Name:" and the name at the battle block's start. */
@@ -669,9 +850,9 @@ static void util_getsize(int type, const char *file, SceSize size, bool secure)
 typedef enum {
     SEQ_IDLE,
     SEQ_CHECK,  /* type 4, exec 3 */
-    SEQ_LIST,   /* type 2, the list of an exec 1 */
-    SEQ_LOAD,   /* type 2, state 0x2B */
-    SEQ_SAVE,   /* type 2, BeginDataSave */
+    SEQ_LIST,   /* type 1 / 2, the list of an exec 1 */
+    SEQ_LOAD,   /* type 1 / 2, state 0x2B */
+    SEQ_SAVE,   /* type 1 / 2, BeginDataSave */
 } SeqKind;
 
 /* The UpdateUT states used here, numbered as in the game. */
@@ -691,6 +872,7 @@ enum {
 
 static struct {
     SeqKind kind;
+    SaveKind save_kind; /* the game save's type for LIST / LOAD / SAVE */
     int state;
     bool started;   /* the state's utility call was made */
     bool exists;    /* +0x50: FILES found the save */
@@ -828,20 +1010,27 @@ int savedata_check_update(void)
     return g_seq.kind == SEQ_CHECK ? check_update() : 0;
 }
 
-/* -- Battle Data -- */
+/* -- Story Data and Battle Data -- */
 
-static void call_game_files(void) { util_files(SAVE_TYPE_BATTLE, true); }
-static void call_game_read(void) { util_read(SAVE_TYPE_BATTLE, g_seq.file, g_buf, BATTLE_SAVE_SIZE, true); }
-static void call_game_size(void) { util_getsize(SAVE_TYPE_BATTLE, g_seq.file, BATTLE_SAVE_SIZE, false); }
+static void call_game_files(void) { util_files((int)g_seq.save_kind, true); }
+static void call_game_read(void)
+{
+    util_read((int)g_seq.save_kind, g_seq.file, g_buf, game_save_size(g_seq.save_kind), true);
+}
+static void call_game_size(void)
+{
+    util_getsize((int)g_seq.save_kind, g_seq.file, game_save_size(g_seq.save_kind), false);
+}
 static void call_game_write(void)
 {
     /* FUN_08abb680, types 0-2: the version string without its NUL, the shared block,
      * then the mode's block. */
+    SaveKind k = g_seq.save_kind;
     size_t v = strlen(SAVE_VERSION);
     memcpy(g_buf, SAVE_VERSION, v);
     memcpy(g_buf + v, &g_save.db, GAME_DB_SIZE);
-    memcpy(g_buf + v + GAME_DB_SIZE, g_save.battle, BATTLE_DATA_SIZE);
-    util_write(SAVE_TYPE_BATTLE, g_seq.file, g_buf, BATTLE_SAVE_SIZE, !g_seq.exists, false);
+    memcpy(g_buf + v + GAME_DB_SIZE, mode_block(k), mode_block_size(k));
+    util_write((int)k, g_seq.file, g_buf, game_save_size(k), !g_seq.exists, false);
 }
 
 /* FUN_08a641dc: at least five characters, ending in ".CHE". */
@@ -863,15 +1052,16 @@ static void collect_list(void)
             continue;
         SaveListEntry *l = &g_seq.list[g_seq.list_count++];
         snprintf(l->file, sizeof l->file, "%.12s", name);
-        l->broken = e->stat.st_size != BATTLE_SAVE_SIZE;
+        l->broken = e->stat.st_size != game_save_size(g_seq.save_kind);
         l->mtime = e->stat.sce_mtime;
     }
 }
 
-void savedata_list_start(void)
+void savedata_list_start(SaveKind kind)
 {
     g_seq.list_count = 0;
     seq_begin(SEQ_LIST, ST_GAME_FILES);
+    g_seq.save_kind = kind;
 }
 
 int savedata_list_update(void)
@@ -886,7 +1076,8 @@ int savedata_list_update(void)
             collect_list();
         else if (r != SCE_UTILITY_SAVEDATA_ERROR_RW_NO_DATA)
             g_seq.result = r;
-        SDL_Log("[save] Battle Data: %d file(s) in %s/%sB", g_seq.list_count, psp_savedata_root(), SAVE_GAME_NAME);
+        SDL_Log("[save] %s: %d file(s) in %s/%s%s", kind_label(g_seq.save_kind), g_seq.list_count,
+                psp_savedata_root(), SAVE_GAME_NAME, save_name((int)g_seq.save_kind));
         seq_goto(ST_DONE);
         return 1;
     }
@@ -900,15 +1091,17 @@ int savedata_list(const SaveListEntry **out)
     return g_seq.list_count;
 }
 
-void savedata_load_start(const char *file)
+void savedata_load_start(SaveKind kind, const char *file)
 {
     seq_begin(SEQ_LOAD, ST_GAME_READ);
+    g_seq.save_kind = kind;
     snprintf(g_seq.file, sizeof g_seq.file, "%s", file);
 }
 
-void savedata_save_start(const char *file)
+void savedata_save_start(SaveKind kind, const char *file)
 {
     seq_begin(SEQ_SAVE, ST_GAME_FILES);
+    g_seq.save_kind = kind;
     snprintf(g_seq.file, sizeof g_seq.file, "%s", file);
 }
 
@@ -916,17 +1109,18 @@ void savedata_save_start(const char *file)
  * mode's block. */
 static bool unpack_game(void)
 {
+    SaveKind k = g_seq.save_kind;
     size_t v = strlen(SAVE_VERSION);
-    if (g_param.dataSize != BATTLE_SAVE_SIZE) {
+    if (g_param.dataSize != game_save_size(k)) {
         SDL_Log("[save] %s: %u bytes, expected %u", g_seq.file, (unsigned)g_param.dataSize,
-                (unsigned)BATTLE_SAVE_SIZE);
+                (unsigned)game_save_size(k));
         return false;
     }
     if (memcmp(g_buf, SAVE_VERSION, v)) /* FUN_08ab8604 compares, the game goes on anyway */
         SDL_Log("[save] %s: version \"%.6s\", expected \"%s\"", g_seq.file, (const char *)g_buf, SAVE_VERSION);
     memcpy(&g_save.db, g_buf + v, GAME_DB_SIZE);
-    memcpy(g_save.battle, g_buf + v + GAME_DB_SIZE, BATTLE_DATA_SIZE);
-    snprintf(g_save.battle_file, sizeof g_save.battle_file, "%s", g_seq.file);
+    memcpy(mode_block(k), g_buf + v + GAME_DB_SIZE, mode_block_size(k));
+    snprintf(kind_file(k), SAVE_FILE_MAX, "%s", g_seq.file);
     return true;
 }
 
@@ -944,7 +1138,7 @@ static int io_update(void)
             int used = 0;
             for (int i = 0; i < SAVE_CARDS; i++)
                 used += savedata_card_used(i);
-            SDL_Log("[save] Battle Data %s loaded: %d OKE card(s)", g_seq.file, used);
+            SDL_Log("[save] %s %s loaded: %d OKE card(s)", kind_label(g_seq.save_kind), g_seq.file, used);
         }
         seq_goto(ST_DONE);
         return 1;
@@ -969,8 +1163,9 @@ static int io_update(void)
             return 1;
         g_seq.result = r;
         if (r == 0) {
-            snprintf(g_save.battle_file, sizeof g_save.battle_file, "%s", g_seq.file);
-            SDL_Log("[save] Battle Data saved as %s/%sB/%s", psp_savedata_root(), SAVE_GAME_NAME, g_seq.file);
+            snprintf(kind_file(g_seq.save_kind), SAVE_FILE_MAX, "%s", g_seq.file);
+            SDL_Log("[save] %s saved as %s/%s%s/%s", kind_label(g_seq.save_kind), psp_savedata_root(),
+                    SAVE_GAME_NAME, save_name((int)g_seq.save_kind), g_seq.file);
         } else {
             SDL_Log("[save] saving %s failed: 0x%08X", g_seq.file, (unsigned)r);
         }
@@ -999,13 +1194,54 @@ int32_t savedata_run(int (*update)(void))
     return g_seq.result;
 }
 
-/* ---- the test save ---- */
-
 static bool read_preset(Pack *pack, const char *path, OkeDataBase *out)
 {
     const PackEntry *e = path ? pack_find(pack, path) : NULL;
     return e && pack_read(pack, e, out, sizeof *out) == (long)sizeof *out;
 }
+
+/* ---- CTutorialFlow::loadPreset (FUN_08ae1090) ---- */
+
+#define BATTLE_TEAMS 0x40C80 /* CGameCommonDataBase's two battle teams (FUN_0889ce7c + 0x40) */
+
+static void battle_team_member(int team, int m, int card, int spot)
+{
+    /* FUN_08ad34cc / FUN_08ad332c: team * 0x340, member + 0x290 + m * 0x30; the card at
+     * +0x20 (FUN_08ad31fc), the spot at +0x24 (FUN_08ad3214). */
+    uint8_t *f = (uint8_t *)&g_save.db + BATTLE_TEAMS + TEAM_CARD_SIZE * team + 0x290 + 0x30 * m;
+    put_word(f + 0x20, (uint32_t)card);
+    put_word(f + 0x24, (uint32_t)spot);
+}
+
+bool savedata_story_preset(void)
+{
+    Pack pack;
+    if (pack_open(&pack, "disc0:/PSP_GAME/USRDIR") < 0) {
+        SDL_Log("[save] story preset: can't open the pack");
+        return false;
+    }
+    static const char *const k_cards[2] = {"preset/lecture/oke_l00_1.bin", "preset/lecture/oke_l00_2.bin"};
+    bool ok = true;
+    for (int i = 0; i < 2; i++)
+        if (!read_preset(&pack, k_cards[i], &g_save.db.card[i])) {
+            SDL_Log("[save] story preset: %s missing", k_cards[i]);
+            ok = false;
+        }
+    const PackEntry *e = pack_find(&pack, "preset/lecture/team_f00.bin");
+    if (!e || pack_read(&pack, e, g_save.db.team[0], TEAM_CARD_SIZE) != TEAM_CARD_SIZE) {
+        SDL_Log("[save] story preset: preset/lecture/team_f00.bin missing");
+        ok = false;
+    }
+    pack_close(&pack);
+    /* The battle teams: the player's first member is card 32 + 6 (the game-common
+     * block's cards follow the 32 saved ones, FUN_0889eaf8), the other team's card 1;
+     * both on spot 4. */
+    battle_team_member(0, 0, SAVE_CARDS + 6, 4);
+    battle_team_member(1, 0, 1, 4);
+    return ok;
+}
+
+/* ---- the test save ---- */
 
 static void set_card_name(OkeDataBase *card, const char *name)
 {
@@ -1070,7 +1306,7 @@ bool savedata_make_test_save(const char *file)
         SDL_Log("[save] test save: no preset OKEs could be read");
         return false;
     }
-    savedata_save_start(file);
+    savedata_save_start(SAVE_BATTLE, file);
     int32_t r = savedata_run(savedata_io_update);
     SDL_Log("[save] test save %s with %d preset OKE card(s), %d team(s) and %d Victory Points: %s", file, n,
             (savedata_team_status(0) != 0) + (savedata_team_status(1) != 0), savedata_money(),

@@ -2,7 +2,8 @@
  * (src/platform/savedata.c) under the ported CSaveMngr sequences (src/game/savedata.c).
  *   chexa-savedata-test [DIR]   (default: a fresh folder under the build directory)
  * Start-up check on an empty folder creates the system data, the next one loads it;
- * a Battle Data save round-trips its cards; FILES lists it and tells broken files. */
+ * a Battle Data save round-trips its cards; FILES lists it and tells broken files;
+ * a Story Data save round-trips the Story Mode block in its own folder. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,11 +78,11 @@ int main(int argc, char **argv)
     savedata_team_set_member(2, 1, 0, 0);
     CHECK(savedata_team_status(2) == 1 && savedata_team_count(2) == 2, "team 3 made with two members");
     CHECK(savedata_team_member(2, 2) == -1 && savedata_team_spot(2, 2) == -1, "its third slot is empty");
-    savedata_save_start("UNIT.CHE");
+    savedata_save_start(SAVE_BATTLE, "UNIT.CHE");
     CHECK(savedata_run(savedata_io_update) == 0, "save UNIT.CHE (new: MAKEDATA)");
     snprintf(path, sizeof path, "%s/ULJM05698B/UNIT.CHE", root);
     CHECK(size_of(path) == BATTLE_SAVE_SIZE, "UNIT.CHE is 0x%X bytes (%ld)", BATTLE_SAVE_SIZE, size_of(path));
-    savedata_save_start("UNIT.CHE");
+    savedata_save_start(SAVE_BATTLE, "UNIT.CHE");
     CHECK(savedata_run(savedata_io_update) == 0, "save UNIT.CHE again (existing: WRITE)");
 
     /* A file of the wrong size and one that isn't game data. */
@@ -96,7 +97,7 @@ int main(int argc, char **argv)
     if (f)
         fclose(f);
 
-    savedata_list_start();
+    savedata_list_start(SAVE_BATTLE);
     savedata_run(savedata_list_update);
     const SaveListEntry *list;
     int n = savedata_list(&list);
@@ -113,7 +114,7 @@ int main(int argc, char **argv)
 
     savedata_new_game();
     CHECK(!savedata_card_used(0), "new game: card 1 blank");
-    savedata_load_start("UNIT.CHE");
+    savedata_load_start(SAVE_BATTLE, "UNIT.CHE");
     CHECK(savedata_run(savedata_io_update) == 0, "load UNIT.CHE");
     char name[32];
     savedata_card_name(5, name, sizeof name);
@@ -133,11 +134,43 @@ int main(int argc, char **argv)
     savedata_team_delete(2);
     CHECK(savedata_team_status(2) == 0, "a deleted team is unused");
 
-    savedata_load_start("SHORT.CHE");
+    savedata_load_start(SAVE_BATTLE, "SHORT.CHE");
     CHECK(savedata_run(savedata_io_update) != 0, "loading SHORT.CHE fails");
-    savedata_load_start("NONE.CHE");
+    savedata_load_start(SAVE_BATTLE, "NONE.CHE");
     CHECK(savedata_run(savedata_io_update) == SCE_UTILITY_SAVEDATA_ERROR_RW_FILE_NOT_FOUND,
           "loading a missing file gives RW_FILE_NOT_FOUND");
+
+    /* Story Data: ULJM05698S, the shared block and the Story Mode block. */
+    savedata_new_game();
+    savedata_story_new();
+    CHECK(savedata_story_step() == STORY_STEP_NONE, "new story: no step yet");
+    savedata_set_story_step(0x30);
+    savedata_set_story_battle(0x26);
+    savedata_set_story_script("adv/mission01.chs");
+    CHECK(savedata_story_field_hide(0xD, 0, "mission01") && savedata_story_field_hide(0xD, 3, "mission01b"),
+          "two hidden scripts");
+    savedata_story_field_clear(0xD, 0);
+    savedata_save_start(SAVE_STORY, "STORY.CHE");
+    CHECK(savedata_run(savedata_io_update) == 0, "save STORY.CHE");
+    snprintf(path, sizeof path, "%s/%sS/STORY.CHE", root, SAVE_GAME_NAME);
+    CHECK(size_of(path) == STORY_SAVE_SIZE, "STORY.CHE is 0x%X bytes (%ld)", STORY_SAVE_SIZE, size_of(path));
+    savedata_new_game();
+    CHECK(savedata_story_step() == STORY_STEP_NONE, "a new game clears the story");
+    savedata_list_start(SAVE_STORY);
+    savedata_run(savedata_list_update);
+    n = savedata_list(&list);
+    CHECK(n == 1 && !strcmp(list[0].file, "STORY.CHE") && !list[0].broken, "the Story Data list has STORY.CHE");
+    savedata_load_start(SAVE_STORY, "STORY.CHE");
+    CHECK(savedata_run(savedata_io_update) == 0, "load STORY.CHE");
+    CHECK(savedata_story_step() == 0x30 && savedata_story_battle() == 0x26 &&
+              !strcmp(savedata_story_script(), "adv/mission01.chs"),
+          "the story came back (step %d, battle %d)", savedata_story_step(), savedata_story_battle());
+    const char *hidden = savedata_story_field_seek(0xD, 3);
+    CHECK(!savedata_story_field_exists(0xD, 0) && hidden && !strcmp(hidden, "mission01b"),
+          "the hidden scripts came back");
+    CHECK(!strcmp(g_save.story_file, "STORY.CHE"), "the loaded story file is remembered");
+    savedata_load_start(SAVE_BATTLE, "STORY.CHE");
+    CHECK(savedata_run(savedata_io_update) != 0, "STORY.CHE isn't Battle Data");
 
     printf(failures ? "%d failure(s)\n" : "all passed\n", failures);
     return failures ? 1 : 0;
