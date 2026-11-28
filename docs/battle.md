@@ -189,8 +189,12 @@ word per call), size the grid to the next power of two plus one, mark the border
 strips, midpoint displacement (`FUN_08922e30`), a Voronoi map (`FUN_08920218`, its
 points shuffled with the game's BSD qsort `FUN_08b41288` and a random comparator) merged
 by weight (`FUN_0891d988`), smoothing (`FUN_0892347c`), hydraulic erosion
-(`FUN_0892391c`), thermal erosion (`FUN_08923dc0`, **not ported**: maps 05, 06, 08 and
-14 ask for it), terracing (`FUN_08921180`) and the stretch copy (`FUN_0891dc64`).
+(`FUN_0892391c`), thermal erosion (`ThermalErosion` `FUN_0891e790`, here `FUN_08923dc0` with the border
+strips; maps 05, 06, 08 and 14 ask for it: on each cell whose steepest drop to one of
+four neighbours, the straight ones and the diagonal ones in turn as the hydraulic pass
+does, is above the threshold, that lower neighbour is raised by (drop - threshold) x
+drop / (2 x the sum of the drops above the threshold) and the cell keeps its height, so
+pits and gullies fill; map 14's lowest point goes from 0 to 35), terracing (`FUN_08921180`) and the stretch copy (`FUN_0891dc64`).
 Nothing is checked against the game's output yet: the next step is comparing a
 height map dumped from a running game or emulator.
 
