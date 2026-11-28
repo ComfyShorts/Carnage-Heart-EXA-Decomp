@@ -40,7 +40,8 @@ movie: the Natsume logo is its first picture after the black lead-in.
 Phase 4 (`FUN_088d5c20`) calls the movie player, `FUN_08b1d0ec("movie/che_op.pmf",
 1, 0, 440, 253, 0)`, which holds the game thread until the movie ends, then opens
 phase 0 (the title). The ending calls the same player with `movie/ending.pmf` and
-skip mode 0 (`FUN_08968758`).
+skip mode 0 (`FUN_08968758`), which the port plays too (docs/story.md; `--story-step
+85` starts on it).
 
 The file is PSMF version 0015: a 2048-byte header (stream offset `+8`, 0x800; stream
 size `+0xC`, 0x80D000; first and last time stamps 90000 and 3645552 at `+0x56` and

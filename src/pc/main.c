@@ -34,7 +34,8 @@
  *                     --gmo-angle DEG: starting turn)
  *   --oke ID          with --startup: show an assembled OKE body (--oke-pose N)
  *   --map N           with --startup: show the generated terrain of map N
- *   --story-step N    with --startup: start Story Mode on step N (0-84) of a new game
+ *   --story-step N    with --startup: start Story Mode on step N (0-84) of a new game,
+ *                     85 for the ending
  *                     (the scenes and lessons before it are applied to the save)
  *   --battle-result R for scripted runs: every battle ends 1 s in, as R (win, lose, draw)
  *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)

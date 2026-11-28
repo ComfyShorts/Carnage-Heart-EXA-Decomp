@@ -52,7 +52,10 @@ The kinds of step:
   - a lesson or mission step → `hideEventScriptBeforeBriefing` `FUN_08ae1668` stores
     the step's script in the save block as the briefing, then the **briefing hub**
     (`FUN_08ae1024` → `FUN_088926d0`, `CBriefingMngr`);
-  - step 0x54 → the ending, then mission 11 again and `CScenarioClearSaveFlow`
+  - step 0x54 → the ending (`CEndingFlow` `FUN_0896864c`, update `FUN_08968758`:
+    the sound stopped, `movie/ending.pmf` played by the movie player with skip mode
+    0, Start only; the staff credits are in the movie), then mission 11 again and
+    `CScenarioClearSaveFlow`
     (`FUN_08a68dc8`); the system data's "Story Mode completed" is set
     (`FUN_0889c408`).
 - **The briefing hub** (`CBriefingMngr`, update `FUN_08892c1c`) is Story Mode's
@@ -215,7 +218,7 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Story Data | Kind `S`: `ULJM05698S/<NAME>.CHE`, the version, the shared block and the story block, 0x4AF26 bytes; the SFO's title "Story Data" and the step's progress title; icon `icon0_scenario.png` | |
 | Continue | Story Data or Battle Data, the kind's files, then the story resumes on its saved step (`FUN_088d3d80` mode 3, `CTutorialFlow` type 2): a scene or card, or the briefing for a lesson or mission step | Plain menus (see screens.md, "Save data") |
 | The clear data | After the ending: Story Mode completed in the system data, step 0x53, mission 11's briefing and battle 0x30, then "Save cleared data?" (string 0x39) | |
-| The ending | | A black screen naming the step; circle goes on |
+| The ending | `movie/ending.pmf` from the disc (81.5 s, the staff credits), decoded and shown as the opening movie is (`movie.c`), after the music and voice stop; only Start skips it | |
 
 ### 2. The scene player
 
