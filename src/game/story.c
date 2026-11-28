@@ -25,6 +25,8 @@
 #include "render.h"
 #include "savedata.h"
 #include "scene.h"
+#include "movie.h"
+#include "voice.h"
 #include "music.h"
 #include "battle.h"
 #include "battle_menu.h"
@@ -110,7 +112,6 @@ static struct {
     bool saving;
     char script[0x40];
     char script_id[0x41];
-    const char *note;  /* the stand-in screens' line */
     float t;
 } g;
 
@@ -162,7 +163,6 @@ static void move_adventure_part(bool after_step)
         /* CStoryMngr::Initialize: the scene player (CEventScriptWnd) on the step's
          * script, state 3. */
         g.mngr = MNGR_SCRIPT;
-        g.note = "Scene";
         SDL_Log("[story] step %d: scene %s (%s), %s", step, g.script_id, g.script,
                 storydb_progress(step, false) ? storydb_progress(step, false) : "");
         if (!scene_start(g.script, g.script_id))
@@ -192,7 +192,6 @@ static void move_briefing(void)
     g.child = CHILD_BRIEFING;
     g.child_done = false;
     g.t = 0.0f;
-    g.note = "Briefing";
     snprintf(g.script_id, sizeof g.script_id, "%s", storydb_script_id(step) ? storydb_script_id(step) : "");
     /* A lesson's first script is hidden on the hub (FUN_088df4b0 on menu 0, key 0). */
     if (storydb_lecture_part(step) && g.script_id[0])
@@ -209,7 +208,6 @@ static void move_ending(void)
     g.child = CHILD_ENDING;
     g.child_done = false;
     g.t = 0.0f;
-    g.note = "Ending";
     SDL_Log("[story] the ending");
 }
 
@@ -287,11 +285,18 @@ static void adventure_update(float dt)
     }
 }
 
-static void stand_in_update(float dt)
+/* The ending flow (CEndingFlow FUN_0896864c, update FUN_08968758): state 0 stops the
+ * sound (FUN_08968a08 -> FUN_08b2677c), state 1 plays movie/ending.pmf on the game
+ * thread (FUN_08b1d0ec with skip mode 0: only Start stops it), then the flow ends.
+ * The staff credits are part of the movie. */
+static void ending_update(float dt)
 {
-    g.t += dt;
-    if (g.t > 0.25f && pad_pressed(PSP_CTRL_CIRCLE))
-        child_finish();
+    (void)dt;
+    voice_stop();
+    music_stop();
+    bool skipped = movie_play("movie/ending.pmf", MOVIE_SKIP_START);
+    SDL_Log("[story] the ending movie %s", skipped ? "was skipped" : "has ended");
+    child_finish();
 }
 
 static void clear_update(float dt)
@@ -312,7 +317,6 @@ static void clear_update(float dt)
 
 /* ---- drawing ---- */
 
-static TextStyle note_style(uint32_t color) { return text_style(0, 6, 12, 12, 0, 0, color, 0); }
 
 static void draw(void *ctx)
 {
@@ -328,18 +332,6 @@ static void draw(void *ctx)
         }
     } else if (g.child == CHILD_ADVENTURE) {
         scene_draw(); /* FUN_08ab2c58 */
-    } else if (g.child != CHILD_NONE && g.child != CHILD_CLEAR) {
-        /* The stand-in until the ending is written. */
-        TextStyle st = note_style(0xFFFFFFFF);
-        char line[160];
-        int step = savedata_story_step();
-        const char *prog = storydb_progress(step, false);
-        snprintf(line, sizeof line, "%s  (step %d)", prog ? prog : "", step);
-        ui_text(line, &st, 24, 100, 1.0f);
-        snprintf(line, sizeof line, "%s: %s", g.note ? g.note : "", g.script_id);
-        ui_text(line, &st, 24, 120, 1.0f);
-        TextStyle dim = note_style(0xFF909090);
-        ui_text("Not ported yet. Circle: go on.", &dim, 24, 150, 1.0f);
     }
     ui_ask_draw(&g.ask);
 }
@@ -400,8 +392,13 @@ void story_start_at(int step)
     if (applied)
         SDL_Log("[story] the %d scenes before step %d applied (mission %d)", applied, step,
                 savedata_story_battle());
-    savedata_set_story_step(step);
     g.started = true;
+    if (step > STORY_STEP_LAST) { /* past the last step: the ending */
+        savedata_set_story_step(STORY_STEP_LAST);
+        move_ending();
+        return;
+    }
+    savedata_set_story_step(step);
     if (storydb_briefing(step))
         move_briefing();
     else
@@ -442,7 +439,7 @@ int story_update(float dt)
         }
         break;
     case CHILD_ENDING:
-        stand_in_update(dt);
+        ending_update(dt);
         break;
     case CHILD_CLEAR:
         clear_update(dt);

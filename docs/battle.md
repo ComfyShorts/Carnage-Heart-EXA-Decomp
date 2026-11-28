@@ -116,8 +116,12 @@ From the entrance code (`FUN_088d5510`, `FUN_088d497c`, `FUN_088d5a70`,
   runs the same battle for its missions: `CBattleMissionFlow::buildBattle`
   (`FUN_08819478`) fills the battle from a mission record (stage, enemies, spots,
   time limit), and a win on a mission stage (0x40-0x4A) moves the story on
-  (`FUN_08818ff0`). `--battle-result win|lose|draw` ends every battle a second in,
-  for scripted runs of either mode.
+  (`FUN_08818ff0`). The lessons' battles use the same flow with records 0-37 (set by
+  a lesson script, op 0x10 flag 0x80000000); after them the record's script for the
+  result plays, `tutorialNN_succeed` for a win (`+0x3BC` file, `+0x3C0` name) and
+  `tutorialNN_fail` otherwise (`+0x3C4`, `+0x3C8`; `FUN_08886e9c` .. `FUN_088871a8`
+  copy them into the battle's settings). `--battle-result win|lose|draw` ends every
+  battle a second in, for scripted runs of either mode.
 - The battle itself is `CBattleScene` / `CBattleSceneMngr` (file set "battlescene":
   3D effect models `effect/*.gmo`, HUD art `parts/bs/*`), with `CBattleOke` behind
   each robot.

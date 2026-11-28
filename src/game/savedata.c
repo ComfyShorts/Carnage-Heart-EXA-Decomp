@@ -154,6 +154,7 @@ void savedata_set_chip_page_cursor(int page, int index)
 #define STORY_LESSON_STATE 0x0088
 #define STORY_LESSON_CLEAR 0x00BC
 #define STORY_LESSONS 0x34
+#define STORY_LESSON_MODE 0x018C
 #define STORY_BRIEF_LESSON 0x0190
 #define STORY_FIELD 0x0198
 #define STORY_2B28 0x2B28
@@ -193,6 +194,36 @@ void savedata_set_story_step(int step) { put_word(g_save.story + STORY_STEP, (ui
 void savedata_story_set_2b28(int v) { put_word(g_save.story + STORY_2B28, (uint32_t)v); }
 int savedata_story_battle(void) { return (int)get_word(g_save.story + STORY_BATTLE); }
 void savedata_set_story_battle(int mission) { put_word(g_save.story + STORY_BATTLE, (uint32_t)mission); }
+
+/* FUN_0889d4a8 / FUN_0889d4c8, FUN_0889d4ec / FUN_0889d510 */
+int savedata_lesson_state(int card)
+{
+    return card >= 0 && card < STORY_LESSONS ? (int)(int8_t)g_save.story[STORY_LESSON_STATE + card] : 0;
+}
+void savedata_set_lesson_state(int card, int state)
+{
+    if (card >= 0 && card < STORY_LESSONS)
+        g_save.story[STORY_LESSON_STATE + card] = (uint8_t)state;
+}
+uint32_t savedata_lesson_offered(int card)
+{
+    return card >= 0 && card < STORY_LESSONS ? get_word(g_save.story + STORY_LESSON_CLEAR + 4 * card) : 0;
+}
+void savedata_set_lesson_offered(int card, uint32_t v)
+{
+    if (card >= 0 && card < STORY_LESSONS)
+        put_word(g_save.story + STORY_LESSON_CLEAR + 4 * card, v);
+}
+/* FUN_0889d718 / FUN_0889d720, FUN_0889d728 / FUN_0889d730 */
+int savedata_story_saved_battle(void) { return (int)get_word(g_save.story + 0x2B30); }
+void savedata_set_story_saved_battle(int mission) { put_word(g_save.story + 0x2B30, (uint32_t)mission); }
+bool savedata_story_briefed(void) { return get_word(g_save.story + 0x2B7C) != 0; }
+void savedata_set_story_briefed(bool seen) { put_word(g_save.story + 0x2B7C, seen ? 1u : 0u); }
+/* FUN_0889d534 / FUN_0889d53c, FUN_0889d544 / FUN_0889d54c */
+int savedata_lesson_mode(void) { return (int)get_word(g_save.story + STORY_LESSON_MODE); }
+void savedata_set_lesson_mode(int mode) { put_word(g_save.story + STORY_LESSON_MODE, (uint32_t)mode); }
+int savedata_lesson_current(void) { return (int)get_word(g_save.story + STORY_BRIEF_LESSON); }
+void savedata_set_lesson_current(int lesson) { put_word(g_save.story + STORY_BRIEF_LESSON, (uint32_t)lesson); }
 
 const char *savedata_story_script(void)
 {
@@ -404,6 +435,16 @@ void savedata_story_field_clear(int menu, int key)
             put_word(f + FIELD_COUNT, (uint32_t)(count - 1));
             return;
         }
+}
+
+/* FUN_088df668 (FUN_088df468): every menu emptied, as a new lesson starts. */
+void savedata_story_field_reset(void)
+{
+    for (int m = 0; m < FIELD_MENUS; m++) {
+        uint8_t *f = field_menu(m);
+        memset(f, 0, FIELD_SIZE);
+        memset(f, 0xFF, 0x20);
+    }
 }
 
 bool savedata_story_field_exists(int menu, int key) { return savedata_story_field_seek(menu, key) != NULL; }

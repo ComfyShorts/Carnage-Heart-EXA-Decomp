@@ -10,10 +10,12 @@
 void voice_init(void);
 void voice_shutdown(void);
 
-/* Reads `path` from the pack and plays it once, stopping what plays. False if the
- * file can't be read or decoded. */
+/* Reads `path` from the pack and plays it once, stopping what plays, at its
+ * speaker's volume. False if the file can't be read or decoded. */
 bool voice_play(const char *path);
 void voice_stop(void);
+/* CSound's volume for a voice file (FUN_08b37880): by the speaker in "voice/<who>/". */
+float voice_volume(const char *path);
 bool voice_playing(void);
 
 #endif

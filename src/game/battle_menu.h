@@ -49,6 +49,10 @@ void battle_menu_start_story(void);
 void battle_menu_battle_over(int result);
 /* The hub has ended because the step is done (battle_menu_update returned 0). */
 bool battle_menu_story_advanced(void);
+/* Story Mode: the script hidden on a screen (CEventScriptField menu `menu`, as ops
+ * 0x1F / 0x20 number them, and key) plays over it once, as the screen opens. False
+ * when there's none. */
+bool battle_menu_field(int menu, int key);
 
 /* One step. Returns 1 while the menus run, 2 when a battle should start
  * (battle_menu_setup() has it), 0 when the player backs out to the title (Story

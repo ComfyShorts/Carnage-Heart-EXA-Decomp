@@ -43,4 +43,7 @@ int scene_apply_file(const char *path);
  * counting them. Returns the number of commands, -1 on a bad command. */
 int scene_dry_run(const char *path, const char *id);
 
+/* --auto-scenes: scripts skip through on their own (pages and notices too). */
+extern int g_scene_auto;
+
 #endif

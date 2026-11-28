@@ -23,6 +23,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "battle_menu.h"
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
@@ -254,11 +255,13 @@ static void enter_item(int id)
     case ITEM_SELECT_CARD: /* FUN_089e6ba8 */
         g.mode = MODE_CARDS;
         g.card_cursor = card;
+        battle_menu_field(0x1F, 0); /* Story Mode: a lesson's script (FUN_089e76a8) */
         break;
     case ITEM_HARDWARE: /* CHardDesignFlow */
         g.mode = MODE_HARDWARE;
         g.hw_cursor = 0;
         build_hw_items();
+        battle_menu_field(0x20, 0); /* FUN_088f6748 */
         break;
     case ITEM_SOFTWARE: /* CSoftDesignFlow; string 0x2E until the hardware is set */
         if (!savedata_card_used(card)) {
@@ -267,6 +270,7 @@ static void enter_item(int id)
         }
         soft_open(card);
         g.mode = MODE_SOFTWARE;
+        battle_menu_field(0x21, 0); /* FUN_08a7d210 */
         break;
     case ITEM_NAME: { /* mode 9, FUN_088bafa8 */
         if (!savedata_card_used(card)) {
@@ -288,6 +292,7 @@ static void enter_item(int id)
         }
         custom_open(card);
         g.mode = MODE_CUSTOM;
+        battle_menu_field(0x1E, 4); /* FUN_088ba534 */
         break;
     case ITEM_EMBLEMS: /* mode 7, FUN_088bad64 */
         if (!savedata_card_used(card)) {
@@ -296,6 +301,7 @@ static void enter_item(int id)
         }
         emblem_open(card);
         g.mode = MODE_EMBLEM;
+        battle_menu_field(0x22, 0); /* FUN_088bad64 */
         break;
     case ITEM_NOTES: /* mode 10, FUN_088bb110: view only on an installed card */
         if (!savedata_card_used(card)) {
@@ -303,6 +309,7 @@ static void enter_item(int id)
             return;
         }
         notes_open(card, installed(card));
+        battle_menu_field(0x23, 0); /* FUN_088bb110 */
         g.mode = MODE_NOTES;
         break;
     case ITEM_PRIVACY: /* mode 0xB, FUN_088bb318: starts on Private when card+0x20 is 1 */
@@ -582,6 +589,14 @@ static void update_hardware(void)
         }
         open_parts(item);
         g.message = NULL;
+        /* FUN_088f6ac0 / FUN_088f6e14 / FUN_088f715c: the CPU, armour and weapon lists'
+         * lesson scripts (keys 2, 3, 4). */
+        if (item == HWI_CPU)
+            battle_menu_field(0x20, 2);
+        else if (item == HWI_ARMOR)
+            battle_menu_field(0x20, 3);
+        else if (item >= HWI_WEAPON1 && item < HWI_WEAPON1 + 5)
+            battle_menu_field(0x20, 4);
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         sound_se(SE_CANCEL, 1.0f);
         g.mode = MODE_TOP;

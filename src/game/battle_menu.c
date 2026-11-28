@@ -12,6 +12,7 @@
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
+#include "lesson.h"
 #include "pad.h"
 #include "sound.h"
 #include "music.h"
@@ -185,6 +186,7 @@ typedef enum {
     SCR_OKECONFIG,  /* OKE Configuration (oke_menu.c) */
     SCR_SHOP,       /* the Shop (shop_menu.c) */
     SCR_SCENE,      /* Story Mode: a script hidden on the screen (scene.c) */
+    SCR_LESSON,     /* Story Mode: the Lesson card screen (lesson.c) */
 } ScreenId;
 
 enum { TEAM_ENEMY, TEAM_FRIEND };
@@ -218,6 +220,10 @@ static struct {
     bool story_advance;     /* the step is done: back to CTutorialFlow */
     bool teams_for_mission; /* SCR_TEAMS chooses the mission's team */
     bool scene_then_teams;  /* after the scene: the mission's team */
+    bool scene_then_save;   /* after the scene: the System Menu */
+    int mission_rec;        /* the mission record of the battle built, -1 none */
+    char after_file[0x41], after_id[0x41]; /* its _succeed / _fail script, to play */
+    bool overlay;           /* a hidden script plays over a screen drawn on its own */
 } g;
 
 static ScreenId top(void)
@@ -357,6 +363,7 @@ static void menu_start(bool story)
 {
     memset(&g, 0, sizeof g);
     g.story = story;
+    g.mission_rec = -1;
     music_menu(); /* FUN_0888d2ac, from the Battle Mode screens and the hub */
     if (story)
         build_story_menu();
@@ -395,9 +402,32 @@ bool battle_menu_story_advanced(void) { return g.story_advance; }
 
 /* CBattleMissionFlow's result (FUN_08818ff0): a won battle on a mission's stage moves
  * the story on, unless the step is a lesson's (FUN_08a69a64). */
+static const char *record_string(int rec, uint32_t off)
+{
+    uint32_t p = gamedata_word(MISSION_RECORDS + MISSION_STRIDE * (uint32_t)rec + off, 0);
+    if (p >= 0x08804000u)
+        p -= 0x08804000u;
+    return p ? gamedata_string(p) : NULL;
+}
+
 void battle_menu_battle_over(int result)
 {
-    if (!g.story || result != 0)
+    if (!g.story)
+        return;
+    /* The record's script for a win (+0x3BC file, +0x3C0 name) or else (+0x3C4,
+     * +0x3C8): the lesson battles' tutorialNN_succeed / _fail (FUN_08886e9c ..
+     * FUN_088871a8 into the battle's settings), played on the way back. */
+    int rec = g.mission_rec;
+    g.after_file[0] = g.after_id[0] = 0;
+    if (rec >= 0 && rec < MISSION_COUNT) {
+        const char *file = record_string(rec, result == 0 ? 0x3BC : 0x3C4);
+        const char *id = record_string(rec, result == 0 ? 0x3C0 : 0x3C8);
+        if (file && id && *file && *id) {
+            snprintf(g.after_file, sizeof g.after_file, "%s", file);
+            snprintf(g.after_id, sizeof g.after_id, "%s", id);
+        }
+    }
+    if (result != 0)
         return;
     int stage = g.setup.stage;
     if (stage >= MISSION_STAGE_FIRST && stage <= MISSION_STAGE_LAST &&
@@ -423,6 +453,33 @@ static bool play_field(int field)
     return true;
 }
 
+/* CEventScriptField's menu numbers (ops 0x1F / 0x20) to the save's menus
+ * (FUN_088df724). */
+static int field_of(int menu)
+{
+    static const uint8_t k_menus[] = {10, 0x14, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x28, 0x29,
+                                      0x2A, 0x32, 0x33, 0x34, 0x35, 0x3C, 0x46, 0x50, 0x5A};
+    for (int i = 0; i < (int)sizeof k_menus; i++)
+        if (k_menus[i] == menu)
+            return i;
+    return -1;
+}
+
+bool battle_menu_field(int menu, int key)
+{
+    int field = field_of(menu);
+    const char *hidden = g.story && field >= 0 ? savedata_story_field_seek(field, key) : NULL;
+    if (!hidden || !*hidden || g.overlay)
+        return false;
+    char id[0x41];
+    snprintf(id, sizeof id, "%s", hidden);
+    savedata_story_field_clear(field, key);
+    if (!scene_start(savedata_story_script(), id))
+        return false;
+    g.overlay = true;
+    return true;
+}
+
 const BattleSetup *battle_menu_setup(void)
 {
     return &g.setup;
@@ -432,6 +489,11 @@ void battle_menu_resume(void)
 {
     music_menu();
     g.message = NULL;
+    if (g.after_id[0]) {
+        if (scene_start(g.after_file, g.after_id))
+            push(SCR_SCENE);
+        g.after_file[0] = g.after_id[0] = 0;
+    }
     if (g.story) { /* Mission's state */
         int cursor = g.select.cursor;
         build_select_menu();
@@ -535,6 +597,7 @@ static void build_mission_battle(void)
     BattleSetup *s = &g.setup;
     memset(s, 0, sizeof *s);
     int rec = savedata_story_battle();
+    g.mission_rec = rec;
     uint32_t base = MISSION_RECORDS + MISSION_STRIDE * (uint32_t)rec;
     for (int m = 0; m < TEAM_MEMBERS; m++) {
         int card = savedata_team_member(g.arena_team, m);
@@ -586,7 +649,6 @@ static void open_mission(void)
 /* ---- per-screen input ---- */
 
 static void open_save_ask(void);
-static void open_lesson_ask(void);
 
 static int update_mode(void)
 {
@@ -606,19 +668,27 @@ static int update_mode(void)
         } else if (it->id == 3) { /* eTOP_MENU_TYPE 2: CBattleSelectFlow */
             push(SCR_SELECT);
             ui_menu_open(&g.select);
+            battle_menu_field(0x32, 0);
         } else if (it->id == 5) {
-            open_save_ask();
+            if (play_field(field_of(0x46))) /* the System Menu's lesson script first */
+                g.scene_then_save = true;
+            else
+                open_save_ask();
         } else if (it->id == 2) { /* eTOP_MENU_TYPE 1: CTeamFormationFlow */
             team_menu_open();
             push(SCR_TEAMFORM);
+            battle_menu_field(0x28, 0);
         } else if (it->id == 1) { /* eTOP_MENU_TYPE 0: CDesignFlow */
             oke_menu_open();
             push(SCR_OKECONFIG);
+            battle_menu_field(0x1E, 0);
         } else if (it->id == 4) { /* eTOP_MENU_TYPE 3: CShopFlow */
             shop_menu_open();
             push(SCR_SHOP);
-        } else if (g.story && it->id == 0) { /* CLectureFlow: not ported yet */
-            open_lesson_ask();
+            battle_menu_field(0x3C, 0);
+        } else if (g.story && it->id == 0) { /* CLectureFlow */
+            lesson_screen_open();
+            push(SCR_LESSON);
         } else {
             SDL_Log("[battle-menu] \"%s\" chosen: that flow isn't ported", it->text ? it->text : "?");
             g.message = it->text;
@@ -641,10 +711,12 @@ static int update_select(void)
         case 0: /* CBattleTestFlow */
             push(SCR_TEST);
             ui_menu_open(&g.test);
+            battle_menu_field(0x33, 0);
             break;
         case 2: /* CBattleArenaFlow */
             push(SCR_ARENA);
             ui_menu_open(&g.arena);
+            battle_menu_field(0x35, 0);
             break;
         case 1: /* CBattleMissionFlow (FUN_08880bc4 kind 4) */
             if (m->item[m->cursor].disabled)
@@ -665,7 +737,7 @@ static int update_select(void)
     return 1;
 }
 
-enum { ASK_TEST, ASK_ARENA, ASK_SAVE, ASK_MISSION, ASK_LESSON };
+enum { ASK_TEST, ASK_ARENA, ASK_SAVE, ASK_MISSION };
 
 static void open_ask(bool arena)
 {
@@ -678,24 +750,6 @@ static void open_ask(bool arena)
  * load, settings: FUN_088b6cb0); the port asks string 56, "Save your progress?", and
  * saves the Battle Data through CSaveMngr's save path: to the file it was loaded from,
  * else NEWDATA.CHE (the name the game's keyboard starts with, FUN_08a62160). */
-/* Lessons (CLectureFlow) come last; until then a lesson step can be counted as done
- * so the story goes on. The question is the port's. */
-static void open_lesson_ask(void)
-{
-    int step = savedata_story_step();
-    if (!storydb_lecture_part(step)) {
-        SDL_Log("[battle-menu] Lesson (CLectureFlow) isn't ported yet");
-        g.message = "Lessons aren't ported yet.";
-        return;
-    }
-    static char q[160];
-    snprintf(q, sizeof q, "Lessons aren't ported yet.\nCount this lesson (%s) as completed?",
-             storydb_script_id(step) ? storydb_script_id(step) : "?");
-    g.ask_kind = ASK_LESSON;
-    ui_ask_open(&g.ask, q, design_string(5, 1), s_test(32), 1);
-    push(SCR_ASK);
-}
-
 static void open_save_ask(void)
 {
     g.ask_kind = ASK_SAVE;
@@ -1042,16 +1096,6 @@ static int update_ask(float dt)
     pop();
     if (r == 0)
         return 1;
-    if (g.ask_kind == ASK_LESSON) {
-        /* The day's scripts for their effects (the items, parts and missions the
-         * lessons unlock), and the lesson's first script taken off the hub. */
-        int n = scene_apply_file(savedata_story_script());
-        savedata_story_field_clear(FIELD_HUB, 0);
-        SDL_Log("[battle-menu] lesson counted as completed (a stand-in for CLectureFlow): %d scripts of %s applied",
-                n, savedata_story_script());
-        g.story_advance = true;
-        return 1;
-    }
     if (g.ask_kind == ASK_MISSION) {
         build_mission_battle();
         return 2;
@@ -1081,6 +1125,19 @@ int battle_menu_update(float dt)
 {
     if (g.saving) {
         update_save();
+        return 1;
+    }
+    if (g.overlay) { /* a screen's hidden script (battle_menu_field) takes the input */
+        if (!scene_update(dt)) {
+            scene_stop();
+            g.overlay = false;
+            if (g.story && top() == SCR_SELECT) { /* the script may have set the mission */
+                int cursor = g.select.cursor;
+                build_select_menu();
+                g.select.cursor = cursor;
+                ui_menu_open(&g.select);
+            }
+        }
         return 1;
     }
     for (int i = 0; i < g.depth; i++) {
@@ -1125,6 +1182,17 @@ int battle_menu_update(float dt)
             ui_menu_open(&g.mode);
         }
         break;
+    case SCR_LESSON:
+        if (!lesson_screen_update(dt)) {
+            pop();
+            int id = ui_menu_id(&g.mode);
+            build_story_menu(); /* the lessons add items */
+            for (int i = 0; i < g.mode.count; i++)
+                if (g.mode.item[i].id == id)
+                    g.mode.cursor = i;
+            ui_menu_open(&g.mode);
+        }
+        break;
     case SCR_SCENE:
         if (!scene_update(dt)) {
             scene_stop();
@@ -1133,9 +1201,15 @@ int battle_menu_update(float dt)
                 g.scene_then_teams = false;
                 push(SCR_TEAMS);
             }
+            if (g.scene_then_save) {
+                g.scene_then_save = false;
+                open_save_ask();
+            }
         }
         break;
     }
+    if (g.story && top() != SCR_SCENE && top() != SCR_LESSON && lesson_take_day_done())
+        g.story_advance = true; /* CLectureCredit::ReportEnd: the day's lessons are done */
     if (g.story_advance) {
         SDL_Log("[battle-menu] the briefing ends: next step");
         return 0;
@@ -1187,6 +1261,7 @@ static const char *help_text(void)
     case SCR_OPPONENTS: return s_arena(45);
     case SCR_TEAMS: return team_string(0x41);
     case SCR_SCENE: return NULL;
+    case SCR_LESSON: return NULL;
     default: return NULL;
     }
 }
@@ -1360,12 +1435,20 @@ static void draw_screen(ScreenId s, bool is_top)
     case SCR_TEAMFORM:
     case SCR_OKECONFIG:
     case SCR_SHOP:
+    case SCR_LESSON:
         break; /* drawn on their own */
     }
 }
 
 void battle_menu_draw(void)
 {
+    if (g.overlay) {
+        g.overlay = false; /* the screen under it, then the script */
+        battle_menu_draw();
+        g.overlay = true;
+        scene_draw();
+        return;
+    }
     if (top() == SCR_TEAMFORM) {
         team_menu_draw();
         return;
@@ -1376,6 +1459,10 @@ void battle_menu_draw(void)
     }
     if (top() == SCR_SHOP) {
         shop_menu_draw();
+        return;
+    }
+    if (top() == SCR_LESSON) {
+        lesson_screen_draw();
         return;
     }
     sceGuEnable(GU_BLEND);

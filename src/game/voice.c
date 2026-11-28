@@ -8,12 +8,17 @@
 #include <SDL3/SDL.h>
 
 #include "fileio.h"
+#include "gamedata.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 
 #define GRAIN 0x200
 #define FRAME 2048
 #define RING 0x2000
+/* CSound's speaker volumes (FUN_08b37880): 30 entries at 0x08c4d95c of a 3-letter
+ * name and a float, matched at "voice/" + 6 in the path; 1.0 for anyone else. */
+#define VOICE_VOLUMES 0x0044995Cu
+#define VOICE_VOLUME_COUNT 30
 
 static struct {
     bool init;
@@ -24,11 +29,13 @@ static struct {
     /* the request (under lock): a loaded file to start, or a stop */
     uint8_t *pending_file;
     uint32_t pending_size;
+    float pending_volume;
     bool pending_stop;
     SDL_AtomicInt playing;
     /* the thread's own */
     uint8_t *file;
     int id, channels;
+    float volume;
     bool finished;
     int16_t ring[2 * RING];
     int read, write, avail;
@@ -95,14 +102,17 @@ static int SDLCALL voice_thread(void *arg)
         SDL_LockMutex(g.lock);
         uint8_t *file = g.pending_file;
         uint32_t size = g.pending_size;
+        float volume = g.pending_volume;
         bool stop = g.pending_stop;
         g.pending_file = NULL;
         g.pending_stop = false;
         SDL_UnlockMutex(g.lock);
         if (stop)
             release();
-        if (file)
+        if (file) {
             start(file, size);
+            g.volume = volume;
+        }
         if (g.id >= 0) {
             fill();
             int n = SDL_min(g.avail, GRAIN);
@@ -113,7 +123,8 @@ static int SDLCALL voice_thread(void *arg)
             }
             g.avail -= n;
             memset(grain + 2 * n, 0, (size_t)(GRAIN - n) * 4);
-            sceAudioOutputPannedBlocking(g.channel, 0x8000, 0x8000, grain);
+            int v = (int)(g.volume * 0x8000);
+            sceAudioOutputPannedBlocking(g.channel, v, v, grain);
             if (g.finished && g.avail == 0)
                 release();
         } else {
@@ -154,6 +165,22 @@ void voice_shutdown(void)
     g.id = -1;
 }
 
+float voice_volume(const char *path)
+{
+    for (int i = 0; path && strlen(path) > 6 && i < VOICE_VOLUME_COUNT; i++) {
+        uint32_t at = VOICE_VOLUMES + 8u * (uint32_t)i;
+        const char *name = gamedata_string(at);
+        const char *hit = name && *name ? strstr(path, name) : NULL;
+        if (hit && hit - path == 6) {
+            uint32_t bits = gamedata_word(at + 4, 0x3F800000u);
+            float f;
+            memcpy(&f, &bits, sizeof f);
+            return f > 0.0f && f <= 1.0f ? f : 1.0f;
+        }
+    }
+    return 1.0f;
+}
+
 bool voice_play(const char *path)
 {
     if (!g.init || !g.thread || !path || !*path)
@@ -170,6 +197,7 @@ bool voice_play(const char *path)
     free(g.pending_file);
     g.pending_file = buf;
     g.pending_size = (uint32_t)size;
+    g.pending_volume = voice_volume(path);
     g.pending_stop = true;
     SDL_UnlockMutex(g.lock);
     SDL_SetAtomicInt(&g.playing, 1);

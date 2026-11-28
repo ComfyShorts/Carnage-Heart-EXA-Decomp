@@ -52,7 +52,10 @@ The kinds of step:
   - a lesson or mission step → `hideEventScriptBeforeBriefing` `FUN_08ae1668` stores
     the step's script in the save block as the briefing, then the **briefing hub**
     (`FUN_08ae1024` → `FUN_088926d0`, `CBriefingMngr`);
-  - step 0x54 → the ending, then mission 11 again and `CScenarioClearSaveFlow`
+  - step 0x54 → the ending (`CEndingFlow` `FUN_0896864c`, update `FUN_08968758`:
+    the sound stopped, `movie/ending.pmf` played by the movie player with skip mode
+    0, Start only; the staff credits are in the movie), then mission 11 again and
+    `CScenarioClearSaveFlow`
     (`FUN_08a68dc8`); the system data's "Story Mode completed" is set
     (`FUN_0889c408`).
 - **The briefing hub** (`CBriefingMngr`, update `FUN_08892c1c`) is Story Mode's
@@ -80,8 +83,10 @@ The kinds of step:
 - **CEventScriptField menus.** Op 0x1F / 0x20's menu numbers are screens: 10 the
   hub ("This is the Main Menu"), 0x14 the Lesson card screen, 0x1E-0x23 OKE
   Configuration and its parts (0x21 the chip editor, whose keys are chip ids:
-  `fight`, `button_detect`, `turn`), 0x32 Battle, 0x34 Mission, 0x46 and 0x5A
-  others the lessons use. A script hidden on a screen plays when the screen opens.
+  `fight`, `button_detect`, `turn`), 0x28-0x2A Team Formation (top, team cards,
+  members), 0x32 Battle, 0x33 Test Program, 0x34 Mission, 0x35 Battle Arena, 0x3C
+  Shop, 0x46 the System Menu, 0x50 the replay camera, 0x5A the chip editor's sample
+  programs. A script hidden on a screen plays when the screen opens.
 - **Lessons** (`CLectureFlow` `FUN_0893554c`, steps 2-44, `adv/tutorial_a`-`m.chs`,
   one file a day). They are interactive tutorials across the screens: the day's
   first script is hidden on the hub and points at Lesson; each script hides the next
@@ -94,6 +99,30 @@ The kinds of step:
   The lesson states (op 0x10 flag 0x10000000, nibbles at `+0x88`) and the cleared
   flags (`+0xBC`) say which cards are offered; finishing a day sets the step-done
   word (`FUN_08934480`).
+- **The lesson cards** (`CLectureCredit`, `FUN_08934024` .. `FUN_08934748`): 49
+  records of 0x24 bytes at `0x08c80f00`: `+0` the lesson number (2-50), `+4` the
+  title ("OKE Overview"), `+8` the bits a done card has (1 for all), `+0xC` a battle,
+  `+0x10` the state byte (filled in as read), `+0x14` the script file, `+0x18` the
+  first script, `+0x1C` the last (`tutorialNN_succeed` for a battle), `+0x20` the
+  file set (`lectureNN_adv`). Lesson number n is card `0x08c7d190[n - 1]`. Op 0x10
+  flag 0x10000000 sets (5) or ORs (6) the card's offered word with the value's high
+  nibble and its state with the low one; with value 1 and the card now done, the
+  player shows "Completed Lesson: %s" (`FUN_088e44bc`). The op 0x12 test
+  (`FUN_088e41e4`) reads slot n - 1 directly. Every script's end calls ReportEnd: the
+  card whose last script it is ends (mode `+0x18C` 0, lesson `+0x190` -1), and
+  when every card of the day's file is done (`FUN_089348f0`, a switch by step that
+  is the same as "the cards of the step's script file") the step is done.
+- **The Lesson card screen** (`CLectureMngr`, Initialize `FUN_08936d50`, input
+  `FUN_0893834c`, draw `FUN_08938d80`): the listed cards two to a row, the right two
+  columns of the screen (x = 480 - 2 x 162 + 162 column, y = 0x88 - 51/2 + 51 row
+  from the middle row); `lc_wnd_b` / `lc_wnd_l` (done), the title at (4, 6) and the
+  lesson icon `lc_ico_1` / `lc_ico_2` at (118, 25); the cursor `lc_cur` (0x9F x 0x30)
+  moves a row either side of the middle before the rows slide (0.3 s); help 0x18.
+  Circle starts the card (asking 0x1B "Start over?" or 0x19 when a lesson is taken):
+  mode 2 the first time, 1 a review (the player's local 10, which skips the state
+  ops), the hidden scripts emptied, the card's first script played on the screen;
+  square asks 0x1C and stops the lesson taken; cross leaves. On a mission step the
+  mission is kept at `+0x2B30` while a lesson is taken and put back after.
 
 ## Scene scripts (`.chs`)
 
@@ -215,7 +244,7 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Story Data | Kind `S`: `ULJM05698S/<NAME>.CHE`, the version, the shared block and the story block, 0x4AF26 bytes; the SFO's title "Story Data" and the step's progress title; icon `icon0_scenario.png` | |
 | Continue | Story Data or Battle Data, the kind's files, then the story resumes on its saved step (`FUN_088d3d80` mode 3, `CTutorialFlow` type 2): a scene or card, or the briefing for a lesson or mission step | Plain menus (see screens.md, "Save data") |
 | The clear data | After the ending: Story Mode completed in the system data, step 0x53, mission 11's briefing and battle 0x30, then "Save cleared data?" (string 0x39) | |
-| The ending | | A black screen naming the step; circle goes on |
+| The ending | `movie/ending.pmf` from the disc (81.5 s, the staff credits), decoded and shown as the opening movie is (`movie.c`), after the music and voice stop; only Start skips it | |
 
 ### 2. The scene player
 
@@ -227,13 +256,15 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Scripts | Read from the disc (`CEventScriptAnalysis`: header, Seek by name, words and the string pool); every command with the player's argument counts; the if-stack | |
 | Backgrounds and portraits | `CEventScriptPicture`: the disc's `adv/bg_*.gim`, `adv/ev*.gim`, `adv/chr/*.gim`; placed left / right / centred on the bottom edge (`FUN_088e0cec`); fades of 5% a frame from black or white (0x4000 / 0x2000), waited for (state 3); hiding, moving, shaking (ops 8, 0x1D) and tint (op 9) | |
 | The message window | Style 1: `parts/bf/sd_wind1.gim` drawn as the game slices it (four rows: the tab with the name, the body; `FUN_088eb690`), the name at (7, 0xAC), up to 4 lines at (7, 0xC3) in colour 8 of the game's table (`0x08c480d0`), the blinking page cursor `parts/bf/sd_page0.gim` at (0x1CE, 0xFC). Style 3: the screen half-darkened and up to 12 lines at (6, 0x1C) in colour 0. Style 2: no window. A `"\\"` line shows the page | |
-| Input | Circle: next page; square: remove the window until a button; L or R held: skip (no fades, waits or pages; "Skipping") | The backlog (triangle, `CEventScriptLinkedLog`) isn't ported; its guide item is left out |
-| The guide | The game's text (strings 0x2A / 0x31 of `0x08c7a6b0`) on the window's last row, at y 0xF9 | Buttons as words ("Square:") instead of the icons |
+| Input | Circle: next page; square: remove the window until a button; L or R held: skip (no fades, waits or pages; "Skipping") | |
+| The backlog | `CEventScriptLinkedLog` (`FUN_088e9134`, `FUN_088e9f68`): each page is logged as it turns, with its speaker, style and voice; up opens the log on the newest entry, up and down step through it, triangle plays the entry's voice again, circle (past the newest) or cross ends it, square removes the window | The game's list grows with the script; the port keeps the last 128 pages |
+| The guide | The game's text (strings 0x29 / 0x2A, 0x2D / 0x2E in the backlog, 0x31 skipping, of `0x08c7a6b0`; the greyed items left out) on the window's last row, at y 0xF9 | Buttons as words ("Square:", shortened when the line is too long) instead of the icons |
 | Waits, notices | Op 0x1C (frames); op 0x21 ("Avispa added.") with its jingle, closed with circle or cross | The notice uses the port's frame (`FUN_088c0ba0` isn't in the export) |
-| Variables (op 0x10) | Set / OR of the current battle mission (table `0x08c7d280`), the parts stock (`0x08c7cab0`), the menu limits (`0x08c7c4c0`, groups as `FUN_0895e1cc`) and the script's ten variables | The lesson states (flag 0x10000000) and the one if (in a lesson) are logged and not taken: part 5 |
+| Variables (op 0x10) | Set / OR of the current battle mission (table `0x08c7d280`), the parts stock (`0x08c7cab0`), the menu limits (`0x08c7c4c0`, groups as `FUN_0895e1cc`), the lesson states (part 5) and the script's ten variables; in a review only the lesson notice and the battle mission | |
+| If (ops 0x12-0x15) | `FUN_088e40d0`: the lesson test, or the script's variables (==, !=, >, >=, <, <=, any bit; local 10 the review flag) | Local 9 (a system value) reads 0 |
 | Hidden scripts (ops 0x1F / 0x20) | Stored on and removed from the menu points of the save (`CEventScriptField`, menu numbers `FUN_088df724`) | |
 | Sound | Effects (op 0x1A) from the story bank (`seset_02adv`, opened with Story Mode); music and voices (part 4) | |
-| Lesson commands (0x23-0x2A) | Read and skipped | Part 5 |
+| Lesson commands (0x23-0x2A) | 0x29 / 0x2A highlight (part 5) | 0x23 / 0x24 (the pointer), 0x25-0x28 (button names) read and skipped |
 
 ### 3. The briefing hub and mission battles
 
@@ -248,8 +279,8 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Mission | The briefing hidden on menu 0x34 plays over the menu with the scene player (`adv/missionNN.chs`), once; then the 16 team cards; then "Start battle?" | The game's mission screen (`CBattleMissionMngr`: its own team window at (0xBE, 0x10) and layout) is the port's team list |
 | The mission battle | `buildBattle` from the record of `0x08c6b110`: stage `+0`, enemy count `+8`, designs `+0xC + 0x40 n` (`preset/mission/oke_mNN_n.bin`), spots `+0xCC + 4 n`, time limit `+0x114`; the chosen team on its spots; the battle and chip interpreter Battle Mode runs | The robots' side of the battle is Battle Mode's stand-in simulation (battle.md) |
 | After the battle | A win on a mission's stage (0x40-0x4A) on a step that isn't a lesson's ends the hub, and the story goes on; a loss or draw goes back to the Battle menu | |
-| System Menu | Saves Story Data (to the file loaded, else `NEWDATA.CHE`) | As in Battle Mode: the port's question in place of `CSystemMngr`'s menu |
-| Lesson | | Lessons come last. On a lesson step, Lesson asks (the port's text) whether to count the lesson as completed; Yes runs all of that day's scripts (`adv/tutorial_X.chs`) for their effects, the items, parts and missions they unlock, and the story goes on |
+| System Menu | Its hidden script (menu 0x46) plays first; saves Story Data (to the file loaded, else `NEWDATA.CHE`) | As in Battle Mode: the port's question in place of `CSystemMngr`'s menu |
+| Lesson | The Lesson card screen (part 5) | |
 
 `--story-step N` also runs the scenes and lesson days before step N for their
 effects, so a mission step starts with its record, its hidden briefing and the
@@ -268,26 +299,44 @@ build/pc-m32/chexa-pc --disc DIR --startup --story-step 48 --battle-result win $
 
 | Part | Real | Stand-in |
 |---|---|---|
-| Scene music | Op 0xB fades out what plays and starts BGM table row N, looping (`FUN_088e3808` → `FUN_0888c648`, `CSound::BGMPlay`; e.g. `scenario01` plays row 28, "Try and Error"); op 0xC stops it; the music stops when a scene ends (`FUN_08b34f44`). The tracks are the disc's `sound/bgm/bgmNN.at3` through the port's music player (screens.md, "Music") | Op 0xC's fade time (0x4000 with milliseconds) is the player's fixed half-second fade |
+| Scene music | Op 0xB fades out what plays over 0.2 s and starts BGM table row N, looping (`FUN_088e3808` → `FUN_0888c648`, `CSound::BGMPlay`; e.g. `scenario01` plays row 28, "Try and Error"); op 0xC fades it out over 0.2 s, or the given milliseconds with flag 0x4000 (`FUN_0888c7cc`); the music stops when a scene ends (`FUN_08b34f44`). The tracks are the disc's `sound/bgm/bgmNN.at3` through the port's music player (screens.md, "Music") | |
 | The hub and battles | The hub plays the menu list (`FUN_0888d2ac`), the mission battles the battle list, as Battle Mode does | |
-| Voices | Op 0xE plays `voice/<who>/<id>.at3` from `voice.dat` (ATRAC3plus, mono, 44.1 kHz) on its own audio channel (`src/game/voice.c`, through the same `sceAtrac` decoder as the music); a new voice, the page turned (op 0xF) or the scene's end stops it; nothing plays while L/R skip | The game's voice player and its volume setting aren't read: voices play at full volume. Replaying a voice from the backlog comes with the backlog |
+| Voices | Op 0xE plays `voice/<who>/<id>.at3` from `voice.dat` (ATRAC3plus, mono, 44.1 kHz) on its own audio channel (`src/game/voice.c`, through the same `sceAtrac` decoder as the music) at its speaker's volume (`FUN_08b37880`: 30 names at `0x08c4d95c`, matched after `voice/`, 0.6 for most and 0.5 for `ben` and `pal`); a new voice, the page turned (op 0xF) or the scene's end stops it; nothing plays while L/R skip; the backlog plays an entry's again | The game's voice player (`CAplSound`'s read thread) is the port's |
 
 `chexa-story-test` also decodes `scenario01`'s first voice and checks it is speech
 (mono, RMS and zero crossings), so a broken decoder path fails the test.
 
 ### 5. Lessons
 
+`src/game/lesson.c`: `CLectureCredit` and the Lesson card screen; the hidden scripts
+of the other screens play through `battle_menu_field` (`battle_menu.c`).
+
 | Part | Real | Stand-in |
 |---|---|---|
-| The day's first script | Hidden on the hub (menu 10) and played over it when the hub opens, with its portraits and text | |
-| Highlights (op 0x29 / 0x2A) | The game's rectangles | Drawn as the port's pulsing cursor frame; the game's highlight object (`CEventScriptWnd` +0x2264) isn't read |
-| Button names, input locks (ops 0x25-0x28, 0x2D / 0x2E) | Read; 0x2D / 0x2E stored in the save | Not drawn or enforced |
-| The Lesson card screen, the lesson scripts on other screens, lesson battles, lesson states | | Not ported. On a lesson step, Lesson asks (the port's text) whether to count the day as completed; Yes runs all the day's scripts at once for their effects (the hub items, parts and missions they unlock) and the story goes on. The lesson-state ops (flag 0x10000000) and the one if (in a lesson) are logged and not taken |
+| The day's first script | Hidden on the hub (menu 10) and played over it when the hub opens | |
+| The Lesson card screen | `CLectureMngr` from the hub's Lesson item: the listed cards (`0x08c80f00`, offered words at `+0xBC`) in table order, done or not (`lc_wnd_b` / `lc_wnd_l`, `lc_ico_1` / `lc_ico_2`, `lc_str_n` / `lc_str_c`), the title, the cursor on the lesson taken or the first card not done, its moves (left / right, up / down with the rows sliding, round past the ends on a fresh press), help 0x18, the Stop Lesson button (string 0x17, the square from `cm_btn_p` by `CKeyPicture`'s rectangle 3) while a lesson is taken, the questions 0x19 / 0x1B / 0x1C, starting and stopping a lesson; its hidden script (menu 0x14) plays when it opens and after a lesson script | The 3D drum: the game draws the cards as quads on a cylinder (rows past two from the middle recede); the port draws the five near rows flat and leaves the far ones out. The game's question box is the port's Yes/No box. The file set (`lectureNN_adv`) isn't opened: the pictures are read from the pack as used |
+| Lesson states | Op 0x10 flag 0x10000000 (`FUN_088e435c`), the "Completed Lesson: %s" notice (`FUN_088e44bc`, string 0x3A), the op 0x12 test, the review flag (local 10) | |
+| Scripts on other screens | Played over the screen as it opens: the System Menu (0x46), Battle (0x32), Test Program (0x33), Battle Arena (0x35), Shop (0x3C), Mission (0x34), OKE Configuration (0x1E), Select OKE Card (0x1F), Hardware (0x20; the CPU, armour and weapon lists as keys 2, 3, 4), Software (0x21) and a chip's settings by chip id, Customize (0x1E key 4), Emblems (0x22), Notes (0x23), Team Formation (0x28 on the top menu, 0x29 the team cards, 0x2A the members) | Not on screens the port lacks or doesn't reach: the replay camera (0x50), the sample programs (0x5A), the hardware keys 10 / 11 |
+| Lesson battles | Battle's script sets the lesson's record (op 0x10 flag 0x80000000); Mission plays its script and builds the battle from records 0-37; after it the record's `_succeed` (a win) or `_fail` script (`+0x3BC` .. `+0x3C8`) plays | |
+| The end of a lesson and a day | ReportEnd on every script's end; the day's last card done ends the briefing and the story goes on (`--story-step` applies earlier days with their states) | |
+| Highlights (op 0x29 / 0x2A) | The game's rectangles | Drawn as the port's pulsing cursor frame |
+| Button names (0x25-0x28), the pointer (0x23 / 0x24) | Read | Not drawn |
+| The input lock (0x2D / 0x2E) | Stored at `+0x2B28` | Not enforced: the game checks it in 17 places (`FUN_0895ea0c`, `FUN_0893c16c` and others, with tables at `0x08c82038` and `0x08c815f8`) to grey out every item but the one a lesson points at |
 
-What a full port needs, in order: the Lesson card screen (`CLectureMngr`, menu
-0x14) with the states at `+0x88` / `+0xBC`; scripts hidden on OKE Configuration, the
-chip editor (by chip id) and Battle played when those open; the input lock of
-`+0x2B28`; the lesson battles with `_succeed` / `_fail`; then the step-done word.
+`chexa-story-test` checks the card table (lesson numbers to cards, titles), a card
+offered and done through the state op with its notice and tests, and day one ending
+with its last card.
+
+`--auto-scenes` skips every script on its own (pages and notices too), for scripted
+runs through the lessons:
+
+```sh
+L="--press 60 circle --press 120 circle --press 200 cross --press 240 down --press 280 circle"
+L="$L --press 360 cross --press 400 up --press 440 circle --press 520 circle --press 600 cross"
+L="$L --press 640 down --press 680 circle --press 780 down --press 820 circle --press 920 circle"
+build/pc-m32/chexa-pc --disc DIR --startup --skip-movie --story-step 2 --auto-scenes $L \
+    --press 960 circle --battle-result win --press 1520 circle --frames 1600   # lessons 2 and 3
+```
 
 `chexa-story-test` (CTest `story_steps`) reads every step's script from the disc to
 its end with the player's argument table (85 steps, 23,732 commands), checks the
