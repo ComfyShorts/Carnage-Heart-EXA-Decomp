@@ -78,8 +78,24 @@ typedef struct SceCtrlData {
     uint8_t lx, ly;
     uint8_t reserved[6];
 } SceCtrlData;
-void psp_ctrl_key_event(int keycode, bool down);         /* from the SDL event pump */
+/* input.c: the keyboard and gamepads as the PSP's pad (bindings in controls.c). */
+void psp_ctrl_key_event(int scancode, bool down);        /* from the SDL event pump */
+void psp_ctrl_release_all(void);                          /* the window lost focus */
+void psp_ctrl_pad_added(uint32_t id);                     /* SDL_EVENT_GAMEPAD_ADDED */
+void psp_ctrl_pad_removed(uint32_t id);                   /* SDL_EVENT_GAMEPAD_REMOVED */
+void psp_ctrl_pads_poll(void);                            /* once per pump */
+void psp_ctrl_pads_close(void);
+int psp_ctrl_pad_count(void);
 void psp_ctrl_script_press(uint32_t frame, uint32_t buttons); /* press on a displayed frame */
+struct Controls;
+const struct Controls *psp_controls(void); /* the bindings in use (defaults + controls.ini) */
+const char *psp_controls_status(void);     /* where they came from */
+void psp_controls_log(void);               /* the short list, logged at start-up */
+/* The game's help window text (ui_help_draw, game thread), and on the main thread the
+ * keys for the buttons it names; true when that changed. */
+void psp_help_init(void);
+void psp_help_text(const char *text);
+bool psp_help_hint(char *buf, size_t size);
 uint32_t psp_display_frame_count(void);
 
 #define PSP_SCREEN_W 480

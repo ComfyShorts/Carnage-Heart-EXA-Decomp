@@ -42,6 +42,9 @@
  *   --auto-scenes     for scripted runs: the story's scripts skip through on their own
  *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)
  *   --scale N         window scale (default 2, i.e. 960x544)
+ *   --controls        print the keyboard and gamepad controls and exit (docs/controls.md)
+ *   --write-controls  write the controls config file with the current bindings, to edit
+ *                     (refuses to overwrite one), and exit
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
  *                     check the logging (debug only)
  */
@@ -52,6 +55,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include "controls.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 #include "ge.h"
@@ -105,6 +109,48 @@ static int is_implemented(const PspImport *imp)
     for (size_t i = 0; i < SDL_arraysize(k_implemented_funcs); i++)
         if (!strcmp(imp->name, k_implemented_funcs[i]))
             return 1;
+    return 0;
+}
+
+/* --controls: the table, and where the bindings came from. */
+static int print_controls(void)
+{
+    static char buf[8192];
+    controls_describe(psp_controls(), buf, sizeof buf);
+    printf("Controls (%s):\n%s", psp_controls_status(), buf);
+    const char *path = controls_config_path();
+    printf("Config file: %s (chexa-pc --write-controls writes one to edit)\n", path ? path : "none (no config folder)");
+    return 0;
+}
+
+/* --write-controls: the current bindings as a commented config file. */
+static int write_controls(void)
+{
+    const char *path = controls_config_path();
+    if (!path) {
+        fprintf(stderr, "no config folder found (set CHEXA_CONTROLS to a file path)\n");
+        return 1;
+    }
+    if (SDL_GetPathInfo(path, NULL)) {
+        fprintf(stderr, "%s already exists: edit it, or delete it to start again\n", path);
+        return 1;
+    }
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%s", path);
+    char *slash = strrchr(dir, '/'), *bslash = strrchr(dir, '\\');
+    if (bslash && (!slash || bslash > slash))
+        slash = bslash;
+    if (slash) {
+        *slash = 0;
+        SDL_CreateDirectory(dir);
+    }
+    static char buf[8192];
+    size_t n = controls_write(psp_controls(), buf, sizeof buf);
+    if (!SDL_SaveFile(path, buf, n)) {
+        fprintf(stderr, "can't write %s: %s\n", path, SDL_GetError());
+        return 1;
+    }
+    printf("wrote %s\n", path);
     return 0;
 }
 
@@ -220,6 +266,10 @@ int main(int argc, char **argv)
             g_game_elf_path = argv[++i];
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc)
             scale = (int)strtol(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--controls"))
+            return print_controls();
+        else if (!strcmp(argv[i], "--write-controls"))
+            return write_controls();
         else if (!strcmp(argv[i], "--call-all-stubs"))
             call_all = 1;
         else if (!strcmp(argv[i], "--startup"))
@@ -237,7 +287,7 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--story-step N] [--battle-result R] [--auto-scenes] [--perf] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
-                    "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
+                    "[--elf FILE] [--gmo FILE] [--controls] [--write-controls] [--call-all-stubs]\n",
                     argv[0]);
             return 2;
         }

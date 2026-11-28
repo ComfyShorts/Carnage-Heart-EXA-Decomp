@@ -65,6 +65,7 @@ PSP's 60 frames a second; see "Performance" in `docs/graphics.md`.
 tools/setup_pc_deps.sh                         # no root: multilib sysroot + 32-bit SDL3 in .deps/
 cmake --preset m32 && cmake --build --preset m32   # optimized (RelWithDebInfo); m32-debug for -O0
 build/pc-m32/chexa-pc --disc /path/to/disc     # also --ms DIR, --saves DIR, --frames N, --scale N
+build/pc-m32/chexa-pc --controls               # keyboard and gamepad controls (docs/controls.md)
 build/pc-m32/chexa-pc --disc /path/to/disc --startup --perf   # log frame time and where it goes
 build/pc-m32/chexa-pc --disc /path/to/disc --startup   # run the game's start-up path (--trace: log every import call)
 build/pc-m32/chexa-pc --disc /path/to/disc --startup --gu-trace 3 --screenshot   # sceGu calls of 3 frames, first frame to orig/
