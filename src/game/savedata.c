@@ -20,6 +20,7 @@
 
 #include "gamedata.h"
 #include "packfile.h"
+#include "pgchip_edit.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 
@@ -79,6 +80,69 @@ static void new_team_card(uint8_t *t)
     put_half(t + 0x324, 1);
 }
 
+/* ---- the chip editor's block ---- */
+
+#define SOFT_SCENE 0x41370
+#define SOFT_PAGE 0x1B0
+#define SOFT_CURSORS 0x1B4
+
+/* FUN_0889c724, without the macros: each type's default chip, page 4. */
+static void new_software_scene(uint8_t *s)
+{
+    for (int t = 0; t < PGCHIP_TYPE_END; t++) {
+        PgChipCommand c;
+        pgchip_default(&c, t);
+        memcpy(s + 8 * t, c.b, 8);
+    }
+    put_word(s + SOFT_PAGE, 4);
+    for (int i = 0; i < CHIP_PAGES; i++)
+        put_word(s + SOFT_CURSORS + 4 * i, 0);
+}
+
+const PgChipCommand *savedata_chip_default(int type)
+{
+    static PgChipCommand fresh;
+    if (!pgchip_valid_type(type))
+        type = 0;
+    const PgChipCommand *c = (const PgChipCommand *)((uint8_t *)&g_save.db + SOFT_SCENE + 8 * type);
+    if (pgchip_type(c) == type && type)
+        return c;
+    pgchip_default(&fresh, type); /* a save whose block was never built */
+    return &fresh;
+}
+
+void savedata_set_chip_default(const PgChipCommand *chip)
+{
+    int t = pgchip_type(chip);
+    if (pgchip_valid_type(t))
+        memcpy((uint8_t *)&g_save.db + SOFT_SCENE + 8 * t, chip->b, 8);
+}
+
+int savedata_chip_page(void)
+{
+    int p = (int)get_word((uint8_t *)&g_save.db + SOFT_SCENE + SOFT_PAGE);
+    return p >= 0 && p < CHIP_PAGES ? p : 4;
+}
+
+void savedata_set_chip_page(int page)
+{
+    if (page >= 0 && page < CHIP_PAGES)
+        put_word((uint8_t *)&g_save.db + SOFT_SCENE + SOFT_PAGE, (uint32_t)page);
+}
+
+int savedata_chip_page_cursor(int page)
+{
+    return page >= 0 && page < CHIP_PAGES
+               ? (int)get_word((uint8_t *)&g_save.db + SOFT_SCENE + SOFT_CURSORS + 4 * page)
+               : 0;
+}
+
+void savedata_set_chip_page_cursor(int page, int index)
+{
+    if (page >= 0 && page < CHIP_PAGES)
+        put_word((uint8_t *)&g_save.db + SOFT_SCENE + SOFT_CURSORS + 4 * page, (uint32_t)index);
+}
+
 void savedata_new_game(void)
 {
     GameDataBase *db = &g_save.db;
@@ -92,6 +156,7 @@ void savedata_new_game(void)
         put_word(b + 0x40C80 + TEAM_CARD_SIZE * i, 1);
     }
     put_word(b + 0x40C40 + 0x6C0, 0x19);
+    new_software_scene(b + SOFT_SCENE);
     put_word(b + 0x44EE8, 1);
     put_word(b + 0x45068, 1);
     put_word(b + 0x45204, 1);

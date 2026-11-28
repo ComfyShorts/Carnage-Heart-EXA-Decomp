@@ -477,17 +477,51 @@ Parameter enums named in asserts (value meanings not yet mapped): `ACTION`, `AIM
 `ACTION_CATEGORY` (the "cancel type"), `CARTRIDGE`, `CHANNEL_NUMBER`, `COUNTER_TYPE`,
 `WEAPON_NUMBER_TYPE`, and `DIR_*` for directions.
 
-## Editor side (for reference)
+## Editing
+
+The editor's rules, as `src/game/pgchip_edit.c` ports them (the screen is
+`src/game/oke_soft.c`, see `docs/screens.md` "Software Setup").
 
 - `CPgChipArea` (`pgchipdata.cpp`): a resizable `width × height` chip grid on the heap
   (8 bytes per chip). Width at +0x08, height at +0x0C, a start position at +0x10.
   Functions: resize `0x089F7AD4`, `GetIndex(x,y)` `0x089F7C9C`, `GetPosX` `0x089F7D0C`,
   `GetPosY` `0x089F7D98`, in-bounds test `0x089F7E24`, `GetDirPosition` `0x089F7E5C`.
+- **Directions** 0-7 are up, up-right, right, down-right, down, down-left, left, up-left
+  (steps at `0x08C1C3F8`). All eight can be exits (`FUN_089f7a20`). The next free
+  direction (`FUN_08a1ec84`) is searched from the current one + step, skipping the
+  chip's other exit.
+- **Incoming** (`FUN_089f77f8`): the neighbours whose exit (or a judge's branch) points
+  into the cell, plus one for the start column's top cell, entered from above.
+- **Returns** (`FUN_08a1dff4`): an empty cell with something pointing in gets a Return
+  (`35 40 00 00 00 00 00 00`, bit 7 set by the next rule); a Return nothing points into
+  becomes blank (`00 40 00 ...`).
+- **Bit 6** (`FUN_08a1e2ac`): set on a real chip with something pointing in.
+- **Errors** (`GetCursorPgChipErrorType` `FUN_08a1e710`): -1 for blank cells and
+  Returns; 2 for a Call Sub-Program in the main area when the CPU lacks either
+  sub-area (0x28F); 0 for a chip nothing points into (0x28D); otherwise -1.
+- **Bit 7** (`FUN_08a1e578`): set on every cell whose error is -1 or 0, cleared
+  otherwise, so only a misplaced chip is switched off.
+- **After an edit at a cell** (`FUN_08a194c4` and the others): Returns and bit 6 for
+  the cell and its 8 neighbours (`FUN_08a1e230`, `FUN_08a1e4fc`), bit 7 for the cell.
+  A placed chip whose exit isn't a direction gets the first free one; a judge's branch
+  likewise.
+- **NormalizeArea** (`FUN_08a190dc`): a start off the area goes to column 0, then every
+  cell gets the three updates. The editor runs it on opening. On the 205 shipped
+  records it changes only bit 7 on blank cells and Returns in 66 programs.
+- **ClearArea** (`FUN_08a18ce4`, Delete All): every cell blank; the normalize then puts
+  a Return on each start.
+- **Default chips** (`FUN_089fcd54`, per-type values at `0x08C1D0B0`): byte 1 is 0x40
+  (exit up, branch down), both status bits clear, the range bytes `00 2D 32 00`, the
+  rest per type. A new game copies one per type into `CSoftwareSceneDataBase`
+  (`+0x41370` in the shared block, `FUN_0889c724`); placing a chip copies from there
+  and writes the finished chip back (`FUN_08a1cbd8`), so the next one of that type
+  starts the same. After them: `+0x1B0` the chip list's page (4, all chips), `+0x1B4`
+  its cursor on each of the 5 pages, `+0x1C8` eight macros of 0x72C bytes
+  (`PGCHIP::tagMACRO`, `GetMacro`, not ported).
 - `CPgChipWnd`, `CPgChipSelectWnd`, `CPgChipInfoWnd`, `CPgChipRefWnd`, `CSoftDesignMngr`
   and `CSoftDesignFlow` form the program editor UI ("software design"). Undo uses
-  `CPgChipAreaBufferBackup`. `CPgChipDeformArea` / `CPgChipDeformElementSet` convert
-  between a "deformed" layout and normal grid positions; their purpose isn't understood.
-- `CSoftwareSceneDataBase::GetMacro` returns `PGCHIP::tagMACRO` (chip macros/templates).
+  `CPgChipAreaBufferBackup` (one step). `CPgChipDeformArea` / `CPgChipDeformElementSet`
+  turn and flip a block while it's moved or pasted (not ported).
 
 ## Validation against real data
 

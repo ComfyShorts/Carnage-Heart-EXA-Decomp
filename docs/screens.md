@@ -138,7 +138,7 @@ Menu writes it to the file.
 | Select OKE Card | `FUN_089e6ba8`, `COkeCardSelectMngr` | The 32 cards; circle makes the card current ("Currently editing OKE Card." 0x124 / "This OKE Card is blank." 0x125), installed cards refused (0x6F). Square asks "Delete this design?" (0x66) and clears the card (`FUN_089eea80`), triangle copies: choose where (0x65), "Copy OKE Card here?" (0x67 / 0x68 over a used card) | A deleted card also leaves the teams it was on (the port's choice); the list layout; the card labels (number and name, the body's name without one) |
 | Hardware | `CHardDesignMngr` modes 1 (`FUN_088f6748` / `FUN_088f7b00`), menu `FUN_088f9694` | Body, CPU, Armor Thickness, Additional Armor, Weapon 1-5 (as many as the body's `+0x18`), Energy, Engine Output, Option 1-4 (the body's `+0x14`); text `CHardString` 0xCF + item, help 2 / 3 / 0xF3 / 0xF4 / 4 / 0xED / 0xEE / 6. On a blank card only Body can be chosen (`FUN_08ad8944`; 0xF6 for the rest) | The window layout |
 | The parts lists | `CEquipmentSelectWnd` `FUN_088da8b8`: `FUN_088d95f8` bodies, `FUN_088d976c` CPUs, `FUN_088d98cc` / `FUN_088d9a2c` armour, `FUN_088d9b8c` weapons, `FUN_088d9df0` options | The parts the save owns (stock 2, see Shop below): a new Battle Mode game (`FUN_08918d5c`) owns everything but bodies 14 and 33, and the Shop sells the rest. Bodies in the order at `0x08be8a80`; weapons by category, "No Weapon" when the slot may be empty, a weapon only where the body's slot table (`0x08c15c88`, `FUN_089eda88`) takes its type. The help line is the part's `CHardString` text (bodies 0xB+, CPUs 0x30+, weapons 0x4D+, options 0x8A+, armour 0x95, additional armour 0x96+). Choosing: a body takes its default loadout (`FUN_089f3a14`) and keeps paint, colours, CPU, armour and energy (`FUN_088f4df4`); a CPU resizes the program (`FUN_088f5020` → `FUN_089eeb44`: main 4 / 6 / 10 / 15 by the CPU's class at `0x08bd5f68`, sub-programs 7 for class 3; chips inside the new size kept, new ones blank as `FUN_089fcddc`); a weapon of the same category keeps its ammo up to the slot's capacity, another gets 100 rounds (types 1-8), 30 (type 9) or the slot's amount (`FUN_088da16c`, `FUN_089edb24`). On a blank card the chosen body starts a new design (status 1, CPU TP-16, a 4 x 4 program) | The info window's numbers are a choice of the game's stat labels (0x31-0x51); the ammo count window the game opens after some weapons (mode `+0x294` = 1, `FUN_089e15ac`) isn't ported; where the start chip goes when a program shrinks is the port's (kept if inside, else the corner) |
-| Software | `CSoftDesignMngr` / `CPgChipWnd` | The main program and the sub-programs (L/R), chip names from `PGCHIP`'s table (`0x08c85100`), the chip tiles `parts/soft/sd_chip0` (faded for chips switched off) | View only: Edit Chips and the rest of the Software Setup menu aren't ported. The tile for each kind (`FUN_089fd528`: system, judge, action, other, Return) is a guess by order; the chip icons (`sd_cicn0`), the exits' arrows and the parameters (shown as bytes) aren't drawn |
+| Software | `CSoftDesignMngr` (`src/game/oke_soft.c`), the rules in `src/game/pgchip_edit.c` | Software Setup: Edit Chips, Undo, Select Area, Move Start Location, Change Counter Name, Copy from Card, Delete All, with the game's checks; the edited program goes back into the card. See "Software Setup" below | Parameter editing, drag / pull, flipping and turning a pasted block, macros, the test program and example solutions; the windows' frames and places. See "Software Setup" below |
 | Energy and Engine Output | `CHardDesignMngr` modes 0x10 / 0x11 (`FUN_088f4018` / `FUN_088f4170`), `CTuneWnd` (`FUN_08adf134`, input `FUN_08adf454`, draw `FUN_08adf624`) | 50-150 %, left / right one step (repeating, a fresh press past an end wraps), written into the card at once (`+0x29C` / `+0x2A0`) so the weight follows; circle keeps, cross puts the opening value back. Window `bf_twnd2` | The cursor style |
 | Name OKE | mode 9 (`FUN_088bafa8`), the keyboard through `CUtility` (`FUN_08b2552c`) | Starts from the card's name or its body's (`FUN_089eebc0`), titled "Name Input" (`0x08be31a4`); OK writes the name into the card | The keyboard is the PSP's own (system software, not in the game): `src/game/osk.c` is a stand-in, see "On-screen keyboard" |
 | OKE Customization | modes 2-6 (`FUN_088ba534`), sub-menu `FUN_088b9edc` (text 0x106 + i, help 0x10A + i, each item on its menu-limit word) | Design (`CPaintWnd`, 0-3, hardware `+0x244`, "Paint Pattern"), Main / Accent Color (`CColorEditWnd` `FUN_088a1128`-`FUN_088a2aa8`: R, G, B 0-100, `+0x248` / `+0x24C` as R \| G<<8 \| B<<16; triangle a random colour, sound 0x11), Polish (`CColorLusterWnd` `FUN_088a3d40`, 0-4, `+0x250`). Each written into the card as it changes; cross puts the opening value back. The game's parts and help strings | The game previews on the OKE's 3D model; the port shows the card window instead. The help line 0x10B is longer than the help window (the game's wrapping isn't known). The cursor style |
@@ -184,6 +184,55 @@ Screenshots in `orig/` (not committed): `oke_card.png`, `oke_energy.png`,
 `oke_polish.png`, `oke_emblem*.png` (with `_samples`, `_user`, `_range*`), `oke_card_emblem.png` (an edit on the card),
 `oke_notes*.png`, `oke_privacy*.png`. Saving through the System Menu and loading
 again keeps the changes (checked with Privacy Level).
+
+#### Software Setup
+
+`src/game/oke_soft.c` (the screen) and `src/game/pgchip_edit.c` (the rules, no drawing),
+from `CSoftDesignMngr` with `CPgChipWnd`, `CPgChipSelectWnd` and `CPgChipConnectWnd`.
+Text is `CSoftString` (`0x08c8aba0`, 0x2A3 strings, `FUN_08aa14f8`), the chip names
+`PGCHIP`'s (`0x08c85100`), pictures `parts/soft/` by `CSoftPicture`'s name table
+(`0x08c8aad8`). All of it is read from your EBOOT and disc when the screen opens.
+
+The editor works on a copy of the card's software block, normalized as the game does
+on opening (`NormalizeArea`); leaving Software Setup (cross on its menu) normalizes it
+again and writes it into the save's card, from where a battle copies it and the System
+Menu saves it. `chexa-chip-edit-test` loads a design, edits it, saves Battle Data,
+reloads it and checks that nothing changed, then fights a program written with the
+editor's functions and checks the interpreter runs exactly its chips.
+
+| Part | Game | Real | Stand-in |
+|---|---|---|---|
+| Menu | `setupTopMenu` `FUN_08a79b8c`, `UpdateModeTopMenu` `FUN_08a851f4` | The ten items (`CSoftString` 0x12-0x1B, help 0x231-0x23A), each on its menu-limit word 0x22 + item, so Battle Mode hides Example Solution; cross leaves | The menu's place (the OKE Configuration menu's); the exit's test-team checks (`FUN_08a816cc` / `FUN_08a817d4`) aren't made |
+| The chip areas | `CPgChipWnd` (`Create` `FUN_08a25f84`), tiles `FUN_08a0c008`, faces `FUN_08a13430`, arrows `FUN_08a13468` | The three areas side by side (main, then sub 1 over sub 2; cells 0x40 apart by 0x10, a 0x20 margin), the cursor crossing between them, `sd_chip0` tiles by kind (table `0x08c1ea30`: the faded row for chips switched off, the Return and blank tiles), the exit arrows from `sd_cara0` (records `0x08c1e91e`, picked by processing mode and direction `0x08c1f228`, the branch's row and the faded column), `START` (`sd_start`) over the start, the chip's main glyph from `sd_cicn0` (glyph records `0x08c1df90`, the twelve placements of `0x08c1ea78`, the per-type tables of the face routines), counter names on counter chips | Drawn at half size in a scrolling view; the area panels and info window are plain boxes. The faces' numbers and small marks (the parameter values) aren't drawn, only each type's main glyph |
+| Edit Chips | mode 3, `FUN_08a7d644` | Circle on an empty cell or a Return opens the chip list, on a chip its exit step; R / L turn the exit / branch to the next free direction (`FUN_08a197b8` / `FUN_08a1a008`); triangle starts selecting chips one by one (mode 6: triangle toggles, square deletes, circle opens Move / Copy / Delete); the help shows the chip's line (0x257 + type); the info box its name and error (0x28D-0x291) | Circle on a chip skips its parameter sub-menu (`0x08c2dcfc`: 70 kinds of sub-menu), so placed chips keep the defaults or the last ones used; square (drag / pull, mode 0xD) isn't ported |
+| The chip list | `CPgChipSelectWnd` `FUN_08a16bc8`, the page rule `FUN_08a155f8` | Five pages (`sd_tag0a`-`4a`), L / R switch, a page holds the types of its kind and page 4 all of them (all unlocked outside Story Mode), page and cursor per page kept in the save (`CSoftwareSceneDataBase` at `+0x41370`: `+0x1B0`, `+0x1B4`), the type's help line | The window's frame (CDesignPicture 0xCF-0xD3) and layout |
+| Placing and wiring | `FUN_08a194c4`, the exit step mode 0x1A `FUN_08a85770` | The chip is copied from the save's remembered chip of that type (`+0x41370`, one per type, written when a placement finishes, `FUN_08a1cbd8`; built by `FUN_0889c724` in a new game, computed defaults `FUN_089fcd54` when the block is blank); the d-pad sets the exit (two keys a diagonal), L / R turn it, circle finishes, cross goes on to the branch for judges; Returns appear and go, bits 6 / 7 follow | The arrows' animation |
+| Undo | `FUN_08a18c50`, `CPgChipAreaBufferBackup` | One step back | |
+| Select Area | mode 4, menu mode 0x11 | A rectangle in one area, then Move, Copy (pasted with the cursor at its top-left; cells off the area are dropped, the block's blanks leave what's there) or Delete | Save Macro, and flipping / turning the block while pasting |
+| Move Start Location | mode 0xF | Left / right move the start along the top row, L / R pick the area | |
+| Change Counter Name | mode 0x1B | The eight counters (0x12A-0x131, default names `CNT_A`.. `0x08c850b8`), the keyboard titled 0x17D, A-Z and 0-9 only (0x189), up to 5 characters | The keyboard is the port's (see "On-screen keyboard") |
+| Copy from Card | mode 0x20 | The 32 cards with the card window; refuses the card being edited (0x186), blank cards (0x184) and private installed ones (0x185); asks 0x182, or 0x183 when the CPU is smaller and chips will be cut | Only "From Another OKE Card": copying from another save file (0x21) isn't ported |
+| Delete All | mode 0x2C, `ClearArea` `FUN_08a18ce4` | Asks 0x181, then every cell blank and a Return on each start | |
+| Start Test Program, Paste Macro, Example Solution | modes 0x2D, 0x1F, 0x27 | | Not ported: the first two play the error sound, the third says 0x2A2 (Battle Mode has none) |
+
+The rules (`pgchip_edit.c`, written up in `docs/program-format.md` "Editing") were
+checked on every shipped design: normalizing the 307 programs of the 205 preset
+records changes nothing except bit 7 on the blank cells and Returns of 66 programs,
+which were shipped without it.
+
+```sh
+S="--press 250 down --press 258 down --press 266 circle"   # top menu -> Software
+build/pc-m32/chexa-pc --disc DIR --saves COPY_OF_teamtest --startup $C $O $S \
+    --press 290 circle --press 300 down --press 308 right --press 316 circle --press 326 r \
+    --press 336 right --press 346 circle --press 356 left --shot 380 orig/chipedit_3_connect.png --frames 385
+```
+
+Screenshots in `orig/` (not committed): `chipedit_1_menu.png`, `chipedit_1_grid.png`,
+`chipedit_2_list.png` (page 1, judges), `chipedit_3_connect.png` (a judge placed, its
+branch being set), `chipedit_3_placed.png`, `chipedit_4_back.png`,
+`chipedit_5_area.png` (Select Area's menu), `chipedit_5_paste.png`,
+`chipedit_6_copy.png`. There is no screenshot of the real game to compare with, so
+the layout is the port's.
 
 #### On-screen keyboard
 
@@ -584,7 +633,7 @@ Q/W = L/R, Space = start, Right Shift = select.
 - The phases after the menus: 0xC (new story game), 7 (the player-name keyboard),
   6 for network play, 10 (attract after 65 s idle).
 - Shift-JIS text is drawn (see "Two-byte text"); the game's wrapping of long help lines.
-- OKE Configuration: chip editing, Snapshot, the note templates, and the 3D model
+- OKE Configuration: Software Setup's parameter sub-menus, drag / pull, macros and test program, Snapshot, the note templates, and the 3D model
   beside the menus.
 - Voices and the ATRAC3plus effects (the decoder is in, their players aren't); the BGM
   Player screen; the remaining menu effects.

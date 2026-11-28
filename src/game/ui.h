@@ -86,7 +86,7 @@ float ui_pulse(float t);
 
 /* ---- CTopMenuWnd ---- */
 
-#define UI_MENU_MAX 8
+#define UI_MENU_MAX 12
 
 typedef struct UiMenuItem {
     const char *text;
