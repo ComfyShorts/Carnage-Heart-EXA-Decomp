@@ -1,4 +1,4 @@
-# Carnage Heart EXA Decomp
+<p align="center"># Carnage Heart EXA Decomp</p>
 
 <p align="center"><img width="700" height="333" alt="carnage_heart_exa" src="https://github.com/user-attachments/assets/b6ef8052-17fa-4567-b026-a6b97a09c1db" /></p>
 
