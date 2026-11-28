@@ -239,6 +239,8 @@ static void parse(Ctx *c, const uint8_t *p, const uint8_t *end, int parent_type)
 
 Gmo *gmo_load(const char *path)
 {
+    if (!path)
+        return NULL;
     int32_t size = fileio_file_size(path);
     if (size < 32) {
         SDL_Log("[gmo] %s not found", path);

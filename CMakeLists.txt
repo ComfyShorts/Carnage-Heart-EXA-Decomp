@@ -151,7 +151,13 @@ set_tests_properties(movie_skip PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscre
                      PASS_REGULAR_EXPRESSION "movie/che_op.pmf skipped after [0-9]+ pictures")
 set_tests_properties(startup_path PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;SDL_AUDIO_DRIVER=dummy"
                      PASS_REGULAR_EXPRESSION "the game called sceKernelExitGame")
-set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts story_steps chip_edit_roundtrip sound_effects music_decode movie_decode startup_path movie_skip PROPERTIES SKIP_RETURN_CODE 77)
+# --map on its own: the terrain without a model, then the normal exit (it used to crash
+# on the missing model path).
+add_test(NAME map_view COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup --skip-movie --map 14 --frames 20
+         --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/map)
+set_tests_properties(map_view PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;SDL_AUDIO_DRIVER=dummy"
+                     PASS_REGULAR_EXPRESSION "map 14: 33x33 grid.*the game called sceKernelExitGame")
+set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts story_steps chip_edit_roundtrip sound_effects music_decode movie_decode startup_path movie_skip map_view PROPERTIES SKIP_RETURN_CODE 77)
 
 # SDL loads libX11 and friends at runtime with dlopen. With the user-local sysroot those
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not

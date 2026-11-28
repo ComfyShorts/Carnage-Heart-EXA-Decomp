@@ -103,6 +103,8 @@ void modelview_start(void)
         memcpy(g_mv.bounds, b, sizeof b);
         goto done;
     }
+    if (!g_modelview_path) /* --map on its own: the terrain without a model */
+        goto done;
     g_mv.model = gmo_load(g_modelview_path);
     if (g_modelview_textures) {
         g_mv.tex = gmo_load(g_modelview_textures);
