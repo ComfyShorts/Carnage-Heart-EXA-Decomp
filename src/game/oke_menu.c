@@ -31,6 +31,7 @@
 #include "oke_emblem.h"
 #include "oke_notes.h"
 #include "oke_parts.h"
+#include "oke_soft.h"
 #include "osk.h"
 #include "pad.h"
 #include "sound.h"
@@ -74,7 +75,7 @@ typedef enum {
     MODE_ASK,        /* Delete this design? / Copy OKE Card here? */
     MODE_HARDWARE,   /* CHardDesignMngr mode 1: the categories */
     MODE_PARTS,      /* modes 2-0xE: one category's parts */
-    MODE_SOFTWARE,   /* CSoftDesignMngr: the program grid */
+    MODE_SOFTWARE,   /* CSoftDesignMngr: Software Setup (oke_soft.c) */
     MODE_SLIDER,     /* CHardDesignMngr modes 0x10 / 0x11: Energy Rate, Engine Output */
     MODE_NAME,       /* CDesignMngr mode 9: Name Input, the on-screen keyboard */
     MODE_PRIVACY,    /* mode 0xB: CSecretLevelWnd */
@@ -94,7 +95,6 @@ static struct {
     UiAsk ask;
     int hw_items[HWI_COUNT], hw_count, hw_cursor;
     int parts[PART_LIST_MAX], part_count, part_cursor, part_scroll;
-    int program, chip_x, chip_y;
     int slider_item, slider_value, slider_keep; /* the tuning slider (CTuneWnd's +0xB4 / +0xB8) */
     int privacy;     /* CSecretLevelWnd +0xB0: 0 Public, 1 Private */
     const char *message;
@@ -106,16 +106,6 @@ static const char *dstr(int id)
     return design_string(id, 1);
 }
 
-static const char *chip_name(int type)
-{
-    if (type < 0 || type >= PGCHIP_TYPE_END)
-        return NULL;
-    uint32_t p = gamedata_word(T_CHIP_NAME + 4u * (uint32_t)type, 0);
-    if (p >= 0x08804000u)
-        p -= 0x08804000u;
-    return p ? gamedata_string(p) : NULL;
-}
-
 /* The Yes / No of the questions: CBattleTestString 0x1F / 0x20, as Battle Mode's
  * other questions use. */
 static const char *yes_no(int id)
@@ -124,16 +114,6 @@ static const char *yes_no(int id)
     if (p >= 0x08804000u)
         p -= 0x08804000u;
     return p ? gamedata_string(p) : NULL;
-}
-
-/* FUN_089fd528: 0 system chips, 1 judges (two exits), 2 actions, 3 the rest,
- * -1 none and Return. */
-static int chip_kind(int type)
-{
-    if (type <= 0 || type >= PGCHIP_TYPE_END)
-        return -1;
-    uint32_t a = T_CHIP_KIND + (uint32_t)type;
-    return (int8_t)(gamedata_word(a & ~3u, 0xFFFFFFFFu) >> ((a & 3) * 8));
 }
 
 static const char *nz(const char *s)
@@ -285,9 +265,8 @@ static void enter_item(int id)
             g.message = dstr(0x2E);
             return;
         }
+        soft_open(card);
         g.mode = MODE_SOFTWARE;
-        g.program = 0;
-        g.chip_x = g.chip_y = 0;
         break;
     case ITEM_NAME: { /* mode 9, FUN_088bafa8 */
         if (!savedata_card_used(card)) {
@@ -652,47 +631,6 @@ static void update_parts(void)
     }
 }
 
-static int program_count(const OkeDataBase *card)
-{
-    int n = 1;
-    while (n < PGCHIP_PROGRAM_MAX && card->software.width[n] > 0)
-        n++;
-    return n;
-}
-
-static void update_software(void)
-{
-    const OkeDataBase *card = savedata_card(current());
-    int n = program_count(card);
-    if (pad_pressed(PSP_CTRL_RTRIGGER) || pad_pressed(PSP_CTRL_LTRIGGER)) {
-        g.program = (g.program + (pad_pressed(PSP_CTRL_RTRIGGER) ? 1 : n - 1)) % n;
-        g.chip_x = g.chip_y = 0;
-    }
-    int w = card->software.width[g.program];
-    if (w <= 0)
-        w = 1;
-    int old_cursor = g.chip_y * 64 + g.chip_x;
-    if (pad_repeat(PSP_CTRL_UP) && g.chip_y > 0)
-        g.chip_y--;
-    else if (pad_repeat(PSP_CTRL_DOWN) && g.chip_y < w - 1)
-        g.chip_y++;
-    else if (pad_repeat(PSP_CTRL_LEFT) && g.chip_x > 0)
-        g.chip_x--;
-    else if (pad_repeat(PSP_CTRL_RIGHT) && g.chip_x < w - 1)
-        g.chip_x++;
-    if (g.chip_y * 64 + g.chip_x != old_cursor)
-        sound_se(SE_CURSOR, 1.0f);
-    if (pad_pressed(PSP_CTRL_CIRCLE)) {
-        sound_se(SE_DECIDE, 1.0f);
-        SDL_Log("[oke] chip editing (CSoftDesignMngr's Edit Chips) isn't ported");
-        g.message = dstr(0x25);
-    } else if (pad_pressed(PSP_CTRL_CROSS)) {
-        sound_se(SE_CANCEL, 1.0f);
-        g.mode = MODE_TOP;
-        g.message = NULL;
-    }
-}
-
 int oke_menu_update(float dt)
 {
     ui_menu_update(&g.top, dt);
@@ -704,7 +642,12 @@ int oke_menu_update(float dt)
     case MODE_ASK: update_ask(dt); break;
     case MODE_HARDWARE: update_hardware(); break;
     case MODE_PARTS: update_parts(); break;
-    case MODE_SOFTWARE: update_software(); break;
+    case MODE_SOFTWARE:
+        if (!soft_update(dt)) {
+            g.mode = MODE_TOP;
+            build_top_menu();
+        }
+        break;
     case MODE_SLIDER: update_slider(); break;
     case MODE_NAME: update_name(); break;
     case MODE_PRIVACY: update_privacy(); break;
@@ -967,64 +910,6 @@ static void draw_parts(int x, int y)
     label_value(dstr(0x32), v, lx, ly, vx, small_color(weight_color(oke_weight_state(&preview))));
 }
 
-/* The program grid. Each chip is drawn with a tile of parts/soft/sd_chip0 (64 x 64
- * cells: blue, green, red, yellow, then the Return tile; the faded rows below for
- * chips switched off), picked by the chip's kind; the start chip is marked. */
-static void draw_chip(Picture *tiles, const PgChipCommand *c, int x, int y, int size)
-{
-    int t = pgchip_type(c);
-    if (t == 0) {
-        ui_fill(x + 1, y + 1, size - 2, size - 2, 0x30303030);
-        return;
-    }
-    int kind = chip_kind(t), cell = t == PGCHIP_RETURN ? 4 : kind >= 0 && kind < 4 ? kind : 0;
-    int u = (cell % 3) * 64, v = (cell / 3) * 64 + (pgchip_active(c) || t == PGCHIP_RETURN ? 0 : 128);
-    if (tiles)
-        picture_draw_ex(tiles, x, y, 0, size, size, u, v, 64, 64, BLEND_ALPHA, 0xFFFFFFFF, 0, 0, 0, 0);
-    else
-        ui_fill(x + 1, y + 1, size - 2, size - 2, 0xFFC08040);
-}
-
-static void draw_software(int x, int y)
-{
-    const OkeDataBase *card = savedata_card(current());
-    const SoftwareDataBase *sw = &card->software;
-    int w = sw->width[g.program];
-    const PgChipCommand *chips = oke_program_chips(card, g.program);
-    ui_frame(ui_part(PART_BF_SWND4), x, y, 210, 202, 8, 1.0f);
-    char title[48];
-    snprintf(title, sizeof title, "%s  %d/%d", nz(dstr(0x1A)), g.program + 1, program_count(card));
-    ui_text(title, small(), x + 10, y + 6, 1.0f);
-    if (w <= 0)
-        return;
-    static Picture *tiles;
-    if (!tiles)
-        tiles = picture_load("parts/soft/sd_chip0.gim");
-    int cell = 172 / w, gx = x + 19, gy = y + 22;
-    for (int cy = 0; cy < w; cy++)
-        for (int cx = 0; cx < w; cx++) {
-            int px = gx + cx * cell, py = gy + cy * cell;
-            draw_chip(tiles, &chips[cy * w + cx], px, py, cell);
-            if (cy * w + cx == sw->start[g.program])
-                ui_fill(px + 2, py + 2, cell / 4, cell / 4, 0xFF2020E0);
-            if (cx == g.chip_x && cy == g.chip_y)
-                draw_cursor(px - 2, py - 2, cell + 4, cell + 4);
-        }
-    /* the chip under the cursor */
-    const PgChipCommand *c = &chips[g.chip_y * w + g.chip_x];
-    int ix = x + 214, iw = 476 - ix;
-    ui_frame(ui_part(PART_BF_SWND5), ix, y, iw, 120, 8, 1.0f);
-    char v[64];
-    snprintf(v, sizeof v, "(%d, %d)", g.chip_x, g.chip_y);
-    ui_text(v, small(), ix + 10, y + 10, 1.0f);
-    ui_text(nz(chip_name(pgchip_type(c))), dark(), ix + 10, y + 26, 1.0f);
-    snprintf(v, sizeof v, "%02X %02X %02X %02X %02X %02X %02X %02X", c->b[0], c->b[1], c->b[2], c->b[3], c->b[4], c->b[5],
-             c->b[6], c->b[7]);
-    ui_text(v, small(), ix + 10, y + 44, 1.0f);
-    snprintf(v, sizeof v, "%s %d x %d", nz(dstr(0x37)), w, w);
-    ui_text(v, small(), ix + 10, y + 60, 1.0f);
-}
-
 static const char *help_text(void)
 {
     if (g.message)
@@ -1036,7 +921,7 @@ static const char *help_text(void)
     case MODE_HARDWARE: return g.hw_count ? hw_item_help(g.hw_items[g.hw_cursor]) : NULL;
     case MODE_PARTS:
         return g.part_count ? part_help(g.hw_items[g.hw_cursor], g.parts[g.part_cursor]) : NULL;
-    case MODE_SOFTWARE: return dstr(0x25);
+    case MODE_SOFTWARE: return soft_help();
     case MODE_SLIDER: return hw_item_help(g.slider_item);
     case MODE_PRIVACY: return dstr(0x2B);
     case MODE_NOTES: return notes_help();
@@ -1081,7 +966,7 @@ void oke_menu_draw(void)
         draw_parts(4, 22);
         break;
     case MODE_SOFTWARE:
-        draw_software(4, 22);
+        soft_draw();
         break;
     case MODE_NAME:
     case MODE_PRIVACY:

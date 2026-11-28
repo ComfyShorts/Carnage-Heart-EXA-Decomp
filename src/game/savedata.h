@@ -134,6 +134,19 @@ void savedata_spend_money(int amount);
 int savedata_menu_limit(int word);
 void savedata_set_menu_limit(int word, int value);
 
+/* CSoftwareSceneDataBase (+0x41370, FUN_0889ce8c; built by FUN_0889c724): the chip
+ * editor's memory. A chip per type, the last one placed, which new chips of that
+ * type copy (FUN_08a1cbd8 stores it); the chip list's page (+0x1B0, 4 = every chip)
+ * and its cursor on each of the 5 pages (+0x1B4). The 8 macros after it (+0x1C8,
+ * 0x72C each) aren't used yet. */
+#define CHIP_PAGES 5
+const PgChipCommand *savedata_chip_default(int type);
+void savedata_set_chip_default(const PgChipCommand *chip);
+int savedata_chip_page(void);
+void savedata_set_chip_page(int page);
+int savedata_chip_page_cursor(int page);
+void savedata_set_chip_page_cursor(int page, int index);
+
 /* CBattleFieldStateDataBase (+0x47F30, FUN_0889d2b8): a word per stage, 1 when its map
  * can be chosen. FUN_0889ed84: available when 1, never stage 13. */
 #define SAVE_STAGES 0xAF
