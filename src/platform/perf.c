@@ -7,6 +7,7 @@
  * and vertex transform, and the rasterizer inside it). The main thread presents the
  * displayed frame buffer to the window. Each thread sums its own parts and logs them
  * every PERF_WINDOW frames, as milliseconds per frame. */
+#include "host_compat.h"
 #include "psp_shim.h"
 #include "ge.h"
 
@@ -60,10 +61,7 @@ void psp_perf_end(int part, uint64_t t0)
 /* The game thread's own CPU time: wall time minus the time it wasn't running. */
 static uint64_t thread_cpu_ns(void)
 {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0)
-        return 0;
-    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+    return (uint64_t)host_thread_cpu_ns();
 }
 
 static double ms(uint64_t ns, int frames)

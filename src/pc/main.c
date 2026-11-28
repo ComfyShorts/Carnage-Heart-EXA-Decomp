@@ -9,7 +9,8 @@
  *   --trace           log every call of an implemented import, not just the first
  *   --ms DIR          folder to serve as the memory stick (ms0:), writable. Optional
  *   --saves DIR       folder for save data, laid out as the memory stick's PSP/SAVEDATA
- *                     (one directory per save). Default saves/
+ *                     (one directory per save). Default saves/, on Windows
+ *                     %APPDATA%\chexa-pc\saves
  *   --make-test-save [NAME]  write a Battle Data save NAME.CHE (default TESTDATA) holding
  *                     a few of the shipped preset OKEs, then go on (needs --disc)
  *   --mute            no sound output (the sound code still runs, timed by the clock)
@@ -40,10 +41,12 @@
  *                     (the scenes and lessons before it are applied to the save)
  *   --battle-result R for scripted runs: every battle ends 1 s in, as R (win, lose, draw)
  *   --auto-scenes     for scripted runs: the story's scripts skip through on their own
- *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)
+ *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf,
+ *                     else EBOOT.elf beside the exe, else EBOOT.elf in the --disc folder)
  *   --scale N         window scale (default 2, i.e. 960x544)
  *   --controls        print the keyboard and gamepad controls and exit (docs/controls.md)
  *   --write-controls  write the controls config file with the current bindings, to edit
+ *   --list-gamepads   print the controllers SDL sees, their backend and button layout, and exit
  *                     (refuses to overwrite one), and exit
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
  *                     check the logging (debug only)
@@ -112,6 +115,47 @@ static int is_implemented(const PspImport *imp)
     return 0;
 }
 
+/* Without --saves: saves/ in the current folder, or on Windows %APPDATA%\chexa-pc\saves
+ * (beside controls.ini), since a double-clicked exe's folder may not be writable. */
+static void default_saves_dir(void)
+{
+#ifdef _WIN32
+    static char dir[1024];
+    const char *appdata = SDL_getenv("APPDATA");
+    if (appdata && *appdata) {
+        snprintf(dir, sizeof dir, "%s\\chexa-pc\\saves", appdata);
+        psp_savedata_set_root(dir);
+    }
+#endif
+    SDL_Log("[pc] saves: %s", psp_savedata_root());
+}
+
+/* Without --elf: orig/EBOOT.elf (the repository's place for it), else EBOOT.elf next to
+ * the exe, else EBOOT.elf in the --disc folder. Only the interface text needs it. */
+static void find_game_elf(const char *disc)
+{
+    static char path[1100];
+    if (SDL_GetPathInfo(g_game_elf_path, NULL))
+        return;
+    const char *base = SDL_GetBasePath(); /* ends in a separator */
+    if (base) {
+        snprintf(path, sizeof path, "%sEBOOT.elf", base);
+        if (SDL_GetPathInfo(path, NULL)) {
+            g_game_elf_path = path;
+            return;
+        }
+    }
+    if (disc) {
+        snprintf(path, sizeof path, "%s/EBOOT.elf", disc);
+        if (SDL_GetPathInfo(path, NULL)) {
+            g_game_elf_path = path;
+            return;
+        }
+    }
+    SDL_Log("[pc] no decrypted EBOOT found (orig/EBOOT.elf, EBOOT.elf beside chexa-pc or in the disc "
+            "folder, or --elf FILE): the menus will have no text");
+}
+
 /* --controls: the table, and where the bindings came from. */
 static int print_controls(void)
 {
@@ -120,6 +164,94 @@ static int print_controls(void)
     printf("Controls (%s):\n%s", psp_controls_status(), buf);
     const char *path = controls_config_path();
     printf("Config file: %s (chexa-pc --write-controls writes one to edit)\n", path ? path : "none (no config folder)");
+    return 0;
+}
+
+static const char *button_label(SDL_GamepadButtonLabel l)
+{
+    switch (l) {
+    case SDL_GAMEPAD_BUTTON_LABEL_A: return "(A)";
+    case SDL_GAMEPAD_BUTTON_LABEL_B: return "(B)";
+    case SDL_GAMEPAD_BUTTON_LABEL_X: return "(X)";
+    case SDL_GAMEPAD_BUTTON_LABEL_Y: return "(Y)";
+    case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "(cross)";
+    case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "(circle)";
+    case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "(square)";
+    case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "(triangle)";
+    default: return "";
+    }
+}
+
+/* The PSP controls a gamepad button is bound to, with the current bindings. */
+static const char *bound_to(SDL_GamepadButton button)
+{
+    static char buf[64];
+    const Controls *c = psp_controls();
+    buf[0] = '\0';
+    for (int id = 0; id < CTL_COUNT; id++)
+        for (int k = 0; k < CTL_MAX_BINDS; k++)
+            if (c->pad[id][k].kind == PAD_BUTTON && c->pad[id][k].code == (int)button) {
+                size_t n = strlen(buf);
+                snprintf(buf + n, sizeof buf - n, "%s%s", n ? "+" : "", controls_name((ControlId)id));
+            }
+    return buf[0] ? buf : "nothing";
+}
+
+/* --list-gamepads: every joystick SDL sees, whether it has a gamepad mapping (and so
+ * works as a pad here), and through which backend. On Windows the path names it:
+ * "XInput#N" for XInput, a \\?\HID#... path for HIDAPI or raw input. */
+static int list_gamepads(void)
+{
+    if (!SDL_Init(SDL_INIT_GAMEPAD)) {
+        fprintf(stderr, "SDL can't start its gamepad support: %s\n", SDL_GetError());
+        return 1;
+    }
+    if (SDL_getenv("CHEXA_TEST_VIRTUAL_PAD")) { /* for ctest: one pad with a mapping */
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.name = "chexa test pad";
+        SDL_AttachVirtualJoystick(&desc);
+    }
+    /* Some backends (HIDAPI, Bluetooth) report their devices a moment after start-up. */
+    for (int i = 0; i < 20; i++) {
+        SDL_PumpEvents();
+        SDL_Delay(50);
+    }
+    int v = SDL_GetVersion();
+    printf("SDL %d.%d.%d\n", SDL_VERSIONNUM_MAJOR(v), SDL_VERSIONNUM_MINOR(v), SDL_VERSIONNUM_MICRO(v));
+    int count = 0;
+    SDL_JoystickID *ids = SDL_GetJoysticks(&count);
+    if (!count)
+        printf("No controllers found. Plug one in (or pair it) and run this again.\n");
+    for (int i = 0; i < count; i++) {
+        SDL_JoystickID id = ids[i];
+        const char *name = SDL_GetJoystickNameForID(id), *path = SDL_GetJoystickPathForID(id);
+        printf("%d. %s\n", i + 1, name ? name : "(no name)");
+        printf("   USB id %04x:%04x, path %s\n", SDL_GetJoystickVendorForID(id), SDL_GetJoystickProductForID(id),
+               path ? path : "(none)");
+        if (!SDL_IsGamepad(id)) {
+            printf("   not a gamepad to SDL (no mapping): chexa-pc won't use it. A controller with a\n"
+                   "   mode switch usually works in its XInput (X) mode.\n");
+            continue;
+        }
+        SDL_GamepadType type = SDL_GetGamepadTypeForID(id);
+        const char *tname = SDL_GetGamepadStringForType(type);
+        printf("   gamepad (type %s); face buttons as labelled on it and what they press here:\n",
+               tname && *tname ? tname : "standard");
+        static const SDL_GamepadButton face[] = {SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST,
+                                                 SDL_GAMEPAD_BUTTON_WEST, SDL_GAMEPAD_BUTTON_NORTH};
+        static const char *const pos[] = {"south", "east", "west", "north"};
+        printf("  ");
+        for (int b = 0; b < 4; b++)
+            printf("  %s %s = %s", pos[b], button_label(SDL_GetGamepadButtonLabelForType(type, face[b])),
+                   bound_to(face[b]));
+        printf("\n");
+    }
+    SDL_free(ids);
+    SDL_Quit();
     return 0;
 }
 
@@ -201,6 +333,7 @@ static int play_tone(void)
 
 int main(int argc, char **argv)
 {
+    psp_ge_reserve_vram_window();
     long frames = -1;
     int scale = 2;
     int call_all = 0;
@@ -209,13 +342,16 @@ int main(int argc, char **argv)
     const char *disc = getenv("CHEXA_DISC");
     const char *ms = NULL;
     const char *test_save = NULL;
+    int saves_given = 0, elf_given = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--disc") && i + 1 < argc)
             disc = argv[++i];
         else if (!strcmp(argv[i], "--ms") && i + 1 < argc)
             ms = argv[++i];
-        else if (!strcmp(argv[i], "--saves") && i + 1 < argc)
+        else if (!strcmp(argv[i], "--saves") && i + 1 < argc) {
             psp_savedata_set_root(argv[++i]);
+            saves_given = 1;
+        }
         else if (!strcmp(argv[i], "--make-test-save"))
             test_save = i + 1 < argc && strncmp(argv[i + 1], "--", 2) ? argv[++i] : "TESTDATA";
         else if (!strcmp(argv[i], "--mute"))
@@ -262,12 +398,16 @@ int main(int argc, char **argv)
             g_modelview_pose = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gmo-angle") && i + 1 < argc)
             g_modelview_angle = strtof(argv[++i], NULL);
-        else if (!strcmp(argv[i], "--elf") && i + 1 < argc)
+        else if (!strcmp(argv[i], "--elf") && i + 1 < argc) {
             g_game_elf_path = argv[++i];
+            elf_given = 1;
+        }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc)
             scale = (int)strtol(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--controls"))
             return print_controls();
+        else if (!strcmp(argv[i], "--list-gamepads"))
+            return list_gamepads();
         else if (!strcmp(argv[i], "--write-controls"))
             return write_controls();
         else if (!strcmp(argv[i], "--call-all-stubs"))
@@ -287,7 +427,7 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--story-step N] [--battle-result R] [--auto-scenes] [--perf] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
-                    "[--elf FILE] [--gmo FILE] [--controls] [--write-controls] [--call-all-stubs]\n",
+                    "[--elf FILE] [--gmo FILE] [--controls] [--list-gamepads] [--write-controls] [--call-all-stubs]\n",
                     argv[0]);
             return 2;
         }
@@ -295,6 +435,10 @@ int main(int argc, char **argv)
 
     SDL_Log("[pc] chexa-pc, %d-bit build, %d PSP imports stubbed", (int)(sizeof(void *) * 8),
             psp_import_count);
+    if (!saves_given)
+        default_saves_dir();
+    if (!elf_given)
+        find_game_elf(disc);
     if (disc) {
         if (!psp_io_mount_disc(disc))
             return startup ? 77 : 1; /* 77: "skipped" for the CTest run without game files */

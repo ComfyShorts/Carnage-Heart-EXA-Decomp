@@ -20,6 +20,9 @@
 #include <string.h>
 
 #include <SDL3/SDL.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #ifdef __SSE2__
 #include <emmintrin.h>
 #endif
@@ -35,9 +38,26 @@ uint8_t *psp_ge_vram(void)
     return g_vram;
 }
 
+bool psp_ge_reserve_vram_window(void)
+{
+#ifdef _WIN32
+    /* Before the game's big allocations: a 32-bit Windows heap can otherwise grow over it. */
+    if (!VirtualAlloc((void *)0x04000000, PSP_EDRAM_SIZE, MEM_RESERVE, PAGE_NOACCESS)) {
+        SDL_Log("[ge] warning: can't reserve 0x04000000-0x041FFFFF (in use), so host memory there "
+                "would be read as VRAM");
+        return false;
+    }
+#endif
+    return true;
+}
+
 uint8_t *psp_ge_ptr(uint32_t addr)
 {
-    if (addr < PSP_EDRAM_SIZE || (addr & 0xFFE00000u) == 0x04000000u)
+    /* The PSP's own VRAM addresses. No host memory is ever there: nothing is mapped so low
+     * on Linux, and on Windows the window is reserved at start-up (psp_ge_reserve_vram_window).
+     * Frame and depth buffers are VRAM offsets and don't come through here; small addresses
+     * aren't taken as offsets either, since Windows keeps its stacks and heap below 2 MB. */
+    if ((addr & 0xFFE00000u) == 0x04000000u)
         return g_vram + (addr & (PSP_EDRAM_SIZE - 1));
     return (uint8_t *)(uintptr_t)addr;
 }
@@ -707,10 +727,10 @@ static uint32_t pack(const float c[4])
 static bool target(Target *t, bool through)
 {
     memset(t, 0, sizeof *t);
-    t->fb = psp_ge_ptr(arg(CMD_FBP) & (PSP_EDRAM_SIZE - 1));
+    t->fb = g_vram + (arg(CMD_FBP) & (PSP_EDRAM_SIZE - 1));
     t->fbw = g_ge.reg[CMD_FBW] & 0x7FF;
     t->psm = arg(CMD_FPF) & 3;
-    t->zb = (uint16_t *)psp_ge_ptr(arg(CMD_ZBP) & (PSP_EDRAM_SIZE - 1));
+    t->zb = (uint16_t *)(g_vram + (arg(CMD_ZBP) & (PSP_EDRAM_SIZE - 1)));
     t->zbw = g_ge.reg[CMD_ZBW] & 0x7FF;
     if (!t->zbw)
         t->zb = NULL;

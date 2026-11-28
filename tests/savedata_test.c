@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <SDL3/SDL.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -34,14 +36,35 @@ static long size_of(const char *path)
     return stat(path, &st) == 0 ? (long)st.st_size : -1;
 }
 
+/* Deletes a folder and everything in it (SDL's file calls: Linux and Windows). */
+static SDL_EnumerationResult remove_entry(void *userdata, const char *dir, const char *name)
+{
+    (void)userdata;
+    char path[1024];
+    snprintf(path, sizeof path, "%s%s", dir, name);
+    SDL_PathInfo info;
+    if (SDL_GetPathInfo(path, &info) && info.type == SDL_PATHTYPE_DIRECTORY)
+        SDL_EnumerateDirectory(path, remove_entry, NULL);
+    SDL_RemovePath(path);
+    return SDL_ENUM_CONTINUE;
+}
+
+static bool remove_tree(const char *root)
+{
+    if (!SDL_GetPathInfo(root, NULL))
+        return true;
+    SDL_EnumerateDirectory(root, remove_entry, NULL);
+    return SDL_RemovePath(root);
+}
+
 int main(int argc, char **argv)
 {
     char root[512];
     snprintf(root, sizeof root, "%s", argc > 1 ? argv[1] : "savedata-test");
-    char cmd[600];
-    snprintf(cmd, sizeof cmd, "rm -rf '%s'", root);
-    if (system(cmd) != 0)
+    if (!remove_tree(root)) {
+        printf("FAIL: can't empty %s: %s\n", root, SDL_GetError());
         return 1;
+    }
     psp_savedata_set_root(root);
     char path[700];
 

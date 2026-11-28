@@ -27,6 +27,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "host_compat.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 
@@ -42,7 +43,7 @@ void psp_savedata_set_root(const char *dir)
 {
     snprintf(g_root, sizeof g_root, "%s", dir && *dir ? dir : "saves");
     size_t n = strlen(g_root);
-    while (n > 1 && g_root[n - 1] == '/')
+    while (n > 1 && host_is_dir_sep(g_root[n - 1]) && !(n == 3 && g_root[1] == ':'))
         g_root[--n] = 0;
 }
 
@@ -78,12 +79,13 @@ static bool make_root(void)
     char tmp[sizeof g_root];
     snprintf(tmp, sizeof tmp, "%s", g_root);
     for (char *p = tmp + 1; *p; p++)
-        if (*p == '/') {
+        if (host_is_dir_sep(*p) && p[-1] != ':') { /* not "C:" on its own */
+            char sep = *p;
             *p = 0;
-            mkdir(tmp, 0777);
-            *p = '/';
+            host_mkdir(tmp, 0777);
+            *p = sep;
         }
-    return mkdir(tmp, 0777) == 0 || errno == EEXIST;
+    return host_mkdir(tmp, 0777) == 0 || errno == EEXIST;
 }
 
 static bool dir_path(const SceUtilitySavedataParam *p, const char *save, char *out, size_t cap)
@@ -121,7 +123,7 @@ static int64_t file_size(const char *path)
 static void psp_time(time_t t, ScePspDateTime *out)
 {
     struct tm tm;
-    localtime_r(&t, &tm);
+    host_localtime(&t, &tm);
     out->year = (uint16_t)(tm.tm_year + 1900);
     out->month = (uint16_t)(tm.tm_mon + 1);
     out->day = (uint16_t)tm.tm_mday;
@@ -351,7 +353,7 @@ static int32_t do_save(SceUtilitySavedataParam *p, bool dialog, bool create)
     bool exists = is_dir(dir);
     if (!exists && !create)
         return SCE_UTILITY_SAVEDATA_ERROR_RW_NO_DATA;
-    if (!exists && (!make_root() || mkdir(dir, 0777) != 0))
+    if (!exists && (!make_root() || host_mkdir(dir, 0777) != 0))
         return dialog ? SCE_UTILITY_SAVEDATA_ERROR_SAVE_ACCESS_ERROR : SCE_UTILITY_SAVEDATA_ERROR_RW_ACCESS_ERROR;
     int32_t r = file_path(p, dir, path, sizeof path);
     if (r)

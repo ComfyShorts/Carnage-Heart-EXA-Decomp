@@ -12,6 +12,7 @@
  *    PSP. psp_kernel_request_exit() notifies the registered exit callback (the HOME
  *    menu's "quit game").
  *  - Kernel objects live in one UID table. */
+#include "host_compat.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 
@@ -853,10 +854,10 @@ uint32_t sceKernelGetSystemTimeLow(void)
 int32_t sceRtcGetCurrentClock(ScePspDateTime *out, int tz_minutes)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    host_realtime(&ts);
     time_t t = ts.tv_sec + (time_t)tz_minutes * 60;
     struct tm tm;
-    gmtime_r(&t, &tm);
+    host_gmtime(&t, &tm);
     if (out) {
         out->year = (uint16_t)(tm.tm_year + 1900);
         out->month = (uint16_t)(tm.tm_mon + 1);
@@ -1030,14 +1031,14 @@ int32_t sceUtilityGetSystemParamInt(int id, int *value)
 {
     time_t now = time(NULL);
     struct tm lt;
-    localtime_r(&now, &lt);
+    host_localtime(&now, &lt);
     int32_t r = 0, v = 0;
     switch (id) {
     case 2: v = 0; break;                                        /* ad hoc channel: auto */
     case 3: v = 0; break;                                        /* WLAN power save: off */
     case 4: v = 0; break;                                        /* date format: YYYY/MM/DD */
     case 5: v = 0; break;                                        /* time format: 24-hour */
-    case 6: v = (int)(lt.tm_gmtoff / 60) - (lt.tm_isdst > 0 ? 60 : 0); break; /* time zone, minutes */
+    case 6: v = (int)(host_gmtoff(now, &lt) / 60) - (lt.tm_isdst > 0 ? 60 : 0); break; /* time zone, minutes */
     case 7: v = lt.tm_isdst > 0; break;                         /* daylight saving */
     case 8: v = g_impose_language; break;                       /* language */
     case 9: v = g_impose_button; break;                         /* 1: cross confirms */

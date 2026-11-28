@@ -8,6 +8,7 @@
  * The async calls finish their work immediately and keep the result for
  * sceIoWaitAsyncCB / sceIoPollAsync, which is all the game expects of them.
  * Not implemented: raw block devices (umd0:, umd1:) and I/O callbacks. */
+#include "host_compat.h"
 #include "psp_imports.h"
 #include "psp_shim.h"
 
@@ -107,7 +108,8 @@ bool psp_io_mount(const char *device, const char *host_dir, bool writable)
     snprintf(m->device, sizeof m->device, "%s", device);
     snprintf(m->root, sizeof m->root, "%s", host_dir);
     size_t n = strlen(m->root);
-    while (n > 1 && m->root[n - 1] == '/')
+    /* trailing separators off, but not a root's ("/", "C:\\") */
+    while (n > 1 && host_is_dir_sep(m->root[n - 1]) && !(n == 3 && m->root[1] == ':'))
         m->root[--n] = '\0';
     m->writable = writable;
     SDL_Log("[io] mounted %s: -> %s%s", m->device, m->root, writable ? "" : " (read-only)");
@@ -229,7 +231,7 @@ static void free_slot(FdSlot *s)
 static void to_psp_time(time_t t, ScePspDateTime *out)
 {
     struct tm tm;
-    localtime_r(&t, &tm);
+    host_localtime(&t, &tm);
     out->year = (uint16_t)(tm.tm_year + 1900);
     out->month = (uint16_t)(tm.tm_mon + 1);
     out->day = (uint16_t)tm.tm_mday;
@@ -274,7 +276,7 @@ static SceUID do_open(const char *file, int flags, SceMode mode, bool keep_faile
         if (flags & PSP_O_CREAT) oflags |= O_CREAT;
         if (flags & PSP_O_TRUNC) oflags |= O_TRUNC;
         if (flags & PSP_O_EXCL) oflags |= O_EXCL;
-        hfd = open(host, oflags | O_CLOEXEC, mode ? (mode & 0777) : 0666);
+        hfd = open(host, oflags | HOST_O_FLAGS, mode ? (mode & 0777) : 0666);
         struct stat st;
         if (hfd < 0)
             err = errno_to_sce(errno);
@@ -593,7 +595,7 @@ int32_t sceIoDread(SceUID fd, SceIoDirent *dir)
             dir->d_private = priv;
             if (stat(full, &st) == 0)
                 fill_stat(&st, false, &dir->d_stat);
-            snprintf(dir->d_name, sizeof dir->d_name, "%s", name);
+            snprintf(dir->d_name, sizeof dir->d_name, "%.255s", name);
             r = 1;
         }
     }
@@ -658,7 +660,7 @@ int32_t sceIoMkdir(const char *dir, SceMode mode)
     lock();
     const Mount *m = resolve(dir, host, sizeof host, &err);
     int32_t r = !m ? err : !m->writable ? SCE_ERROR_ERRNO_EROFS
-              : mkdir(host, mode ? (mode & 0777) : 0777) == 0 ? 0 : errno_to_sce(errno);
+              : host_mkdir(host, mode ? (mode & 0777) : 0777) == 0 ? 0 : errno_to_sce(errno);
     unlock();
     SDL_Log("[io] mkdir %s -> 0x%08X", dir ? dir : "(null)", (unsigned)r);
     PSP_TRACE(r, "\"%s\"", dir ? dir : "(null)");
@@ -765,7 +767,7 @@ bool psp_io_mount_disc(const char *dir)
 {
     /* realpath needs PATH_MAX bytes (the fortified glibc aborts with less). */
     char real[PATH_MAX], probe[PATH_MAX + 16];
-    if (!dir || !realpath(dir, real)) {
+    if (!dir || !host_realpath(dir, real, sizeof real)) {
         SDL_Log("[io] disc folder %s not found", dir ? dir : "(null)");
         return false;
     }
@@ -774,7 +776,12 @@ bool psp_io_mount_disc(const char *dir)
         return psp_io_mount("disc0", real, false);
     /* Also accept the PSP_GAME/USRDIR folder itself (where the game's data files are). */
     size_t n = strlen(real);
-    if (n > 16 && !strcasecmp(real + n - 16, "/PSP_GAME/USRDIR")) {
+    bool usrdir = n > 16;
+    for (size_t i = 0; usrdir && i < 16; i++) { /* "/PSP_GAME/USRDIR", either separator */
+        char a = real[n - 16 + i], b = "/PSP_GAME/USRDIR"[i];
+        usrdir = b == '/' ? host_is_dir_sep(a) : SDL_toupper((unsigned char)a) == b;
+    }
+    if (usrdir) {
         real[n - 16] = '\0';
         SDL_Log("[io] %s is PSP_GAME/USRDIR; using %s as the disc root", dir, real);
         return psp_io_mount("disc0", real, false);
