@@ -48,6 +48,9 @@ const char *packindex_string(uint32_t offset);
 /* OpenFileSet (FUN_08b14984): returns the slot (0..11) or -1. heap NULL means the
  * default heap. Only the synchronous form (async = 0) is implemented. */
 int fileset_open(const char *name, GameHeap *heap, int from_top, int async);
+/* CloseFileSet (FUN_08b14e2c): frees the set's memory and its slot; 0, or -1 for a
+ * slot that isn't open. Files read from it were copied out and stay valid. */
+int fileset_close(int slot);
 
 /* GetFileSize for a file in an open file set or a loose pack entry (FUN_08b12a60):
  * the unpacked size, or -1. */

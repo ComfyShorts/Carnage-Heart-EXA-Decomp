@@ -125,6 +125,15 @@ From the entrance code (`FUN_088d5510`, `FUN_088d497c`, `FUN_088d5a70`,
 - The battle itself is `CBattleScene` / `CBattleSceneMngr` (file set "battlescene":
   3D effect models `effect/*.gmo`, HUD art `parts/bs/*`), with `CBattleOke` behind
   each robot.
+- The port opens "battlescene" when Battle Mode or a Story Mode briefing starts and
+  closes it (`CloseFileSet`, `FUN_08b14e2c`) when that ends, as the scene's
+  `FUN_08874dd0` does. Before the close was ported every start took another of the 12
+  file set slots and another 808 KiB, so the 11th in one session failed with
+  `OpenFileSet("battlescene") failed: no HUD art` (seen before mission 11, step 83, in a
+  run that had played ten briefings). `chexa-story-test` opens and closes it once per
+  briefing, 24 times. The game opens it in the scene (`FUN_08874bd4`), into the battle's
+  own 0x280000-byte block when it fits, else the default heap; the port always uses the
+  default heap.
 
 ## How the presets behave in the stand-in
 
