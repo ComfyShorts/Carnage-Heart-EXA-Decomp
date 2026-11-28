@@ -80,32 +80,38 @@ update `FUN_088e6e30`); with them every script on the disc decodes to its end ma
 (The load-time pass `FUN_088e1864` only looks for a few side effects and isn't a
 reliable argument table.)
 
-| Op | Args | Meaning (from the arguments; being confirmed in the player) |
+| Op | Args | Meaning (from the player, `FUN_088e6e30`) |
 |---|---|---|
 | 0x00 | | end of script |
 | 0x01 | s | a line of text (`"\\"` waits) |
 | 0x02 | s | the speaker's name |
-| 0x03 | s i | a portrait `adv/chr/*.gim`, position / fade flags (0, 0x100, 0x200; 0x4000 fade) |
-| 0x05 | i | hide portraits (0x4000 fade) |
-| 0x06 | s i | a background `adv/bg_*.gim` / `adv/ev*.gim`, fade flags |
+| 0x03 | s i | a portrait `adv/chr/*.gim`: slot = flags & 0xF (3), place & 0xF00 (0 centre, 0x100 right, 0x200 left), 0x4000 fades in |
+| 0x04 | i | move a portrait (slot, place) |
+| 0x05 | i | hide a portrait (slot; 0x4000 fades out) |
+| 0x06 | s i | a background `adv/bg_*.gim` / `adv/ev*.gim`: 0x4000 fades from black, 0x2000 from white |
 | 0x07 | i | hide the background |
-| 0x08 / 0x09 | i | screen effects |
+| 0x08 / 0x09 | i | shake the background (1 on, 2 off) / its tint colour |
+| 0x0A | | show the page |
 | 0x0B | i i | play music track N |
 | 0x0C | i i | stop music: flags (0x4000 fade), milliseconds |
-| 0x0D | i | the message window's style (1, 2, 3) |
+| 0x0D | i | the message window's style: 1 normal, 2 none, 3 full screen |
 | 0x0E | s | a voice `voice/<who>/<id>.at3` (in `voice.dat`) |
-| 0x0F | | wait for the pad (end of a message) |
-| 0x10 | i i i | a variable operation (flag bits pick system / lesson variables, table `0x08c7d190`) |
+| 0x0F | | the end of a message (the voice stops) |
+| 0x10 | i i i | a variable: op (5 set, 6 OR, 1-4 add / sub / inc / dec), flags \| index (0x80000000 battle mission, 0x40000000 menu limit, 0x20000000 parts stock, 0x10000000 lesson state, none the script's own), value |
 | 0x12 / 0x13 / 0x14 / 0x15 | i i i / i i i / / | if / else-if / else / end-if (a stack of 16 levels) |
-| 0x1A | i | a sound effect |
+| 0x1A | i | a sound effect: row & 0xFFFF, volume % in the high half |
+| 0x1B | | stop the sound effects |
 | 0x1C | i | wait N frames |
-| 0x1F | i i i s | jump to another script |
-| 0x21 | s i | a notice ("Mission added.") |
+| 0x1D | i i | shake a portrait for N frames |
+| 0x1F | i i i s | hide a script on a menu point: menu, key, -, script id (`CEventScriptField`) |
+| 0x20 | i i | remove it: menu, key |
+| 0x21 | s i | a notice ("Avispa added.") with a jingle |
+| 0x22 | i | what the end does: 1 asks to read the tutorial again |
 | 0x25 / 0x26 | s i / | a lesson label / clear |
 | 0x29 / 0x2A | i i i i / | a lesson highlight rectangle / clear |
-| 0x2B / 0x2C | i | team and card setup |
+| 0x2B / 0x2C | i | the current OKE card / the battle team's member (cards 1-32) |
 | 0x2D / 0x2E | i / | set / clear the save block's `+0x2B28` |
-| 0x2F | | wait for the pad (variant) |
+| 0x2F | | show the page (variant) |
 
 The pictures: message windows `adv/ad_win*.gim`, `ad_chr*`, `ad_bmen*`, `ad_bak00`;
 backgrounds `adv/bg_*.gim` (27 plus variants); event pictures `adv/ev*.gim` (14);
@@ -175,7 +181,29 @@ Ported in `src/game/story.c` (the flow), `src/game/storydb.c` (the step list) an
 | Story Data | Kind `S`: `ULJM05698S/<NAME>.CHE`, the version, the shared block and the story block, 0x4AF26 bytes; the SFO's title "Story Data" and the step's progress title; icon `icon0_scenario.png` | |
 | Continue | Story Data or Battle Data, the kind's files, then the story resumes on its saved step (`FUN_088d3d80` mode 3, `CTutorialFlow` type 2): a scene or card, or the briefing for a lesson or mission step | Plain menus (see screens.md, "Save data") |
 | The clear data | After the ending: Story Mode completed in the system data, step 0x53, mission 11's briefing and battle 0x30, then "Save cleared data?" (string 0x39) | |
-| Scenes, the briefing hub, the ending | | A black screen naming the step; circle goes on (parts 2, 3) |
+| The briefing hub, the ending | | A black screen naming the step; circle goes on (part 3) |
+
+### 2. The scene player
+
+`src/game/scene.c`: `CEventScriptWnd` on one script of a `.chs` file, started by
+`CStoryMngr` for every scene step.
+
+| Part | Real | Stand-in |
+|---|---|---|
+| Scripts | Read from the disc (`CEventScriptAnalysis`: header, Seek by name, words and the string pool); every command with the player's argument counts; the if-stack | |
+| Backgrounds and portraits | `CEventScriptPicture`: the disc's `adv/bg_*.gim`, `adv/ev*.gim`, `adv/chr/*.gim`; placed left / right / centred on the bottom edge (`FUN_088e0cec`); fades of 5% a frame from black or white (0x4000 / 0x2000), waited for (state 3); hiding, moving, shaking (ops 8, 0x1D) and tint (op 9) | |
+| The message window | Style 1: `parts/bf/sd_wind1.gim` drawn as the game slices it (four rows: the tab with the name, the body; `FUN_088eb690`), the name at (7, 0xAC), up to 4 lines at (7, 0xC3) in colour 8 of the game's table (`0x08c480d0`), the blinking page cursor `parts/bf/sd_page0.gim` at (0x1CE, 0xFC). Style 3: the screen half-darkened and up to 12 lines at (6, 0x1C) in colour 0. Style 2: no window. A `"\\"` line shows the page | |
+| Input | Circle: next page; square: remove the window until a button; L or R held: skip (no fades, waits or pages; "Skipping") | The backlog (triangle, `CEventScriptLinkedLog`) isn't ported; its guide item is left out |
+| The guide | The game's text (strings 0x2A / 0x31 of `0x08c7a6b0`) on the window's last row, at y 0xF9 | Buttons as words ("Square:") instead of the icons |
+| Waits, notices | Op 0x1C (frames); op 0x21 ("Avispa added.") with its jingle, closed with circle or cross | The notice uses the port's frame (`FUN_088c0ba0` isn't in the export) |
+| Variables (op 0x10) | Set / OR of the current battle mission (table `0x08c7d280`), the parts stock (`0x08c7cab0`), the menu limits (`0x08c7c4c0`, groups as `FUN_0895e1cc`) and the script's ten variables | The lesson states (flag 0x10000000) and the one if (in a lesson) are logged and not taken: part 5 |
+| Hidden scripts (ops 0x1F / 0x20) | Stored on and removed from the menu points of the save (`CEventScriptField`, menu numbers `FUN_088df724`) | |
+| Sound | Effects (op 0x1A) from the story bank (`seset_02adv`, opened with Story Mode) | Music (ops 0xB / 0xC) and voices (op 0xE) aren't played yet: part 4 |
+| Lesson commands (0x23-0x2A) | Read and skipped | Part 5 |
+
+`chexa-story-test` (CTest `story_steps`) reads every step's script from the disc to
+its end with the player's argument table (85 steps, 23,732 commands), checks the
+chapter pictures are there and that a new story gets loadPreset's cards.
 
 `--story-step N` (with `--startup`) starts a new game on step N, for screenshots:
 
@@ -184,4 +212,6 @@ build/pc-m32/chexa-pc --disc DIR --startup --story-step 0 --shot 60 orig/shots/s
 C="--press 70 circle --press 90 circle"                    # Start Game, Story Mode
 build/pc-m32/chexa-pc --disc DIR --startup --skip-movie $C --press 150 circle --press 250 circle \
     --press 300 circle --press 350 circle --shot 395 orig/shots/story/02_save_prompt.png --frames 400
+build/pc-m32/chexa-pc --disc DIR --startup --story-step 1 --press 130 circle --press 200 circle \
+    --shot 260 orig/shots/story/11_scene_talk.png --frames 265   # a page with a speaker
 ```

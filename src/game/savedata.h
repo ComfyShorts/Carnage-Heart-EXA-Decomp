@@ -99,6 +99,7 @@ void savedata_set_story_completed(bool done);
 int savedata_story_step(void);
 void savedata_set_story_step(int step);
 int savedata_story_battle(void);
+void savedata_story_set_2b28(int v); /* FUN_0889d574 */
 void savedata_set_story_battle(int mission);
 /* The briefing's script file (FUN_0889d584), "" none. */
 const char *savedata_story_script(void);

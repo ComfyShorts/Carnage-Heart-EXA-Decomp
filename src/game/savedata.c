@@ -190,6 +190,7 @@ static void story_reset(void)
 
 int savedata_story_step(void) { return (int)get_word(g_save.story + STORY_STEP); }
 void savedata_set_story_step(int step) { put_word(g_save.story + STORY_STEP, (uint32_t)step); }
+void savedata_story_set_2b28(int v) { put_word(g_save.story + STORY_2B28, (uint32_t)v); }
 int savedata_story_battle(void) { return (int)get_word(g_save.story + STORY_BATTLE); }
 void savedata_set_story_battle(int mission) { put_word(g_save.story + STORY_BATTLE, (uint32_t)mission); }
 

@@ -24,6 +24,7 @@
 #include "psp_shim.h"
 #include "render.h"
 #include "savedata.h"
+#include "scene.h"
 #include "sound.h"
 #include "storydb.h"
 #include "ui.h"
@@ -154,12 +155,14 @@ static void move_adventure_part(bool after_step)
     g.t = 0.0f;
     release_chapter();
     if (!g.title) {
-        /* The scene player (CEventScriptWnd) comes next; until then the step is shown
-         * by name and skipped with circle. */
+        /* CStoryMngr::Initialize: the scene player (CEventScriptWnd) on the step's
+         * script, state 3. */
         g.mngr = MNGR_SCRIPT;
         g.note = "Scene";
         SDL_Log("[story] step %d: scene %s (%s), %s", step, g.script_id, g.script,
                 storydb_progress(step, false) ? storydb_progress(step, false) : "");
+        if (!scene_start(g.script, g.script_id))
+            SDL_Log("[story] the scene couldn't start: circle goes on");
         return;
     }
     const char *pic = storydb_chapter_picture(step);
@@ -263,10 +266,12 @@ static void adventure_update(float dt)
             g.fading_out = true;
         }
         break;
-    case MNGR_SCRIPT:
+    case MNGR_SCRIPT: /* FUN_08ab24c8: until the script ends */
         g.t += dt;
-        if (g.t > 0.25f && pad_pressed(PSP_CTRL_CIRCLE))
+        if (!scene_update(dt)) {
+            scene_stop();
             child_finish();
+        }
         break;
     }
 }
@@ -310,6 +315,8 @@ static void draw(void *ctx)
             uint32_t a = (uint32_t)(fade_value(&g.fade) * 255.0f) & 0xFF;
             picture_draw(g.chapter, 0, 0, 0, BLEND_ALPHA, (a << 24) | 0xFFFFFF, 0, 0);
         }
+    } else if (g.child == CHILD_ADVENTURE) {
+        scene_draw(); /* FUN_08ab2c58 */
     } else if (g.child != CHILD_NONE && g.child != CHILD_CLEAR) {
         /* The stand-ins until the scene player, the hub and the ending are written. */
         TextStyle st = note_style(0xFFFFFFFF);
@@ -338,6 +345,9 @@ static void begin(int type)
     g.child = CHILD_NONE;
     g.child_done = false;
     g.saving = false;
+    /* moveAdventurePart's sound bank (FUN_08ae179c): the story effects. */
+    if (!sound_bank_open(SE_BANK_ADV))
+        SDL_Log("[story] the story sound bank couldn't be opened");
     if (!g.node_added)
         render_add_node(render_instance(), 2, draw, &g);
     g.node_added = true;
@@ -417,6 +427,8 @@ int story_update(float dt)
     }
     if (!g.running) {
         release_chapter();
+        scene_stop();
+        sound_bank_close(SE_BANK_ADV);
         if (g.node_added)
             render_remove_node(render_instance(), &g);
         g.node_added = false;
