@@ -3,7 +3,10 @@
 The keyboard and any plugged-in gamepad stand in for the PSP's buttons and analog
 stick. Both work at once. Gamepads can be plugged in and out while the game runs.
 `chexa-pc --controls` prints the table below, with any changes from your config file.
-A short list is also logged at start-up.
+A short list is also logged at start-up. `chexa-pc --list-gamepads` prints the
+controllers SDL sees, whether each has a gamepad mapping (without one the port ignores
+it), its backend, and what its face buttons press. On Windows, SDL reads pads through
+XInput, HIDAPI and DirectInput; see "Controllers" in `docs/windows.md`.
 
 The code is `src/platform/controls.c` (the bindings, the config file, the help hint)
 and `src/platform/input.c` (the live state, hotplug, `sceCtrlPeekBufferPositive`).

@@ -574,21 +574,21 @@ size_t controls_help_hint(const Controls *c, uint32_t mask, bool pad, char *buf,
 const char *controls_config_path(void)
 {
     static char path[1024];
-    const char *env = getenv("CHEXA_CONTROLS");
+    const char *env = SDL_getenv("CHEXA_CONTROLS");
     if (env && *env)
         return env;
 #if defined(_WIN32)
-    const char *base = getenv("APPDATA");
+    const char *base = SDL_getenv("APPDATA");
     if (!base || !*base)
         return NULL;
     snprintf(path, sizeof path, "%s\\chexa-pc\\controls.ini", base);
 #elif defined(__APPLE__)
-    const char *home = getenv("HOME");
+    const char *home = SDL_getenv("HOME");
     if (!home || !*home)
         return NULL;
     snprintf(path, sizeof path, "%s/Library/Application Support/chexa-pc/controls.ini", home);
 #else
-    const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+    const char *xdg = SDL_getenv("XDG_CONFIG_HOME"), *home = SDL_getenv("HOME");
     if (xdg && *xdg)
         snprintf(path, sizeof path, "%s/chexa-pc/controls.ini", xdg);
     else if (home && *home)

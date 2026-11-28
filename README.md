@@ -73,12 +73,16 @@ build/pc-m32/chexa-pc --disc /path/to/disc --startup --shot 60 orig/title.png --
 CHEXA_DISC=/path/to/disc ctest --test-dir build/pc-m32
 ```
 
+A native Windows build (`chexa-pc.exe` with its SDL3 and FFmpeg DLLs, run by double-click
+or from PowerShell) is cross-compiled with MinGW-w64 by `tools/build_windows.sh` into
+`dist/`; see `docs/windows.md`.
+
 `--disc` takes the extracted disc root (the folder holding `PSP_GAME/`) or its
 `PSP_GAME/USRDIR` folder, and serves it read-only as `disc0:`, where the game looks for
 `disc0:/PSP_GAME/USRDIR/...`. Lookups are case-insensitive like the UMD. `--ms` serves a
 writable folder as the memory stick (`ms0:`). Without it the game is told no memory
 stick is inserted. Save data (`sceUtilitySavedata*`) goes in the folder given with
-`--saves DIR`, default `saves/` (gitignored), one directory per save as on a memory
+`--saves DIR`, default `saves/` (gitignored; on Windows `%APPDATA%\chexa-pc\saves`), one directory per save as on a memory
 stick; `--make-test-save` writes a Battle Data save holding twelve of the shipped preset
 OKEs, two teams of them and 5000 Victory Points for the Shop (see "Save data" and
 "Shop" in `docs/screens.md`). The file and UMD imports are implemented (sync and async open, read,

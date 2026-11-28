@@ -7,8 +7,10 @@
  * Host addressing: the PSP GE takes 28-bit physical addresses. This port runs in a
  * 32-bit process and its lists carry host pointers, so BASE (0x10), the TBWn/CBPH/
  * TRXSBW/TRXDBW high bytes and the list calls use 8 high address bits instead of 4.
- * Addresses below 2 MiB, or in 0x04000000-0x041FFFFF, mean video memory. Lists are
- * produced by this port's own libgu (gu.c), which follows that rule. */
+ * Addresses in 0x04000000-0x041FFFFF mean video memory; the frame and depth buffers
+ * (FBP, ZBP) are offsets into it. Everything else is a host pointer: on Windows, where
+ * stacks and heap sit low, the VRAM window is reserved at start-up so no host memory is
+ * there. Lists are produced by this port's own libgu (gu.c), which follows that rule. */
 #ifndef PSP_GE_H
 #define PSP_GE_H
 
@@ -28,6 +30,9 @@ typedef struct PspGeCallbackData {
 uint8_t *psp_ge_vram(void);
 /* A GE address (see above) as a host pointer. */
 uint8_t *psp_ge_ptr(uint32_t addr);
+/* Keeps host memory out of 0x04000000-0x041FFFFF (Windows; elsewhere nothing is mapped
+ * there). Call before any big allocation. False if the range is already in use. */
+bool psp_ge_reserve_vram_window(void);
 
 /* Primitives drawn so far into the frame buffer at VRAM offset fb_offset. */
 uint32_t psp_ge_prims_into(uint32_t fb_offset);

@@ -29,6 +29,16 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows, 32-bit like m32 (MinGW-w64 i686, tools/build_windows.sh)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/win32",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-mingw.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
     }
   ],
   "buildPresets": [
@@ -43,6 +53,10 @@
     {
       "name": "x64",
       "configurePreset": "x64"
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows"
     }
   ]
 }

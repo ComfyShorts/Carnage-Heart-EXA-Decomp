@@ -89,9 +89,12 @@ add_executable(chexa-savedata-test tests/savedata_test.c)
 chexa_target_setup(chexa-savedata-test)
 target_link_libraries(chexa-savedata-test PRIVATE chexa_core)
 
-add_executable(chexa-chip-edit-test tests/chip_edit_test.c)
-chexa_target_setup(chexa-chip-edit-test)
-target_link_libraries(chexa-chip-edit-test PRIVATE chexa_core)
+# Drives chexa-pc through the shell (rm -rf, mkdtemp): Linux only.
+if(NOT WIN32)
+  add_executable(chexa-chip-edit-test tests/chip_edit_test.c)
+  chexa_target_setup(chexa-chip-edit-test)
+  target_link_libraries(chexa-chip-edit-test PRIVATE chexa_core)
+endif()
 
 add_executable(chexa-oke-parts-test tests/oke_parts_test.c)
 chexa_target_setup(chexa-oke-parts-test)
@@ -136,13 +139,20 @@ add_test(NAME battle_teams COMMAND chexa-battle-test --teams
 add_test(NAME oke_parts COMMAND chexa-oke-parts-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME controls_mapping COMMAND chexa-controls-test)
+# --list-gamepads with one virtual pad: listed as a gamepad, east bound to circle.
+add_test(NAME list_gamepads COMMAND chexa-pc --list-gamepads)
+set_tests_properties(list_gamepads PROPERTIES ENVIRONMENT "CHEXA_TEST_VIRTUAL_PAD=1;CHEXA_CONTROLS=${CMAKE_CURRENT_BINARY_DIR}/no-controls.ini"
+                     PASS_REGULAR_EXPRESSION "chexa test pad.*east[^\n]*= circle")
 add_test(NAME scene_files COMMAND chexa-scene-files-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME story_steps COMMAND chexa-story-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-add_test(NAME chip_edit_roundtrip COMMAND chexa-chip-edit-test
-         --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/chip-edit
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+if(NOT WIN32)
+  add_test(NAME chip_edit_roundtrip COMMAND chexa-chip-edit-test
+           --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/chip-edit
+           WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  set_tests_properties(chip_edit_roundtrip PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 add_test(NAME sound_effects COMMAND chexa-sound-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME movie_decode COMMAND chexa-movie-test)
@@ -168,7 +178,7 @@ add_test(NAME map_view COMMAND chexa-pc --disc ${CHEXA_TEST_DISC} --startup --sk
          --saves ${CMAKE_CURRENT_BINARY_DIR}/test-saves/map)
 set_tests_properties(map_view PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;SDL_AUDIO_DRIVER=dummy"
                      PASS_REGULAR_EXPRESSION "map 14: 33x33 grid.*the game called sceKernelExitGame")
-set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts scene_files story_steps chip_edit_roundtrip sound_effects music_decode movie_decode startup_path movie_skip map_view PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(io_disc pgchip_one_record pgchip_all_records battle_presets battle_teams oke_parts scene_files story_steps sound_effects music_decode movie_decode startup_path movie_skip map_view PROPERTIES SKIP_RETURN_CODE 77)
 
 # SDL loads libX11 and friends at runtime with dlopen. With the user-local sysroot those
 # are 32-bit libraries under .deps, so bake their directory into the binary. DT_RPATH (not
