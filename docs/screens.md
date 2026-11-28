@@ -654,9 +654,9 @@ them, unless a button stops it:
 build/pc-m32/chexa-pc --disc DIR --startup --frames 1260 --shot 80 orig/movie_logo.png \
     --shot 600 orig/movie_600.png --shot 1250 orig/after_movie.png
 build/pc-m32/chexa-pc --disc DIR --startup --press 40 circle --frames 80 --shot 60 orig/skipped.png
-``` The keyboard plays
-the pad: arrows, Z/Enter = circle, X/Backspace = cross, A = square, S = triangle,
-Q/W = L/R, Space = start, Right Shift = select.
+``` The keyboard and gamepads play
+the pad (arrows, Z = circle, X = cross by default): see `docs/controls.md`, or run
+`chexa-pc --controls`.
 
 ## Next
 

@@ -2,9 +2,12 @@
 #include "psp_shim.h"
 #include "ge.h"
 
+#include <stdio.h>
+
 #include <SDL3/SDL.h>
 
 static SDL_Window *g_window;
+static char g_title[128];
 static SDL_Renderer *g_renderer;
 static SDL_Texture *g_screen;
 
@@ -14,6 +17,12 @@ bool psp_platform_init(const char *title, int scale)
         SDL_Log("[platform] SDL_Init failed: %s", SDL_GetError());
         return false;
     }
+    /* Gamepads: already connected ones arrive as SDL_EVENT_GAMEPAD_ADDED too. */
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD))
+        SDL_Log("[platform] no gamepad support: %s", SDL_GetError());
+    snprintf(g_title, sizeof g_title, "%s", title);
+    psp_help_init();
+    psp_controls_log();
     if (scale < 1)
         scale = 1;
     if (!SDL_CreateWindowAndRenderer(title, PSP_SCREEN_W * scale, PSP_SCREEN_H * scale,
@@ -42,7 +51,25 @@ bool psp_platform_pump(void)
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE)
             return false;
         if ((ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) && !ev.key.repeat)
-            psp_ctrl_key_event((int)ev.key.key, ev.type == SDL_EVENT_KEY_DOWN);
+            psp_ctrl_key_event((int)ev.key.scancode, ev.type == SDL_EVENT_KEY_DOWN);
+        if (ev.type == SDL_EVENT_WINDOW_FOCUS_LOST)
+            psp_ctrl_release_all(); /* no key stays held while another window has them */
+        if (ev.type == SDL_EVENT_GAMEPAD_ADDED)
+            psp_ctrl_pad_added(ev.gdevice.which);
+        if (ev.type == SDL_EVENT_GAMEPAD_REMOVED)
+            psp_ctrl_pad_removed(ev.gdevice.which);
+    }
+    psp_ctrl_pads_poll();
+    /* The keys for the buttons the screen's help text names, in the title bar. */
+    char hint[256], title[400];
+    if (psp_help_hint(hint, sizeof hint) && g_window) {
+        if (hint[0])
+            snprintf(title, sizeof title, "%s  -  %s", g_title, hint);
+        else
+            snprintf(title, sizeof title, "%s", g_title);
+        SDL_SetWindowTitle(g_window, title);
+        if (hint[0])
+            SDL_Log("[input] this screen's help names: %s", hint);
     }
     return true;
 }
@@ -87,6 +114,7 @@ void psp_platform_present(void)
 void psp_platform_shutdown(void)
 {
     psp_audio_shutdown();
+    psp_ctrl_pads_close();
     if (g_screen)
         SDL_DestroyTexture(g_screen);
     g_screen = NULL;

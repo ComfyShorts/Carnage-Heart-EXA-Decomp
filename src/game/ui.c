@@ -326,6 +326,7 @@ void ui_menu_draw(const UiMenu *m)
 
 void ui_help_draw(const char *text)
 {
+    psp_help_text(text); /* the PC port lists the keys for the buttons it names */
     ui_frame(ui_part(PART_SD_WIND0), 0, HELP_Y, 480, 272 - HELP_Y, 8, 0.9f);
     if (!text)
         return;

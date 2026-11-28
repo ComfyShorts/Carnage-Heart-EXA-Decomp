@@ -105,6 +105,10 @@ add_executable(chexa-movie-test tests/movie_test.c)
 chexa_target_setup(chexa-movie-test)
 target_link_libraries(chexa-movie-test PRIVATE chexa_core)
 
+add_executable(chexa-controls-test tests/controls_test.c)
+chexa_target_setup(chexa-controls-test)
+target_link_libraries(chexa-controls-test PRIVATE chexa_core)
+
 add_executable(chexa-scene-files-test tests/scene_files_test.c)
 chexa_target_setup(chexa-scene-files-test)
 target_link_libraries(chexa-scene-files-test PRIVATE chexa_core)
@@ -131,6 +135,7 @@ add_test(NAME battle_teams COMMAND chexa-battle-test --teams
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME oke_parts COMMAND chexa-oke-parts-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_test(NAME controls_mapping COMMAND chexa-controls-test)
 add_test(NAME scene_files COMMAND chexa-scene-files-test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME story_steps COMMAND chexa-story-test
@@ -172,7 +177,7 @@ if(PCPORT_I386_LIBDIR)
   # libpulse.so.0 finds its private libpulsecommon through its own RUNPATH, a system
   # path; audio.c loads it from here first (see psp_audio_preload_pulse).
   target_compile_definitions(chexa_core PRIVATE PCPORT_I386_LIBDIR="${PCPORT_I386_LIBDIR}")
-  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test chexa-battle-test chexa-savedata-test chexa-sound-test chexa-movie-test chexa-story-test chexa-scene-files-test)
+  foreach(exe chexa-pc chexa-pgchip-test chexa-io-test chexa-gu-test chexa-battle-test chexa-savedata-test chexa-sound-test chexa-movie-test chexa-story-test chexa-scene-files-test chexa-controls-test)
     set_target_properties(${exe} PROPERTIES BUILD_RPATH "${PCPORT_I386_LIBDIR}")
     target_link_options(${exe} PRIVATE "-Wl,--disable-new-dtags")
   endforeach()
