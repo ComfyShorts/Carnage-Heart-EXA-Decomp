@@ -34,6 +34,7 @@
  *                     --gmo-angle DEG: starting turn)
  *   --oke ID          with --startup: show an assembled OKE body (--oke-pose N)
  *   --map N           with --startup: show the generated terrain of map N
+ *   --story-step N    with --startup: start Story Mode on step N (0-84) of a new game
  *   --elf FILE        the decrypted EBOOT, for interface text (default orig/EBOOT.elf)
  *   --scale N         window scale (default 2, i.e. 960x544)
  *   --call-all-stubs  call every still-stubbed PSP import once with no arguments, to
@@ -51,6 +52,7 @@
 #include "ge.h"
 #include "startup.h"
 #include "modelview.h"
+#include "story.h"
 #include "gamedata.h"
 #include "savedata.h"
 #include "movie.h"
@@ -195,6 +197,8 @@ int main(int argc, char **argv)
             g_modelview_oke = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--map") && i + 1 < argc)
             g_modelview_map = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--story-step") && i + 1 < argc)
+            g_story_step = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--oke-pose") && i + 1 < argc)
             g_modelview_pose = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gmo-angle") && i + 1 < argc)
@@ -218,7 +222,7 @@ int main(int argc, char **argv)
                                                                                        : "orig/first_frame.png");
         else {
             fprintf(stderr,
-                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--perf] [--startup] [--trace] [--frames N] [--scale N] "
+                    "usage: %s [--disc DIR] [--ms DIR] [--saves DIR] [--make-test-save [NAME]] [--mute] [--audio-driver NAME] [--tone] [--skip-movie] [--story-step N] [--perf] [--startup] [--trace] [--frames N] [--scale N] "
                     "[--gu-trace N] [--ge-trace] [--screenshot [FILE]] [--shot N FILE] [--press N BUTTON] "
                     "[--elf FILE] [--gmo FILE] [--call-all-stubs]\n",
                     argv[0]);

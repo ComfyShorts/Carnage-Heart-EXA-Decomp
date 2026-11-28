@@ -290,8 +290,9 @@ typedef struct EntranceMngr {
     Wnd load_wnd;       /* an empty stack entry for the phase */
     UiMenu load_menu;
     int load_state;
+    int load_kind;      /* SAVE_STORY / SAVE_BATTLE, chosen in the kind menu */
     const char *load_msg;
-    bool loaded;        /* the entrance ended on a loaded Battle Data save */
+    bool loaded;        /* the entrance ended on a loaded Story Data / Battle Data save */
 } EntranceMngr;
 
 static EntranceMngr g_mngr;
@@ -309,6 +310,8 @@ static void mngr_pop_phase(EntranceMngr *m)
     while (m->stack.count && mngr_phase(m) == phase)
         stack_pop(&m->stack);
 }
+
+static void load_kinds(EntranceMngr *m);
 
 static void mngr_open(EntranceMngr *m, int phase, int arg);
 
@@ -366,9 +369,7 @@ static void mngr_open(EntranceMngr *m, int phase, int arg)
         break;
     case PHASE_LOAD: /* FUN_088d438c(6) + CSystemMngr::Initialize(3) */
         stack_push(&m->stack, &m->load_wnd, PHASE_LOAD, arg);
-        m->load_state = 0;
-        m->load_msg = NULL;
-        savedata_list_start();
+        load_kinds(m);
         break;
     default:
         SDL_Log("[entrance] CEntranceMngr: phase %d isn't ported; staying on the current screen", phase);
@@ -387,7 +388,7 @@ static void phase_top_menu(EntranceMngr *m)
             menu_close(&m->top_menu, 1);
             mngr_open(m, PHASE_MODE_MENU, 0);
         } else if (m->top_menu.cursor == 1) {
-            SDL_Log("[entrance] Continue chosen: the Battle Data list");
+            SDL_Log("[entrance] Continue chosen: the kinds of save");
             mngr_open(m, PHASE_LOAD, 0);
         } else if (!m->stop_warned) {
             /* 2 Network Play: phase 6 with the network screens. */
@@ -406,11 +407,26 @@ static void phase_top_menu(EntranceMngr *m)
 
 /* Phase 6, Continue. The game opens CSystemMngr type 3: a menu of the kinds of save
  * (mode 4), then CSaveMngr's own list of that kind's files (exec type 1, drawn by
- * UpdateSelectFileList FUN_08a676f0). The port lists the Battle Data files (Story Mode
- * isn't ported) in a plain menu, loads the chosen one (state 0x2B) and opens Battle
- * Mode on it. The texts here are the port's. */
+ * UpdateSelectFileList FUN_08a676f0). The port shows the two game kinds, Story Data
+ * and Battle Data (their names from the EBOOT, FUN_08ab82f0), then the kind's files in
+ * a plain menu, loads the chosen one (state 0x2B) and opens its mode on it. The other
+ * texts here are the port's. */
 #define LOAD_X 150
 #define LOAD_Y 64
+#define STR_STORY_DATA 0x00437D58u
+#define STR_BATTLE_DATA 0x00437D64u
+
+static void load_kinds(EntranceMngr *m)
+{
+    m->load_state = 3;
+    m->load_msg = "Choose the kind of data to load.";
+    ui_menu_init(&m->load_menu, LOAD_X + 10, LOAD_Y + 24, 24 - 5, 12,
+                 text_style(0, 6, 12, 12, 0, 0, 0xFF303030, 0));
+    ui_menu_add(&m->load_menu, gamedata_string(STR_STORY_DATA), SAVE_STORY, 0, PART_BF_MENB4, PART_BF_MENL4);
+    ui_menu_add(&m->load_menu, gamedata_string(STR_BATTLE_DATA), SAVE_BATTLE, 0, PART_BF_MENB4, PART_BF_MENL4);
+    m->load_menu.cursor = m->load_kind == SAVE_BATTLE ? 1 : 0;
+    ui_menu_open(&m->load_menu);
+}
 
 static void load_build(EntranceMngr *m)
 {
@@ -426,15 +442,33 @@ static void load_build(EntranceMngr *m)
     }
     if (n > 0) {
         ui_menu_open(&m->load_menu);
-        m->load_msg = "Choose the Battle Data to load.";
+        m->load_msg = m->load_kind == SAVE_STORY ? "Choose the Story Data to load." : "Choose the Battle Data to load.";
     } else {
-        m->load_msg = savedata_result() ? "The save data couldn't be read." : "There is no Battle Data.";
+        m->load_msg = savedata_result()            ? "The save data couldn't be read."
+                      : m->load_kind == SAVE_STORY ? "There is no Story Data."
+                                                   : "There is no Battle Data.";
     }
 }
 
 static void phase_load(EntranceMngr *m, float dt)
 {
     switch (m->load_state) {
+    case 3: /* the kind of save */
+        ui_menu_update(&m->load_menu, dt);
+        ui_menu_input(&m->load_menu);
+        if (pad_pressed(PSP_CTRL_CROSS)) {
+            sound_se(SE_CANCEL, 1.0f);
+            ui_menu_close(&m->load_menu);
+            mngr_pop_phase(m);
+            m->top_menu.active = true;
+        } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
+            sound_se(SE_DECIDE, 1.0f);
+            m->load_kind = ui_menu_id(&m->load_menu);
+            m->load_msg = NULL;
+            m->load_state = 0;
+            savedata_list_start((SaveKind)m->load_kind);
+        }
+        break;
     case 0: /* the file list */
         if (!savedata_list_update()) {
             load_build(m);
@@ -447,9 +481,7 @@ static void phase_load(EntranceMngr *m, float dt)
             ui_menu_input(&m->load_menu);
         if (pad_pressed(PSP_CTRL_CROSS)) {
             sound_se(SE_CANCEL, 1.0f);
-            ui_menu_close(&m->load_menu);
-            mngr_pop_phase(m);
-            m->top_menu.active = true;
+            load_kinds(m);
         } else if (pad_pressed(PSP_CTRL_CIRCLE) && m->load_menu.count) {
             sound_se(SE_DECIDE, 1.0f);
             const SaveListEntry *list;
@@ -458,7 +490,7 @@ static void phase_load(EntranceMngr *m, float dt)
             if (e->broken) {
                 m->load_msg = "This data is damaged.";
             } else {
-                savedata_load_start(e->file);
+                savedata_load_start((SaveKind)m->load_kind, e->file);
                 m->load_msg = "Loading...";
                 m->load_state = 2;
             }
@@ -469,8 +501,9 @@ static void phase_load(EntranceMngr *m, float dt)
         if (savedata_io_update())
             break;
         if (savedata_result() == 0) {
-            /* The load leaves game mode 2: straight to Battle Mode. */
-            m->selection = 1;
+            /* The load leaves game mode 1 (Story Data: CTutorialFlow type 2, scene
+             * manager mode 3) or 2 (Battle Data: straight to Battle Mode). */
+            m->selection = m->load_kind == SAVE_STORY ? 0 : 1;
             m->loaded = true;
             m->done = true;
         } else {
@@ -527,11 +560,12 @@ static void phase_mode_menu(EntranceMngr *m)
             m->mode_menu.active = false;
             return;
         }
-        if (!m->stop_warned) {
-            SDL_Log("[entrance] %s chosen: phase %s isn't ported",
-                    m->selection == 0 ? "Story Mode" : "Battle Mode", m->selection == 0 ? "0xC" : "7/9");
-            m->stop_warned = true;
-        }
+        /* Story Mode: phase 0xC (FUN_088d4e64 / FUN_088d628c) fades to black and
+         * ends the entrance on game mode 1; the scene manager starts a new story
+         * (FUN_088d3d80 mode 0). */
+        SDL_Log("[entrance] Story Mode: a new game");
+        m->loaded = false;
+        m->done = true;
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
         sound_se(SE_CANCEL, 1.0f);
         menu_close(&m->mode_menu, 0);
@@ -617,7 +651,9 @@ static void mngr_draw(void *ctx)
     if (phase == PHASE_LOAD) {
         int rows = m->load_menu.count > 0 ? m->load_menu.count : 1;
         ui_frame(ui_part(PART_BF_SWND4), LOAD_X, LOAD_Y, 180, 34 + 19 * rows, 8, 1.0f);
-        const char *caption = gamedata_string(0x00437D64u); /* "Battle Data" (FUN_08ab82f0) */
+        /* "Story Data" / "Battle Data" (FUN_08ab82f0); none over the kind menu. */
+        const char *caption =
+            m->load_state == 3 ? NULL : gamedata_string(m->load_kind == SAVE_STORY ? STR_STORY_DATA : STR_BATTLE_DATA);
         if (caption)
             ui_text(caption, &m->load_menu.style, LOAD_X + 12, LOAD_Y + 7, 1.0f);
         ui_menu_draw(&m->load_menu);

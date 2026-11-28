@@ -846,7 +846,7 @@ static int update_ask(float dt)
     if (r == 0)
         return 1;
     if (g.ask_kind == ASK_SAVE) {
-        savedata_save_start(g_save.battle_file[0] ? g_save.battle_file : "NEWDATA.CHE");
+        savedata_save_start(SAVE_BATTLE, g_save.battle_file[0] ? g_save.battle_file : "NEWDATA.CHE");
         g.saving = true;
         snprintf(g.save_msg, sizeof g.save_msg, "Saving...");
         g.message = g.save_msg;

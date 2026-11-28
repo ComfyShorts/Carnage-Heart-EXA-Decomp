@@ -29,8 +29,8 @@ int entrance_update(float dt);
  * 1 Battle Mode). */
 int entrance_selection(void);
 
-/* True when the entrance ended on a Battle Data save loaded through Continue (the cards
- * are in g_save); false for a new game. */
+/* True when the entrance ended on a save loaded through Continue: Story Data
+ * (selection 0) or Battle Data (selection 1), now in g_save; false for a new game. */
 bool entrance_loaded(void);
 
 #endif

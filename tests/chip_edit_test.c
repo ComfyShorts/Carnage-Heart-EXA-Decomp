@@ -399,11 +399,11 @@ int main(int argc, char **argv)
             return 1;
     }
     psp_savedata_set_root(saves);
-    savedata_save_start("CHIPEDIT.CHE");
+    savedata_save_start(SAVE_BATTLE, "CHIPEDIT.CHE");
     CHECK(savedata_run(savedata_io_update) == 0, "saved CHIPEDIT.CHE");
     savedata_new_game();
     CHECK(memcmp(&g_save.db.card[0], &edited, sizeof edited) != 0, "cleared before loading");
-    savedata_load_start("CHIPEDIT.CHE");
+    savedata_load_start(SAVE_BATTLE, "CHIPEDIT.CHE");
     CHECK(savedata_run(savedata_io_update) == 0, "loaded CHIPEDIT.CHE");
     CHECK(!memcmp(&g_save.db.card[0].software, &edited.software, sizeof edited.software),
           "the edited software came back unchanged");

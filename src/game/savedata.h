@@ -1,13 +1,15 @@
 /* The game's save data: CSaveMngr / CUtility / CSystemMngr's save paths, and the
  * CCarnageHeart blocks they store. See docs/screens.md ("Save data").
  *
- * Two kinds of save are ported:
+ * Three kinds of save are ported:
  *   - System data: ULJM05698/DATA.BIN, the 0x7C-byte block at CCarnageHeart + 0x3AE00
  *     (sound volumes, options, the Story Mode flag, play time). Checked at start-up
  *     (CSaveMngr save type 4, exec type 3): loaded when it exists, created when not.
  *   - Battle Data: ULJM05698B/<NAME>.CHE, one file per save the player names:
  *     the version "0.0.44", the shared block (CCarnageHeart + 0x3AE80, 0x483A0 bytes:
  *     the 32 OKE cards first) and the Battle Mode block (+0x860F0, 0x431C bytes).
+ *   - Story Data: ULJM05698S/<NAME>.CHE, the same with the Story Mode block
+ *     (CScenarioModeDataBase, +0x83570, 0x2B80 bytes) in place of the Battle Mode one.
  *
  * The sequences run through sceUtilitySavedata* one call per frame, as the game's do;
  * their *_update functions return 1 while running and 0 when done. */
@@ -26,6 +28,8 @@
 #define GAME_DB_SIZE 0x483A0            /* CCarnageHeart + 0x3AE80 */
 #define BATTLE_DATA_SIZE 0x431C         /* CCarnageHeart + 0x860F0 */
 #define BATTLE_SAVE_SIZE (6 + GAME_DB_SIZE + BATTLE_DATA_SIZE) /* strlen(version) + 0x4C6BC */
+#define STORY_DATA_SIZE 0x2B80          /* CCarnageHeart + 0x83570 */
+#define STORY_SAVE_SIZE (6 + GAME_DB_SIZE + STORY_DATA_SIZE)   /* strlen(version) + 0x4AF20 */
 #define SAVE_CARDS 32                   /* FUN_0889ec18 */
 #define SAVE_TEAMS 16
 #define TEAM_CARD_SIZE 0x340
@@ -46,8 +50,13 @@ typedef struct SaveState {
     uint8_t system[SYSTEM_DATA_SIZE];
     GameDataBase db;
     uint8_t battle[BATTLE_DATA_SIZE];
+    uint8_t story[STORY_DATA_SIZE];
     char battle_file[SAVE_FILE_MAX]; /* the Battle Data file loaded or last saved, "" none */
+    char story_file[SAVE_FILE_MAX];  /* the same for Story Data */
 } SaveState;
+
+/* The game-save kinds (CSystemMngr save types; save names "S" / "B" from 0x08c858f8). */
+typedef enum { SAVE_STORY = 1, SAVE_BATTLE = 2 } SaveKind;
 
 extern SaveState g_save;
 
@@ -73,8 +82,46 @@ void savedata_set_current_card(int card);
 /* FUN_089eea80 (a blank card) and a whole-card copy, as Select OKE Card does. */
 void savedata_card_clear(int card);
 void savedata_card_copy(int from, int to);
-/* System data +0x74 (FUN_0889c400): Story Mode was completed. */
+/* System data +0x74 (FUN_0889c400 / FUN_0889c408): Story Mode was completed. */
 bool savedata_story_completed(void);
+void savedata_set_story_completed(bool done);
+
+/* ---- the Story Mode block (CScenarioModeDataBase, 0x2B80 bytes) ----
+ *   +0x0000 the current step (FUN_0889d498 / FUN_0889d4a0), -1 before the first
+ *   +0x0088 0x34 lesson state bytes, +0x00BC 0x34 lesson-cleared words (FUN_0889d46c)
+ *   +0x0190 the briefing's lesson (FUN_0889d544), -1 none
+ *   +0x0198 the hidden scripts (CEventScriptField, FUN_0889d564)
+ *   +0x2B28 set by script ops 0x2D / 0x2E (FUN_0889d574), -1 none
+ *   +0x2B2C the current battle mission (FUN_0889d710), +0x2B30
+ *   +0x2B34 the briefing's script file, 0x40 bytes (FUN_0889d584)
+ *   +0x2B74 / +0x2B78 the most OKE / team cards (2 / 4 at first), +0x2B7C */
+#define STORY_STEP_NONE (-1)
+int savedata_story_step(void);
+void savedata_set_story_step(int step);
+int savedata_story_battle(void);
+void savedata_set_story_battle(int mission);
+/* The briefing's script file (FUN_0889d584), "" none. */
+const char *savedata_story_script(void);
+void savedata_set_story_script(const char *path);
+/* The hidden scripts (CEventScriptField at +0x198): 0x13 menus, each up to 8 script
+ * ids by key. Hide stores one (FUN_088df4b0), Seek finds it (FUN_088df540, NULL
+ * none), Clear removes it (FUN_088df5d4). */
+#define STORY_FIELD_MENUS 0x13
+bool savedata_story_field_hide(int menu, int key, const char *id);
+const char *savedata_story_field_seek(int menu, int key);
+void savedata_story_field_clear(int menu, int key);
+bool savedata_story_field_exists(int menu, int key);
+
+/* A new Story Mode game: CScenarioModeDataBase's reset (FUN_0889d3dc), then
+ * FUN_088d3d80 mode 0: the menu limits (FUN_0895ddd4), the stock (FUN_08918cb0), the
+ * maps (FUN_0882f64c) and +0x2B28 = -1. CTutorialFlow::loadPreset's cards come after
+ * (story.c, from the pack). */
+void savedata_story_new(void);
+/* CTutorialFlow::loadPreset (FUN_08ae1090): OKE cards 0 and 1 from
+ * preset/lecture/oke_l00_1.bin / _2.bin, team card 0 from preset/lecture/team_f00.bin
+ * (read from the pack), and the two battle teams' first members. False when a file
+ * is missing. */
+bool savedata_story_preset(void);
 
 /* ---- the team cards (CTeamDataBase, 0x340 bytes; FUN_0889cb10) ----
  *   +0x000 status: 0 unused, 1 the player's, 2 / 3 installed from others (FUN_089eea18)
@@ -172,19 +219,19 @@ void savedata_battle_mode_new(void);
 void savedata_check_start(void);
 int savedata_check_update(void);
 
-/* The Battle Data files (FILES on ULJM05698B, the ".CHE" ones; FUN_08a672f8). */
+/* A kind's files (FILES on ULJM05698S / ULJM05698B, the ".CHE" ones; FUN_08a672f8). */
 typedef struct SaveListEntry {
     char file[SAVE_FILE_MAX];
-    bool broken; /* not BATTLE_SAVE_SIZE bytes (the list's +0x30 flag) */
+    bool broken; /* not the kind's size (FUN_08ab8114(3, kind); the list's +0x30 flag) */
     ScePspDateTime mtime;
 } SaveListEntry;
-void savedata_list_start(void);
+void savedata_list_start(SaveKind kind);
 int savedata_list_update(void);
 int savedata_list(const SaveListEntry **out); /* after the list is done */
 
-/* Load or save one Battle Data file (READSECURE / MAKEDATA or WRITE). */
-void savedata_load_start(const char *file);
-void savedata_save_start(const char *file);
+/* Load or save one game file of the kind (READSECURE / MAKEDATA or WRITE). */
+void savedata_load_start(SaveKind kind, const char *file);
+void savedata_save_start(SaveKind kind, const char *file);
 int savedata_io_update(void);
 /* The last sequence's outcome: 0 fine, else the sceUtility result (or -1). */
 int32_t savedata_result(void);

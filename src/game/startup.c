@@ -18,6 +18,7 @@
  * but the clear is drawn. */
 #include "startup.h"
 #include "savedata.h"
+#include "story.h"
 #include "sound.h"
 #include "gamedata.h"
 #include "battle.h"
@@ -371,6 +372,9 @@ static void main_loop(void)
     if (g_modelview_path || g_modelview_oke >= 0 || g_modelview_map >= 0) {
         modelview_start();
         entrance_running = 3;
+    } else if (g_story_step >= 0) {
+        story_start_at(g_story_step);
+        entrance_running = 4;
     } else {
         entrance_start();
     }
@@ -403,9 +407,14 @@ static void main_loop(void)
                 battle_mode_start();
                 entrance_running = 2;
             } else {
-                entrance_running = 0;
-                SDL_Log("[startup] the entrance ended: the next screens aren't ported");
+                /* Story Mode: FUN_088d3d80 mode 0 (new) or 3 (Story Data loaded). */
+                story_start(entrance_loaded());
+                entrance_running = 4;
             }
+        } else if (entrance_running == 4 && !story_update(dt)) {
+            SDL_Log("[startup] back to the title");
+            entrance_start();
+            entrance_running = 1;
         } else if (entrance_running == 2 && !battle_mode_update(dt)) {
             SDL_Log("[startup] back to the title");
             entrance_start();
