@@ -11,9 +11,12 @@
  *     (FUN_08a0c008 tiles, FUN_08a13430 face routines, FUN_08a13468 exit arrows).
  *   CPgChipSelectWnd: Create FUN_08a16bc8 (5 pages of 9 x 7, titles CDesignString
  *     0xCF-0xD3), the page rule FUN_08a155f8.
+ *   Macros: Save Macro (modes 0x1D from a range, 0x1E from chips picked one by one:
+ *     the list FUN_08a891ec, the name FUN_08a89ef0, stored by FUN_08a94670) and Paste
+ *     Macro (mode 0x1F: the list FUN_08a8955c, FUN_08a8983c lifts it to paste).
  * The parameter sub-menus are in oke_param.c, the rules in pgchip_edit.c. What isn't
- * ported (drag / pull, flipping and turning a pasted block, macros, the test
- * program, example solutions) is listed in docs/screens.md. */
+ * ported (drag / pull, flipping and turning a pasted block, the test program,
+ * example solutions) is listed in docs/screens.md. */
 #include "oke_soft.h"
 
 #include <stdio.h>
@@ -154,6 +157,9 @@ typedef enum {
     M_CARDS,      /* Copy from Card: the card list */
     M_COUNTERS,   /* Change Counter Name: which counter */
     M_OSK,        /* ... and the keyboard */
+    M_MACRO_SAVE, /* modes 0x1D / 0x1E: the macro to save to */
+    M_MACRO_NAME, /* ... and its name on the keyboard */
+    M_MACROS,     /* mode 0x1F: Paste Macro's list */
 } Mode;
 
 enum { ASK_DELETE_ALL, ASK_COPY };
@@ -188,6 +194,8 @@ static struct {
     UiAsk ask;
     int ask_kind;
     int card_cursor, counter_cursor;
+    int macro_cursor, macro_help;
+    bool macro_paste;     /* the block being pasted is a macro: back to the list after */
     const char *message;
     float t;
 } g;
@@ -794,6 +802,169 @@ static void range_rect(int *p, int *x0, int *y0, int *x1, int *y1)
     area_at(g.cx, g.cy, x1, y1);
 }
 
+/* ---- macros (PGCHIP::tagMACRO, savedata_macro) ---- */
+
+#define MACRO_CHIPS 4
+#define MACRO_W 0x70C
+#define MACRO_H 0x710
+#define MACRO_NAME 0x714
+#define MACRO_NAME_MAX 0x14 /* FUN_08a0bc24 */
+#define MACRO_NAME_INPUT 10 /* FUN_08a89ef0's keyboard */
+
+static uint32_t rd_le32(const uint8_t *p)
+{
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return v;
+}
+
+static void wr_le32(uint8_t *p, uint32_t v)
+{
+    memcpy(p, &v, 4);
+}
+
+static bool macro_used(int i)
+{
+    const uint8_t *m = savedata_macro(i);
+    return m && rd_le32(m) != 0;
+}
+
+static void macro_name(int i, char *out, size_t n)
+{
+    const uint8_t *m = savedata_macro(i);
+    snprintf(out, n, "%.*s", MACRO_NAME_MAX, m ? (const char *)m + MACRO_NAME : "");
+    if (!out[0]) /* a save made before the port built the macros */
+        snprintf(out, n, "Macro%d", (i + 1) % 10);
+}
+
+
+/* FUN_08a891ec / FUN_08a8955c: the 8 macros; Save Macro's cursor starts on the first
+ * empty one, Paste Macro's on the first saved one. */
+static void open_macros(Mode mode)
+{
+    g.macro_cursor = 0;
+    for (int i = 0; i < MACROS; i++)
+        if (macro_used(i) == (mode == M_MACROS)) {
+            g.macro_cursor = i;
+            break;
+        }
+    g.mode = mode;
+}
+
+static bool macro_move(void)
+{
+    int old = g.macro_cursor;
+    if (pad_repeat(PSP_CTRL_UP))
+        g.macro_cursor = g.macro_cursor > 0 ? g.macro_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? MACROS - 1 : 0;
+    else if (pad_repeat(PSP_CTRL_DOWN))
+        g.macro_cursor = g.macro_cursor < MACROS - 1 ? g.macro_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.macro_cursor;
+    if (old != g.macro_cursor)
+        sound_se(SE_CURSOR, 1.0f);
+    return old != g.macro_cursor;
+}
+
+/* Modes 0x1D / 0x1E: circle names the macro (FUN_08a89ef0: "Macro Name", 10
+ * characters, on its old name); cross goes back to the range menu. */
+static void update_macro_save(void)
+{
+    macro_move();
+    if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
+        g.mode = M_RANGE_MENU;
+    } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        char name[MACRO_NAME_MAX + 1];
+        macro_name(g.macro_cursor, name, sizeof name);
+        osk_open(sstr(0x17E), name, MACRO_NAME_INPUT);
+        g.mode = M_MACRO_NAME;
+        sound_se(SE_DECIDE, 1.0f);
+    }
+}
+
+/* FUN_08a94670 (0x1D / 0x1E): the selection's chips into the macro (FUN_08a0ba70: w
+ * and h 1-15, then the range copied, FUN_08a1aedc; or the picked chips over cells
+ * cleared and marked, FUN_08a1b574), its name; then Select Area again (mode 4) or,
+ * for picked chips, Edit Chips with the picks let go (mode 3). */
+static void update_macro_name(void)
+{
+    int r = osk_update();
+    if (r == OSK_RUNNING)
+        return;
+    if (r != OSK_OK) {
+        g.mode = M_MACRO_SAVE;
+        return;
+    }
+    uint8_t *m = savedata_macro(g.macro_cursor);
+    if (!m || g.clip.w < 1 || g.clip.w > 15 || g.clip.h < 1 || g.clip.h > 15) {
+        error_se();
+        g.mode = M_MACRO_SAVE;
+        return;
+    }
+    memset(m, 0, MACRO_NAME); /* FUN_08a0bb28 */
+    for (int i = 0; i < 15 * 15; i++) {
+        PgChipCommand blank;
+        pgchip_default(&blank, 0);
+        memcpy(m + MACRO_CHIPS + 8 * i, blank.b, 8);
+    }
+    wr_le32(m, 1);
+    wr_le32(m + MACRO_W, (uint32_t)g.clip.w);
+    wr_le32(m + MACRO_H, (uint32_t)g.clip.h);
+    memset(m + MACRO_NAME, 0, MACRO_SIZE - MACRO_NAME);
+    snprintf((char *)m + MACRO_NAME, MACRO_NAME_MAX + 1, "%s", osk_text()); /* 0x18 bytes there */
+    for (int i = 0; i < g.clip.w * g.clip.h; i++) {
+        PgChipCommand c = g.clip.chips[i];
+        if (g.range_from_pick && !pgchip_valid_type(pgchip_type(&c))) {
+            pgchip_default(&c, 0); /* a cell not picked: cleared, byte 2 marked */
+            c.b[2] = 1;
+        }
+        memcpy(m + MACRO_CHIPS + 8 * i, c.b, 8);
+    }
+    SDL_Log("[soft] macro %d \"%s\": %d x %d chips", g.macro_cursor + 1, osk_text(), g.clip.w, g.clip.h);
+    sound_se(SE_DECIDE, 1.0f);
+    if (g.range_from_pick) {
+        memset(g.picked, 0, sizeof g.picked); /* FUN_08a1b140 */
+        g.mode = M_EDIT;
+    } else {
+        g.mode = M_RANGE;
+    }
+}
+
+/* Mode 0x1F (FUN_08a7edc8): circle lifts the macro to be pasted at the cursor
+ * (FUN_08a8983c; an empty one gives the error sound); cross goes back to the menu. */
+static void update_macros(void)
+{
+    if (macro_move())
+        g.message = NULL;
+    if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
+        g.macro_paste = false;
+        g.mode = M_MENU;
+        return;
+    }
+    if (!pad_pressed(PSP_CTRL_CIRCLE))
+        return;
+    const uint8_t *m = savedata_macro(g.macro_cursor);
+    int w = m ? (int)rd_le32(m + MACRO_W) : 0, h = m ? (int)rd_le32(m + MACRO_H) : 0;
+    if (!macro_used(g.macro_cursor) || w < 1 || w > 15 || h < 1 || h > 15 || w * h > PGCHIP_CLIP_MAX) {
+        error_se();
+        return;
+    }
+    g.clip.w = w;
+    g.clip.h = h;
+    for (int i = 0; i < w * h; i++) {
+        memcpy(g.clip.chips[i].b, m + MACRO_CHIPS + 8 * i, 8);
+        if (!pgchip_valid_type(pgchip_type(&g.clip.chips[i])))
+            memset(&g.clip.chips[i], 0, sizeof(PgChipCommand)); /* blanks leave what's there */
+    }
+    int x, y;
+    if (cursor_area(&x, &y) < 0)
+        place_cursor(0, 0, 0);
+    g.moving = false;
+    g.range_from_pick = false;
+    g.macro_paste = true;
+    g.mode = M_PASTE;
+    sound_se(SE_DECIDE, 1.0f);
+}
+
 /* The menu of mode 0x11: Move, Copy, Delete, Save Macro (CSoftString 0x1C-0x1F). */
 static void update_range_menu(void)
 {
@@ -824,6 +995,7 @@ static void update_range_menu(void)
     case 0: /* Move */
     case 1: /* Copy */
         g.moving = g.range_cursor == 0;
+        g.macro_paste = false;
         g.src_program = p;
         g.sx0 = x0 < x1 ? x0 : x1;
         g.sy0 = y0 < y1 ? y0 : y1;
@@ -846,9 +1018,9 @@ static void update_range_menu(void)
         sound_se(SE_DECIDE, 1.0f);
         g.mode = M_EDIT;
         break;
-    default: /* Save Macro: macros aren't ported */
-        SDL_Log("[soft] Save Macro isn't ported");
-        error_se();
+    default: /* Save Macro -> mode 0x1D (a range) or 0x1E (picked chips) */
+        open_macros(M_MACRO_SAVE);
+        sound_se(SE_DECIDE, 1.0f);
         break;
     }
 }
@@ -857,7 +1029,7 @@ static void update_paste(void)
 {
     if (pad_pressed(PSP_CTRL_CROSS)) {
         sound_se(SE_CANCEL, 1.0f);
-        g.mode = M_EDIT;
+        g.mode = g.macro_paste ? M_MACROS : M_EDIT; /* mode 0xE begun with 0x1F */
         return;
     }
     int x, y, p = cursor_area(&x, &y);
@@ -874,9 +1046,10 @@ static void update_paste(void)
             }
         }
         pgchip_clip_paste(&g.sw, p, &g.clip, x, y);
-        SDL_Log("[soft] %s %d x %d chips to %d (%d, %d)", g.moving ? "moved" : "copied", g.clip.w, g.clip.h, p, x, y);
+        SDL_Log("[soft] %s %d x %d chips to %d (%d, %d)", g.macro_paste ? "pasted" : g.moving ? "moved" : "copied",
+                g.clip.w, g.clip.h, p, x, y);
         sound_se(SE_DECIDE, 1.0f);
-        g.mode = M_EDIT;
+        g.mode = g.macro_paste ? M_MACROS : M_EDIT;
         return;
     }
     if (pad_pressed(PSP_CTRL_TRIANGLE) || pad_pressed(PSP_CTRL_SQUARE) || pad_pressed(PSP_CTRL_LTRIGGER) ||
@@ -1088,7 +1261,11 @@ static void update_menu(void)
         g.message = sstr(0x2A2);
         error_se();
         return;
-    default: /* Start Test Program, Paste Macro */
+    case ITEM_MACRO: /* -> mode 0x1F */
+        g.macro_help = g.menu.item[g.menu.cursor].help;
+        open_macros(M_MACROS);
+        break;
+    default: /* Start Test Program */
         SDL_Log("[soft] \"%s\" isn't ported", sstr(0x12 + ui_menu_id(&g.menu)));
         error_se();
         return;
@@ -1137,6 +1314,9 @@ int soft_update(float dt)
     case M_CARDS: update_cards(); break;
     case M_COUNTERS: update_counters(); break;
     case M_OSK: update_osk(); break;
+    case M_MACRO_SAVE: update_macro_save(); break;
+    case M_MACRO_NAME: update_macro_name(); break;
+    case M_MACROS: update_macros(); break;
     default: return 0;
     }
     if ((int)g.mode < 0)
@@ -1548,6 +1728,20 @@ static void draw_counters(void)
     draw_cursor_box(x + 6, y + 5 + g.counter_cursor * 14, 138, 14);
 }
 
+/* The macro list (the game's is a CTopMenuWnd-like list at the menu's place): the
+ * names, the saved ones in dark text, the empty ones greyed. */
+static void draw_macros(void)
+{
+    const int x = 150, y = 40;
+    ui_frame(ui_part(PART_BF_SWND2), x, y, 170, MACROS * 14 + 12, 8, 1.0f);
+    for (int i = 0; i < MACROS; i++) {
+        char name[MACRO_NAME_MAX + 1];
+        macro_name(i, name, sizeof name);
+        ui_text(name, style(12, macro_used(i) ? 0xFF303030 : 0xFF909090), x + 12, y + 6 + i * 14, 1.0f);
+    }
+    draw_cursor_box(x + 6, y + 5 + g.macro_cursor * 14, 158, 14);
+}
+
 void soft_draw(void)
 {
     draw_areas();
@@ -1578,6 +1772,11 @@ void soft_draw(void)
     case M_OSK:
         draw_counters();
         break;
+    case M_MACROS:
+    case M_MACRO_SAVE:
+    case M_MACRO_NAME:
+        draw_macros();
+        break;
     default:
         break;
     }
@@ -1607,6 +1806,8 @@ const char *soft_help(void)
     case M_START: return sstr(0x235);
     case M_CARDS: return sstr(0x246);
     case M_COUNTERS: case M_OSK: return sstr(0x236);
+    case M_MACRO_SAVE: case M_MACRO_NAME: return sstr(0x243);
+    case M_MACROS: return sstr(g.macro_help);
     default: return NULL;
     }
 }

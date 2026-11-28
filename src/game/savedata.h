@@ -209,9 +209,14 @@ void savedata_set_menu_limit(int word, int value);
 /* CSoftwareSceneDataBase (+0x41370, FUN_0889ce8c; built by FUN_0889c724): the chip
  * editor's memory. A chip per type, the last one placed, which new chips of that
  * type copy (FUN_08a1cbd8 stores it); the chip list's page (+0x1B0, 4 = every chip)
- * and its cursor on each of the 5 pages (+0x1B4). The 8 macros after it (+0x1C8,
- * 0x72C each) aren't used yet. */
+ * and its cursor on each of the 5 pages (+0x1B4). Then the 8 macros (+0x1C8, 0x72C
+ * each, PGCHIP::tagMACRO, FUN_0889c890): +0 1 when one is saved, +4 its chips (up to
+ * 15 x 15, w x h, row after row), +0x70C w, +0x710 h, +0x714 its name (up to 0x14
+ * bytes; "Macro1".. "Macro8" on a new game, FUN_08a0bce0). */
 #define CHIP_PAGES 5
+#define MACROS 8
+#define MACRO_SIZE 0x72C
+uint8_t *savedata_macro(int i);
 const PgChipCommand *savedata_chip_default(int type);
 void savedata_set_chip_default(const PgChipCommand *chip);
 int savedata_chip_page(void);

@@ -92,8 +92,26 @@ static void new_team_card(uint8_t *t)
 #define SOFT_SCENE 0x41370
 #define SOFT_PAGE 0x1B0
 #define SOFT_CURSORS 0x1B4
+#define SOFT_MACROS 0x1C8
 
-/* FUN_0889c724, without the macros: each type's default chip, page 4. */
+/* FUN_08a0bb28 (with the name) and FUN_08a0bce0: an empty macro named "Macro<n>". */
+static void new_macro(uint8_t *m, int n)
+{
+    memset(m, 0, MACRO_SIZE);
+    for (int i = 0; i < 15 * 15; i++) {
+        PgChipCommand c;
+        pgchip_default(&c, 0);
+        memcpy(m + 4 + 8 * i, c.b, 8);
+    }
+    /* "Macro%s" (0x08c1df5c) with the digit n % 10 of the table at 0x08c852b0 */
+    const char *fmt = gamedata_string(0x00419F5Cu), *digit = ptr_string(0x004812B0u + 4u * (uint32_t)(n % 10));
+    if (fmt && !strcmp(fmt, "Macro%s") && digit)
+        snprintf((char *)m + 0x714, 0x14, fmt, digit);
+    else
+        snprintf((char *)m + 0x714, 0x14, "Macro%d", n % 10);
+}
+
+/* FUN_0889c724: each type's default chip, page 4, the empty macros. */
 static void new_software_scene(uint8_t *s)
 {
     for (int t = 0; t < PGCHIP_TYPE_END; t++) {
@@ -104,6 +122,13 @@ static void new_software_scene(uint8_t *s)
     put_word(s + SOFT_PAGE, 4);
     for (int i = 0; i < CHIP_PAGES; i++)
         put_word(s + SOFT_CURSORS + 4 * i, 0);
+    for (int i = 0; i < MACROS; i++)
+        new_macro(s + SOFT_MACROS + MACRO_SIZE * i, i + 1);
+}
+
+uint8_t *savedata_macro(int i)
+{
+    return i >= 0 && i < MACROS ? (uint8_t *)&g_save.db + SOFT_SCENE + SOFT_MACROS + MACRO_SIZE * i : NULL;
 }
 
 const PgChipCommand *savedata_chip_default(int type)
