@@ -2,7 +2,7 @@
 
 <p align="center"><img width="700" height="333" alt="carnage_heart_exa" src="https://github.com/user-attachments/assets/b6ef8052-17fa-4567-b026-a6b97a09c1db" /></p>
 
-A non-matching decompilation of Carnage Heart EXA for Sony PSP (NPUH10188). You need your own dump; nothing from
+This is a work-in-progress non-matching decompilation of Carnage Heart EXA (Sony PSP [NPUH10188]) into a native application for Windows, built from your own copy of the game. You need your own dump; nothing from
 `iso/` or `orig/` is committed.
 
 ## Setup
