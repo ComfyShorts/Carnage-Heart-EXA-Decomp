@@ -55,8 +55,11 @@ typedef struct SaveState {
     char story_file[SAVE_FILE_MAX];  /* the same for Story Data */
 } SaveState;
 
-/* The game-save kinds (CSystemMngr save types; save names "S" / "B" from 0x08c858f8). */
-typedef enum { SAVE_STORY = 1, SAVE_BATTLE = 2 } SaveKind;
+/* The game-save kinds (CSystemMngr save types; save names "S" / "B" / "TEAM" from
+ * 0x08c858f8). SAVE_TEAM is the Team Data folder of Team Formation's Team Trade Folder:
+ * ULJM05698TEAM/TEAM<n>.CHE, one CExportTeamData each (TEAM_FILE_SIZE bytes). */
+typedef enum { SAVE_STORY = 1, SAVE_BATTLE = 2, SAVE_TEAM = 5 } SaveKind;
+#define TEAM_FILE_SIZE 0x5FC0           /* FUN_08ab8114 type 5 */
 
 extern SaveState g_save;
 
@@ -158,6 +161,9 @@ int savedata_team_spot(int team, int m);
 int savedata_team_count(int team); /* registered members */
 void savedata_team_name(int team, char *out, size_t n);
 const uint8_t *savedata_team_emblem(int team);
+uint8_t *savedata_team_emblem_edit(int team);
+/* Team Formation's Enter Team Name: the name at +0x250 (up to 12 characters typed). */
+void savedata_team_set_name(int team, const char *name);
 /* CTeamFormationMngr::createTeam (FUN_08ac42f4 with FUN_089f38a0): a new team of the
  * player's, named `name`, owned by `owner`, with no members and the default emblem
  * (blank pixels, the palette at 0x08c83db8). */
@@ -203,9 +209,14 @@ void savedata_set_menu_limit(int word, int value);
 /* CSoftwareSceneDataBase (+0x41370, FUN_0889ce8c; built by FUN_0889c724): the chip
  * editor's memory. A chip per type, the last one placed, which new chips of that
  * type copy (FUN_08a1cbd8 stores it); the chip list's page (+0x1B0, 4 = every chip)
- * and its cursor on each of the 5 pages (+0x1B4). The 8 macros after it (+0x1C8,
- * 0x72C each) aren't used yet. */
+ * and its cursor on each of the 5 pages (+0x1B4). Then the 8 macros (+0x1C8, 0x72C
+ * each, PGCHIP::tagMACRO, FUN_0889c890): +0 1 when one is saved, +4 its chips (up to
+ * 15 x 15, w x h, row after row), +0x70C w, +0x710 h, +0x714 its name (up to 0x14
+ * bytes; "Macro1".. "Macro8" on a new game, FUN_08a0bce0). */
 #define CHIP_PAGES 5
+#define MACROS 8
+#define MACRO_SIZE 0x72C
+uint8_t *savedata_macro(int i);
 const PgChipCommand *savedata_chip_default(int type);
 void savedata_set_chip_default(const PgChipCommand *chip);
 int savedata_chip_page(void);
@@ -248,9 +259,18 @@ void savedata_list_start(SaveKind kind);
 int savedata_list_update(void);
 int savedata_list(const SaveListEntry **out); /* after the list is done */
 
-/* Load or save one game file of the kind (READSECURE / MAKEDATA or WRITE). */
+/* Load or save one game file of the kind (READSECURE / MAKEDATA or WRITE). For
+ * SAVE_TEAM, the load keeps the file's bytes (savedata_team_file) and the save writes
+ * the bytes given to savedata_team_file_set first. */
 void savedata_load_start(SaveKind kind, const char *file);
 void savedata_save_start(SaveKind kind, const char *file);
+/* Team Formation's From Save Data (CTeamFormationMngr mode 0xC, CSaveMngr exec 7): a
+ * Story or Battle Data file read without loading it; its shared block (the teams and
+ * OKE cards) is then savedata_peeked(). */
+void savedata_peek_start(SaveKind kind, const char *file);
+const GameDataBase *savedata_peeked(void);
+const uint8_t *savedata_team_file(void);
+void savedata_team_file_set(const uint8_t *data);
 int savedata_io_update(void);
 /* The last sequence's outcome: 0 fine, else the sceUtility result (or -1). */
 int32_t savedata_result(void);

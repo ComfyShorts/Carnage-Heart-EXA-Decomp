@@ -125,6 +125,15 @@ From the entrance code (`FUN_088d5510`, `FUN_088d497c`, `FUN_088d5a70`,
 - The battle itself is `CBattleScene` / `CBattleSceneMngr` (file set "battlescene":
   3D effect models `effect/*.gmo`, HUD art `parts/bs/*`), with `CBattleOke` behind
   each robot.
+- The port opens "battlescene" when Battle Mode or a Story Mode briefing starts and
+  closes it (`CloseFileSet`, `FUN_08b14e2c`) when that ends, as the scene's
+  `FUN_08874dd0` does. Before the close was ported every start took another of the 12
+  file set slots and another 808 KiB, so the 11th in one session failed with
+  `OpenFileSet("battlescene") failed: no HUD art` (seen before mission 11, step 83, in a
+  run that had played ten briefings). `chexa-story-test` opens and closes it once per
+  briefing, 24 times. The game opens it in the scene (`FUN_08874bd4`), into the battle's
+  own 0x280000-byte block when it fits, else the default heap; the port always uses the
+  default heap.
 
 ## How the presets behave in the stand-in
 
@@ -189,8 +198,12 @@ word per call), size the grid to the next power of two plus one, mark the border
 strips, midpoint displacement (`FUN_08922e30`), a Voronoi map (`FUN_08920218`, its
 points shuffled with the game's BSD qsort `FUN_08b41288` and a random comparator) merged
 by weight (`FUN_0891d988`), smoothing (`FUN_0892347c`), hydraulic erosion
-(`FUN_0892391c`), thermal erosion (`FUN_08923dc0`, **not ported**: maps 05, 06, 08 and
-14 ask for it), terracing (`FUN_08921180`) and the stretch copy (`FUN_0891dc64`).
+(`FUN_0892391c`), thermal erosion (`ThermalErosion` `FUN_0891e790`, here `FUN_08923dc0` with the border
+strips; maps 05, 06, 08 and 14 ask for it: on each cell whose steepest drop to one of
+four neighbours, the straight ones and the diagonal ones in turn as the hydraulic pass
+does, is above the threshold, that lower neighbour is raised by (drop - threshold) x
+drop / (2 x the sum of the drops above the threshold) and the cell keeps its height, so
+pits and gullies fill; map 14's lowest point goes from 0 to 35), terracing (`FUN_08921180`) and the stretch copy (`FUN_0891dc64`).
 Nothing is checked against the game's output yet: the next step is comparing a
 height map dumped from a running game or emulator.
 

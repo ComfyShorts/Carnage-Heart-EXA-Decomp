@@ -9,7 +9,7 @@
  *   0x70 block 2  u8 Voronoi feature points, s8 Voronoi merge weight
  *   0x80 block 3  u8 smoothing passes
  *   0x90 block 4  u8 erosion threshold, u8 erosion passes
- *   0xA0 block 5  u8 thermal threshold, u8 thermal passes
+ *   0xA0 block 5  u8 thermal threshold, u8 thermal passes (maps 05, 06, 08, 14)
  *   0xB0 block 6  u8 terrace step, u8 stretch
  *   0x110        light direction (f32 x3), fog range at 0x138
  */
@@ -397,6 +397,41 @@ static void pass_erosion(int sx, int sy, int threshold, int passes, const uint8_
     }
 }
 
+/* ThermalErosion, FUN_0891e790 (edge-constrained FUN_08923dc0; FUN_08920d3c without
+ * the edge is the same with it all free): each cell's steepest lower neighbour (the
+ * previous target kept on no larger drop) is raised by (drop - threshold) * drop over
+ * twice the drops above the threshold, when the steepest is above it; the cell itself
+ * keeps its height, as the game's does. Neighbour sets alternate per pass, as the
+ * hydraulic pass's (the tables at 0x08bf74e0 / 0x08bf72e0 are the same). */
+static void pass_thermal(int sx, int sy, int threshold, int passes, const uint8_t *edge, uint8_t *d)
+{
+    static const int k_nb[2][4][2] = {{{-1, 0}, {0, -1}, {1, 0}, {0, 1}}, {{-1, -1}, {1, -1}, {-1, 1}, {1, 1}}};
+    int target = 0;
+    for (; passes > 0; passes--) {
+        const int (*nb)[2] = k_nb[passes & 1];
+        for (int half = 0; half < 2; half++)
+            for (int y = 0; y < sy; y++)
+                for (int x = (y + half) & 1; x < sx; x++) {
+                    int i = y * sx + x;
+                    int h = edge[i] ? edge[i] : d[i];
+                    int best = 0, sum = 0;
+                    for (int k = 0; k < 4; k++) {
+                        int j = (sx + nb[k][0] + x) % sx + ((sy + nb[k][1] + y) % sy) * sx;
+                        int drop = h - (edge[j] ? edge[j] : d[j]);
+                        if (best < drop) {
+                            best = drop;
+                            target = j;
+                        }
+                        if (drop > threshold)
+                            sum += drop;
+                    }
+                    if (best > threshold)
+                        d[target] = edge[target] ? edge[target]
+                                                 : (uint8_t)(d[target] + (int8_t)((best - threshold) * best / (sum * 2)));
+                }
+    }
+}
+
 /* Aliasing, FUN_08921180: rounds heights down to multiples of the step (terraces). */
 static void pass_aliasing(int count, int step, const uint8_t *edge, uint8_t *d)
 {
@@ -487,8 +522,8 @@ static bool generate(Terrain *t, const uint8_t *p)
         pass_smoothing(n, n, b3[0], edge, d);
     if (b4[1])
         pass_erosion(n, n, b4[0], b4[1], edge, d);
-    if (b5[1])
-        SDL_Log("[terrain] map %02d: thermal erosion (%d, %d) not ported, skipped", t->map, b5[0], b5[1]);
+    if (b5[1]) /* FUN_0891e790 only asserts the threshold is above 0 */
+        pass_thermal(n, n, b5[0], b5[1], edge, d);
     if (b6[0] > 1)
         pass_aliasing(n * n, b6[0], edge, d);
     if (b6[1] > 1) {

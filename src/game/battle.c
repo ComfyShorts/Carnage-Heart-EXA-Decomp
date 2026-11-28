@@ -634,6 +634,13 @@ int battle_mode_update(float dt)
         if (g.node_added)
             render_remove_node(render_instance(), &g);
         g.node_added = false;
+        /* FUN_08874dd0: the scene closes "battlescene" when it ends. Without it every
+         * Story Mode briefing (and every Battle Mode visit) took another slot and 808
+         * KiB until OpenFileSet failed on the 11th in one session (boot and entrance
+         * hold two of the 12 slots); a run that played on to mission 11 met it there. */
+        if (g.fileset >= 0)
+            fileset_close(g.fileset);
+        g.fileset = -1;
         return 0;
     }
     g.t += dt;

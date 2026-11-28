@@ -527,6 +527,20 @@ int fileset_open(const char *name, GameHeap *heap, int from_top, int async)
     return slot;
 }
 
+int fileset_close(int slot)
+{
+    if (slot < 0 || slot >= FILESET_SLOTS || !g_sets[slot].info)
+        return -1; /* FUN_08b1431c finds no set */
+    FileSetSlot *s = &g_sets[slot];
+    /* The game waits for an async read to finish first (FUN_08b12ec4); reads here are
+     * synchronous. */
+    SDL_Log("[fileio] file set \"%s\" closed (slot %d)", packindex_string(s->info->name), slot);
+    if (s->data)
+        heap_free(s->heap, s->data);
+    memset(s, 0, sizeof *s); /* FUN_08b14304 */
+    return 0;
+}
+
 /* FUN_08b145ec / FUN_08b14464: a member of any open set, by binary search. */
 static const FstsMember *find_member(const char *name, const FileSetSlot **owner)
 {

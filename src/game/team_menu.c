@@ -10,8 +10,17 @@
  *     8  Formation
  *     0x12 "Delete this team?"
  *   createTeam FUN_08ac42f4, setSelect FUN_08ac452c, the selectable check FUN_08ac468c.
- * Enter Team Name (the on-screen keyboard), Emblems (CEmblemEditor) and Transfer Team
- * Data are not ported; choosing them is logged. */
+ *     9  Enter Team Name: the keyboard on the team's name (FUN_08ac1bec)
+ *     10 Emblems: CEmblemEditor's team variant (FUN_08ac1d94 / FUN_08ac30f0)
+ *     0xB  Transfer Team Data: From Save Data, Wireless Connection, Team Trade
+ *          Folder, beside CTeamDataDockInfoWnd's counts (FUN_08ac1e38 / FUN_08ac3138)
+ *     0xC  From Save Data: a Story or Battle Data file read (FUN_08ac6318 / FUN_08ac6aec)
+ *     0xF  its 16 teams, one installed with circle (FUN_08ac1f4c / FUN_08ac6db8)
+ *     0xE  Team Trade Folder: Import, Export (FUN_08ac21e4 / FUN_08ac3444)
+ *     0x10 Import, 0x11 Export: a team file of ULJM05698TEAM (FUN_08ac2264 / 361c,
+ *          FUN_08ac2338 / 3704)
+ * The installing and the team files are team_trade.c. Wireless Connection (network
+ * play) is not ported; choosing it is logged. */
 #include "team_menu.h"
 
 #include <stdio.h>
@@ -23,10 +32,13 @@
 #include "font.h"
 #include "gamedata.h"
 #include "gu.h"
+#include "oke_emblem.h"
+#include "osk.h"
 #include "pad.h"
 #include "sound.h"
 #include "psp_shim.h"
 #include "savedata.h"
+#include "team_trade.h"
 #include "ui.h"
 
 #define STR_TEAM 0x00487A60u   /* CTeamFormationString, 0x4B pointers (0x08c8ba60) */
@@ -95,6 +107,14 @@ typedef enum {
     MODE_CARDS = 6,
     MODE_UNREGISTER = 7,
     MODE_FORMATION = 8,
+    MODE_NAME = 9,
+    MODE_EMBLEM = 10,
+    MODE_TRANSFER = 0xB,
+    MODE_FROM_SAVE = 0xC,
+    MODE_FOLDER = 0xE,
+    MODE_INSTALL = 0xF,
+    MODE_IMPORT = 0x10,
+    MODE_EXPORT = 0x11,
     MODE_DELETE = 0x12,
 } Mode;
 
@@ -110,6 +130,11 @@ static struct {
     UiAsk ask;
     const char *message;
     bool closing;
+    UiMenu sub;            /* Transfer Team Data's menu (+0x8C), the folder's (+0x2B0) */
+    UiMenu files;          /* the save chooser (the port's stand-in for CSaveMngr's) */
+    int io;                /* the chooser's step: 0 the kind, 1 listing, 2 choosing, 3 busy */
+    SaveKind kind;
+    int pick_cursor, pick_scroll; /* mode 0xF's team list */
 } g;
 
 int team_menu_selected(void)
@@ -156,6 +181,389 @@ static int free_spot(int team, int except)
     return 0;
 }
 
+/* FUN_08ac4628: the selected team when it's the player's own (status 1), else -1. */
+static int own_team(void)
+{
+    int t = team_menu_selected();
+    return t >= 0 && savedata_team_status(t) == 1 ? t : -1;
+}
+
+#define TEAM_NAME_INPUT 12
+#define TEAM_ROWS_PICK 7 /* FUN_08ac1bec's limit (string 0x35: "up to 12 characters") */
+
+/* Mode 9's end (LAB_08ac4bac, then FUN_08ac30e8 back to the top): OK writes the name. */
+static void update_name(void)
+{
+    int r = osk_update();
+    if (r == OSK_RUNNING)
+        return;
+    if (r == OSK_OK) {
+        savedata_team_set_name(own_team(), osk_text());
+        SDL_Log("[team] team %d named \"%s\"", own_team() + 1, osk_text());
+    }
+    g.mode = MODE_TOP;
+}
+
+/* ---- Transfer Team Data ---- */
+
+/* The menu of mode 0xB (items 0xC-0xE, help + 0x32) or 0xE (Import 0xF, Export 0x10,
+ * help + 0x33), in the top menu's place while it's hidden. */
+static void build_sub(int first, int count, int help)
+{
+    ui_menu_init(&g.sub, 0, 0x18 + 4, 24 - 5, 12, text_style(0, 6, 12, 12, 0, 0, 0xFF303030, 0));
+    for (int i = 0; i < count; i++)
+        ui_menu_add(&g.sub, team_string(first + i), first + i, first + i + help, PART_BF_MENB3, PART_BF_MENL3);
+    ui_menu_open(&g.sub);
+}
+
+static void open_transfer(int cursor)
+{
+    build_sub(0xC, 3, 0x32);
+    g.sub.cursor = cursor;
+    g.mode = MODE_TRANSFER;
+}
+
+static void open_folder(int cursor)
+{
+    build_sub(0xF, 2, 0x33);
+    g.sub.cursor = cursor;
+    g.mode = MODE_FOLDER;
+}
+
+static const char *k_story_data(void) { return gamedata_string(0x00437D58u); }  /* "Story Data" */
+static const char *k_battle_data(void) { return gamedata_string(0x00437D64u); } /* "Battle Data" */
+
+/* The chooser: the kind of save (From Save Data only), then its files. */
+static void chooser_kinds(void)
+{
+    ui_menu_init(&g.files, 200, 84, 24 - 5, 12, text_style(0, 6, 12, 12, 0, 0, 0xFF303030, 0));
+    ui_menu_add(&g.files, k_story_data(), SAVE_STORY, 0, PART_BF_MENB4, PART_BF_MENL4);
+    ui_menu_add(&g.files, k_battle_data(), SAVE_BATTLE, 0, PART_BF_MENB4, PART_BF_MENL4);
+    ui_menu_open(&g.files);
+    g.io = 0;
+    g.message = "Choose the kind of data to install from.";
+}
+
+static void chooser_list(SaveKind kind)
+{
+    g.kind = kind;
+    g.io = 1;
+    savedata_list_start(kind);
+}
+
+static void chooser_build(void)
+{
+    const SaveListEntry *list;
+    int n = savedata_list(&list);
+    ui_menu_init(&g.files, 200, 84, 24 - 5, 12, text_style(0, 6, 12, 12, 0, 0, 0xFF303030, 0));
+    static char names[UI_MENU_MAX][SAVE_FILE_MAX];
+    for (int i = 0; i < n && i < UI_MENU_MAX; i++) {
+        snprintf(names[i], sizeof names[i], "%.*s", (int)strlen(list[i].file) - 4, list[i].file);
+        ui_menu_add(&g.files, names[i], i, 0, PART_BF_MENB4, PART_BF_MENL4)->disabled = list[i].broken;
+    }
+    g.io = 2;
+    if (n > 0) {
+        ui_menu_open(&g.files);
+        g.message = g.kind == SAVE_TEAM    ? "Choose the Team Data to install."
+                    : g.kind == SAVE_STORY ? "Choose the Story Data to install from."
+                                           : "Choose the Battle Data to install from.";
+    } else {
+        g.message = savedata_result() ? "The save data couldn't be read."
+                    : g.kind == SAVE_TEAM ? "There is no Team Data."
+                    : g.kind == SAVE_STORY ? "There is no Story Data." : "There is no Battle Data.";
+    }
+}
+
+/* The file under the chooser's cursor, NULL when there's none or it's damaged. */
+static const char *chooser_file(void)
+{
+    const SaveListEntry *list;
+    int n = savedata_list(&list);
+    if (g.files.cursor < 0 || g.files.cursor >= n || list[g.files.cursor].broken)
+        return NULL;
+    return list[g.files.cursor].file;
+}
+
+/* Mode 0xB (FUN_08ac3138): From Save Data and the folder only while there's room for a
+ * team and a card (FUN_08abd210 / FUN_08abd238), else the error sound. */
+static void update_transfer(float dt)
+{
+    ui_menu_update(&g.sub, dt);
+    if (ui_menu_input(&g.sub))
+        g.message = NULL;
+    if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
+        ui_menu_close(&g.sub);
+        g.mode = MODE_TOP;
+        g.message = NULL;
+        return;
+    }
+    if (!pad_pressed(PSP_CTRL_CIRCLE))
+        return;
+    switch (ui_menu_id(&g.sub)) {
+    case 0xC: /* From Save Data -> mode 0xC */
+        if (team_trade_full()) {
+            sound_se(SE_ERROR, 1.0f);
+            g.message = team_string(team_trade_teams_used() >= SAVE_TEAMS ? 0x46 : 0x47);
+            return;
+        }
+        sound_se(SE_DECIDE, 1.0f);
+        g.mode = MODE_FROM_SAVE;
+        chooser_kinds();
+        break;
+    case 0xD: /* Wireless Connection -> mode 0xD (network play) */
+        sound_se(SE_DECIDE, 1.0f);
+        SDL_Log("[team] \"%s\" isn't ported (network play)", team_string(0xD));
+        g.message = team_string(0xD);
+        break;
+    default: /* Team Trade Folder -> mode 0xE */
+        sound_se(SE_DECIDE, 1.0f);
+        open_folder(0);
+        g.message = NULL;
+        break;
+    }
+}
+
+/* Mode 0xC (FUN_08ac6aec): the save read, then its teams (mode 0xF); cancel goes back. */
+static void update_from_save(float dt)
+{
+    ui_menu_update(&g.files, dt);
+    switch (g.io) {
+    case 0:
+        ui_menu_input(&g.files);
+        if (pad_pressed(PSP_CTRL_CROSS)) {
+            sound_se(SE_CANCEL, 1.0f);
+            open_transfer(0);
+            g.message = NULL;
+        } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
+            sound_se(SE_DECIDE, 1.0f);
+            g.message = NULL;
+            chooser_list((SaveKind)ui_menu_id(&g.files));
+        }
+        break;
+    case 1:
+        if (!savedata_list_update())
+            chooser_build();
+        break;
+    case 2:
+        if (g.files.count)
+            ui_menu_input(&g.files);
+        if (pad_pressed(PSP_CTRL_CROSS)) {
+            sound_se(SE_CANCEL, 1.0f);
+            chooser_kinds();
+        } else if (pad_pressed(PSP_CTRL_CIRCLE) && g.files.count) {
+            const char *f = chooser_file();
+            if (!f) {
+                sound_se(SE_ERROR, 1.0f);
+                g.message = "This data is damaged.";
+                break;
+            }
+            sound_se(SE_DECIDE, 1.0f);
+            savedata_peek_start(g.kind, f);
+            g.message = "Loading...";
+            g.io = 3;
+        }
+        break;
+    case 3:
+        if (savedata_io_update())
+            break;
+        if (savedata_result() != 0) {
+            g.message = "The save data couldn't be read.";
+            g.io = 2;
+            break;
+        }
+        g.message = NULL;
+        g.pick_cursor = g.pick_scroll = 0;
+        g.mode = MODE_INSTALL; /* FUN_08ac1f4c: title 0xC pushed */
+        break;
+    }
+}
+
+static void peek_label(int team, char *out, size_t n)
+{
+    const uint8_t *t = savedata_peeked()->team[team];
+    uint32_t status;
+    memcpy(&status, t, 4);
+    if (status == 0) {
+        snprintf(out, n, "%02d  -", team + 1);
+        return;
+    }
+    char name[TEAM_NAME_MAX + 1];
+    snprintf(name, sizeof name, "%.*s", TEAM_NAME_MAX - 1, (const char *)t + 0x250);
+    snprintf(out, n, "%02d  %s  (%d)", team + 1, name, team_trade_distinct_cards(t));
+}
+
+/* Mode 0xF (FUN_08ac6db8): circle installs the team under the cursor and goes back to
+ * the menu; one that has no member or doesn't fit gives the error sound; cross goes
+ * back. */
+static void update_install(void)
+{
+    int old = g.pick_cursor;
+    if (pad_repeat(PSP_CTRL_UP))
+        g.pick_cursor = g.pick_cursor > 0 ? g.pick_cursor - 1 : pad_trigger(PSP_CTRL_UP) ? SAVE_TEAMS - 1 : 0;
+    else if (pad_repeat(PSP_CTRL_DOWN))
+        g.pick_cursor = g.pick_cursor < SAVE_TEAMS - 1 ? g.pick_cursor + 1 : pad_trigger(PSP_CTRL_DOWN) ? 0 : g.pick_cursor;
+    if (g.pick_cursor != old) {
+        sound_se(SE_CURSOR, 1.0f);
+        g.message = NULL;
+    }
+    if (g.pick_cursor < g.pick_scroll)
+        g.pick_scroll = g.pick_cursor;
+    if (g.pick_cursor >= g.pick_scroll + TEAM_ROWS_PICK)
+        g.pick_scroll = g.pick_cursor - TEAM_ROWS_PICK + 1;
+    if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
+        open_transfer(0);
+        g.message = NULL;
+    } else if (pad_pressed(PSP_CTRL_CIRCLE)) {
+        if (team_trade_install(savedata_peeked(), g.pick_cursor)) {
+            sound_se(SE_DECIDE, 1.0f);
+            open_transfer(0);
+            g.message = NULL;
+        } else {
+            sound_se(SE_ERROR, 1.0f);
+        }
+    }
+}
+
+/* Mode 0xE (FUN_08ac3444): Import needs room (as From Save Data); Export the selected
+ * team of the player's with a member. */
+static void update_folder(float dt)
+{
+    ui_menu_update(&g.sub, dt);
+    if (ui_menu_input(&g.sub))
+        g.message = NULL;
+    if (pad_pressed(PSP_CTRL_CROSS)) {
+        sound_se(SE_CANCEL, 1.0f);
+        open_transfer(2);
+        g.message = NULL;
+        return;
+    }
+    if (!pad_pressed(PSP_CTRL_CIRCLE))
+        return;
+    if (ui_menu_id(&g.sub) == 0xF) { /* Import -> mode 0x10 */
+        if (team_trade_full()) {
+            sound_se(SE_ERROR, 1.0f);
+            g.message = team_string(team_trade_teams_used() >= SAVE_TEAMS ? 0x46 : 0x47);
+            return;
+        }
+        sound_se(SE_DECIDE, 1.0f);
+        g.mode = MODE_IMPORT;
+        chooser_list(SAVE_TEAM);
+        g.message = NULL;
+    } else { /* Export -> mode 0x11 */
+        int team = own_team();
+        if (team < 0 || savedata_team_count(team) < 1) {
+            sound_se(SE_ERROR, 1.0f);
+            g.message = team_string(team < 0 ? 0x48 : 0x49);
+            return;
+        }
+        sound_se(SE_DECIDE, 1.0f);
+        g.mode = MODE_EXPORT;
+        chooser_list(SAVE_TEAM); /* the folder's names, for a free TEAM<n> */
+        g.message = NULL;
+    }
+}
+
+/* Mode 0x10: a team file chosen, read, checked and installed (FUN_08abba9c type 5). */
+static void update_import(float dt)
+{
+    ui_menu_update(&g.files, dt);
+    switch (g.io) {
+    case 1:
+        if (!savedata_list_update())
+            chooser_build();
+        break;
+    case 2:
+        if (g.files.count)
+            ui_menu_input(&g.files);
+        if (pad_pressed(PSP_CTRL_CROSS)) {
+            sound_se(SE_CANCEL, 1.0f);
+            open_folder(0);
+            g.message = NULL;
+        } else if (pad_pressed(PSP_CTRL_CIRCLE) && g.files.count) {
+            const char *f = chooser_file();
+            if (!f) {
+                sound_se(SE_ERROR, 1.0f);
+                g.message = "This data is damaged.";
+                break;
+            }
+            sound_se(SE_DECIDE, 1.0f);
+            savedata_load_start(SAVE_TEAM, f);
+            g.message = "Loading...";
+            g.io = 3;
+        }
+        break;
+    case 3:
+        if (savedata_io_update())
+            break;
+        if (savedata_result() != 0 || team_trade_import(savedata_team_file()) < 0) {
+            sound_se(SE_ERROR, 1.0f);
+            g.message = "This data is damaged.";
+            g.io = 2;
+            break;
+        }
+        sound_se(SE_DECIDE, 1.0f);
+        open_folder(0);
+        g.message = NULL;
+        break;
+    }
+}
+
+/* FUN_08a65374: the first TEAM<n> (1-1024) no file in the folder has. */
+static void free_team_file(char *out, size_t n)
+{
+    const SaveListEntry *list;
+    int count = savedata_list(&list);
+    static bool used[0x401];
+    memset(used, 0, sizeof used);
+    for (int i = 0; i < count; i++) {
+        if (strncmp(list[i].file, "TEAM", 4))
+            continue;
+        int v = -1;
+        for (int k = 4; k < 8 && list[i].file[k]; k++)
+            if (list[i].file[k] >= '0' && list[i].file[k] <= '9')
+                v = (v < 0 ? 0 : v * 10) + (list[i].file[k] - '0');
+        if (v >= 0 && v < 0x401)
+            used[v] = true;
+    }
+    int v = 1;
+    while (v < 0x401 && used[v])
+        v++;
+    snprintf(out, n, "TEAM%d.CHE", v);
+}
+
+/* Mode 0x11: the selected team written to a new file of the folder (FUN_08ab7820). */
+static void update_export(void)
+{
+    switch (g.io) {
+    case 1: {
+        if (savedata_list_update())
+            break;
+        static uint8_t file[TEAM_FILE_SIZE];
+        char name[SAVE_FILE_MAX];
+        if (!team_trade_export(own_team(), file)) {
+            sound_se(SE_ERROR, 1.0f);
+            open_folder(1);
+            break;
+        }
+        free_team_file(name, sizeof name);
+        savedata_team_file_set(file);
+        savedata_save_start(SAVE_TEAM, name);
+        g.message = "Saving...";
+        g.io = 3;
+        break;
+    }
+    case 3:
+        if (savedata_io_update())
+            break;
+        sound_se(savedata_result() == 0 ? SE_DECIDE : SE_ERROR, 1.0f);
+        open_folder(1);
+        g.message = savedata_result() == 0 ? NULL : "The data couldn't be saved.";
+        break;
+    }
+}
+
 static void update_top(void)
 {
     if (pad_pressed(PSP_CTRL_CIRCLE)) {
@@ -176,11 +584,28 @@ static void update_top(void)
                 g.slot = 0;
             }
             break;
-        default:
-            SDL_Log("[team] \"%s\" isn't ported (%s)", g.top.item[g.top.cursor].text,
-                    ui_menu_id(&g.top) == 2 ? "the on-screen keyboard"
-                    : ui_menu_id(&g.top) == 3 ? "CEmblemEditor" : "team transfer");
-            g.message = g.top.item[g.top.cursor].text;
+        case 2: /* -> mode 9 (FUN_08ac1bec): the selected team must be the player's own
+                 * (FUN_08ac4628 / FUN_08ac4740, status 1) */
+        case 3: { /* -> mode 10 (FUN_08ac1d94) */
+            int team = own_team();
+            if (team < 0) {
+                g.message = team_string(0x44);
+                sound_se(SE_ERROR, 1.0f);
+                break;
+            }
+            if (ui_menu_id(&g.top) == 2) {
+                char name[TEAM_NAME_MAX + 1];
+                savedata_team_name(team, name, sizeof name);
+                osk_open(team_string(6), name, TEAM_NAME_INPUT); /* "Enter Team Name", 12 */
+                g.mode = MODE_NAME;
+            } else {
+                emblem_open_team(team);
+                g.mode = MODE_EMBLEM;
+            }
+            break;
+        }
+        default: /* -> mode 0xB (FUN_08ac1e38: title 8 pushed, the counts backed up) */
+            open_transfer(0);
             break;
         }
     } else if (pad_pressed(PSP_CTRL_CROSS)) {
@@ -385,6 +810,17 @@ int team_menu_update(float dt)
     case MODE_MEMBERS: update_members(); break;
     case MODE_CARDS: update_cards(); break;
     case MODE_FORMATION: update_formation(); break;
+    case MODE_NAME: update_name(); break;
+    case MODE_TRANSFER: update_transfer(dt); break;
+    case MODE_FROM_SAVE: update_from_save(dt); break;
+    case MODE_INSTALL: update_install(); break;
+    case MODE_FOLDER: update_folder(dt); break;
+    case MODE_IMPORT: update_import(dt); break;
+    case MODE_EXPORT: update_export(); break;
+    case MODE_EMBLEM: /* FUN_08ac30f0: back to the top when the editor closes */
+        if (!emblem_update(dt))
+            g.mode = MODE_TOP;
+        break;
     case MODE_UNREGISTER:
     case MODE_DELETE: update_ask(dt); break;
     }
@@ -500,6 +936,40 @@ static void draw_list(int x, int y, int w, int rows, int first, int count, int c
     }
 }
 
+static bool transfer_mode(void)
+{
+    return g.mode >= MODE_TRANSFER && g.mode <= MODE_EXPORT && g.mode != 0xD;
+}
+
+/* CTeamDataDockInfoWnd's draw (FUN_08abd3c8): "# of Teams" and "# of OKEs", each the
+ * cards in use plus what the team under mode 0xF's cursor would add, "/", the most
+ * (16, 32), "Team(s)" / "OKE(s)"; the window is 0xCD x 0x30. */
+static void draw_dock(int x, int y)
+{
+    int add_teams = 0, add_cards = 0;
+    if (g.mode == MODE_INSTALL) {
+        const uint8_t *t = savedata_peeked()->team[g.pick_cursor];
+        uint32_t status;
+        memcpy(&status, t, 4);
+        add_teams = status != 0;
+        add_cards = team_trade_distinct_cards(t);
+    }
+    ui_frame(ui_part(PART_BF_SWND4), x, y, 0xCD, 0x30, 8, 1.0f);
+    char n[16];
+    for (int row = 0; row < 2; row++) {
+        int ry = y + (row ? 0x18 : 7);
+        int used = row ? team_trade_cards_used() + add_cards : team_trade_teams_used() + add_teams;
+        int most = row ? SAVE_CARDS : SAVE_TEAMS;
+        ui_text(team_string(row ? 0x12 : 0x11), small(), x + 10, ry, 1.0f);
+        snprintf(n, sizeof n, "%d", used);
+        ui_text(n, small(), x + 0x4B, ry, 1.0f);
+        ui_text(team_string(0x14), small(), x + 0x61, ry, 1.0f);
+        snprintf(n, sizeof n, "%d", most);
+        ui_text(n, small(), x + 0x69, ry, 1.0f);
+        ui_text(team_string(row ? 0x15 : 0x13), small(), x + 0x7D, ry, 1.0f);
+    }
+}
+
 static const char *help_text(void)
 {
     if (g.message)
@@ -510,6 +980,12 @@ static const char *help_text(void)
     case MODE_MEMBERS: return team_string(0x34);
     case MODE_CARDS: return team_string(0x3C);
     case MODE_FORMATION: return team_string(0x3D);
+    case MODE_EMBLEM: return emblem_help();
+    case MODE_TRANSFER:
+    case MODE_FOLDER: return team_string(g.sub.item[g.sub.cursor].help);
+    case MODE_INSTALL: return team_string(0x41); /* "Select a Team Card." */
+    case MODE_IMPORT: return team_string(0x42);
+    case MODE_EXPORT: return team_string(0x43);
     default: return NULL;
     }
 }
@@ -526,10 +1002,29 @@ void team_menu_draw(void)
     Picture *banner = ui_part(PART_BF_TTL0 + 2);
     ui_pic(banner, 0, 0, 1.0f, false);
     TextStyle tst = text_style(0, 7, 14, 14, 0, 0, 0xFFFFFFFF, 0);
-    ui_text(team_string(2), &tst, 64, (banner ? picture_height(banner) : 24) / 2 - 8, 1.0f);
-    ui_menu_draw(&g.top);
+    /* the title pushed with the mode (pushMenu FUN_08ac408c: 7 Emblems, 8 Transfer
+     * Team Data, 0xC From Save Data) */
+    int title = g.mode == MODE_EMBLEM                                  ? 7
+                : g.mode == MODE_FROM_SAVE || g.mode == MODE_INSTALL ? 0xC
+                : transfer_mode()                                    ? 8
+                                                                     : 2;
+    ui_text(team_string(title), &tst, 64, (banner ? picture_height(banner) : 24) / 2 - 8, 1.0f);
+    if (transfer_mode()) {
+        ui_menu_draw(&g.sub);
+        draw_dock(200, 24);
+        if (g.mode == MODE_INSTALL)
+            draw_list(200, 80, 226, TEAM_ROWS_PICK, g.pick_scroll, SAVE_TEAMS, g.pick_cursor, peek_label,
+                      team_string(0x41));
+        else if (g.mode == MODE_FROM_SAVE || g.mode == MODE_IMPORT)
+            ui_menu_draw(&g.files);
+    } else if (g.mode != MODE_EMBLEM)
+        ui_menu_draw(&g.top);
     int sel = team_menu_selected();
     switch (g.mode) {
+    case MODE_EMBLEM:
+        emblem_draw();
+        break;
+    case MODE_NAME:
     case MODE_TOP:
         team_panel_draw(sel, 190, 65, -1); /* CTeamDataWnd at (0xBE, 0x41) */
         break;
@@ -547,9 +1042,12 @@ void team_menu_draw(void)
         team_panel_draw(sel, 205, 12, g.slot);
         draw_list(102, 40, 190, CARD_ROWS, g.card_scroll, SAVE_CARDS, g.card_cursor, card_line, team_string(3));
         break;
+    default: /* the transfer modes, drawn above */
+        break;
     }
     if (g.mode == MODE_DELETE || g.mode == MODE_UNREGISTER)
         ui_ask_draw(&g.ask);
     ui_help_draw(help_text());
+    osk_draw(); /* over everything, as the system keyboard is */
     sceGuEnable(GU_TEXTURE_2D);
 }

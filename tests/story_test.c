@@ -107,6 +107,34 @@ int main(int argc, char **argv)
           missions);
     CHECK(!storydb_title(-1) && storydb_script(0x56) == NULL, "out-of-range steps give nothing");
 
+    /* Every briefing starts the battle mode, which opens "battlescene" and closes it
+     * when it ends (FUN_08874dd0). Before the close was ported the 11th open in a
+     * session failed ("no HUD art"): the 24 must all open, in the same slot,
+     * and give the heap back. */
+    {
+        int boot = fileset_open("boot", &g_default_heap, 1, 0), entrance = fileset_open("entrance", NULL, 0, 0);
+        uint32_t free_before = heap_largest_free(&g_default_heap);
+        int opened = 0, first = -1, same_slot = 1;
+        for (int step = 0; step < STORY_STEPS; step++) {
+            if (storydb_title(step) || !storydb_briefing(step))
+                continue;
+            int slot = fileset_open("battlescene", &g_default_heap, 0, 0);
+            if (slot < 0)
+                break;
+            opened++;
+            if (first < 0)
+                first = slot;
+            same_slot &= slot == first;
+            fileset_close(slot);
+        }
+        CHECK(boot >= 0 && entrance >= 0 && opened == 24 && same_slot, "24 briefings open \"battlescene\" (%d)",
+              opened);
+        CHECK(heap_largest_free(&g_default_heap) == free_before && fileset_close(first) == -1,
+              "closing gives its memory and slot back");
+        fileset_close(entrance);
+        fileset_close(boot);
+    }
+
     savedata_new_game();
     savedata_story_new();
     CHECK(savedata_story_step() == STORY_STEP_NONE && savedata_story_battle() == -1, "a new story starts before step 0");
